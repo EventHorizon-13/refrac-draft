@@ -129,7 +129,7 @@ def _dimension(c: canvas.Canvas, x1: float, y1: float, x2: float, y2: float,
         direction = 1.0 if x2 >= x1 else -1.0
         _arrowhead(c, x1, dy, -direction, 0, col)
         _arrowhead(c, x2, dy, direction, 0, col)
-        _text(c, label, (x1 + x2) / 2.0, dy + 1.4, 2.7, green, "center", horizontal_scale=1.46)
+        _text(c, label, (x1 + x2) / 2.0, dy + 2.0, 4.2, green, "center", horizontal_scale=0.93)
     else:
         dx = x1 - offset
         _line(c, x1, y1, dx - 1.0, y1, col, 0.18)
@@ -141,7 +141,7 @@ def _dimension(c: canvas.Canvas, x1: float, y1: float, x2: float, y2: float,
         c.saveState()
         c.translate(*_xy(dx - 2.0, (y1 + y2) / 2.0))
         c.rotate(90)
-        _text(c, label, 0, 0, 2.7, green, "center", horizontal_scale=1.46)
+        _text(c, label, 0, 0, 4.2, green, "center", horizontal_scale=0.93)
         c.restoreState()
 
 
