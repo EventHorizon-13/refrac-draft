@@ -180,10 +180,10 @@ class ReferenceLibrary:
             raise KeyError(f"尚未确认 {anchor_type} 的正面锚固件图块")
         symbol = self.symbol_from_block(blocks[anchor_type])
         if anchor_type == "快插":
-            # The named source block is drawn at 25 x 102 local units, while the accepted
+            # The named source block's visible profile is 25 x 100 local units, while the accepted
             # B3/B10/B11/B12 PDF profile measures about 18.35 x 220 mm. The sample's
             # dynamic-block stretch is therefore anisotropic and must be reproduced here.
-            sx, sy = 18.35 / 25.0, 220.0 / 102.0
+            sx, sy = 18.35 / 25.0, 220.0 / 100.0
             return SymbolGeometry(
                 tuple(line.transformed(sx=sx, sy=sy) for line in symbol.polylines),
                 symbol.colors,

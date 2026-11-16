@@ -20,4 +20,4 @@
 
 ## 10. Quick-insert front-profile scale
 
-- The source DXF block `快插锚固件-右视图` has a local envelope of approximately 25 × 102 units. The accepted B3/B10/B11/B12 PDF front profile measures approximately 18.35 × 220 mm. Apply independent X/Y scale factors (18.35/25 and 220/102) before placement; uniform scaling produces a visibly undersized symbol.
+- The source DXF block `快插锚固件-右视图` has a visible profile envelope of approximately 25 × 100 units. The accepted B3/B10/B11/B12 PDF front profile measures approximately 18.35 × 220 mm. Apply independent X/Y scale factors (18.35/25 and 220/102) before placement; uniform scaling produces a visibly undersized symbol.

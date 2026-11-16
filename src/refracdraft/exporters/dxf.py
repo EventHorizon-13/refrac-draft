@@ -10,7 +10,7 @@ from refracdraft.drawing.model import DrawingDocument, ViewDrawing
 
 LAYER_COLORS = {
     "OUTLINE": 7,
-    "DIMENSIONS": 3,
+    "DIMENSIONS": 4,
     "ANCHORS": 5,
     "CENTER": 1,
     "TEXT": 7,
@@ -26,16 +26,24 @@ def _add_polyline(msp, points, closed=True, layer="OUTLINE", color=None):
         msp.add_lwpolyline(points, close=closed, dxfattribs=attrs)
 
 
+def _add_arrowhead(msp, x, y, ux, uy, color_layer="DIMENSIONS"):
+    length, half_width = 1.6, 0.25
+    base_x, base_y = x - ux * length, y - uy * length
+    px, py = -uy * half_width, ux * half_width
+    msp.add_solid([(x, y), (base_x + px, base_y + py), (base_x - px, base_y - py)],
+                  dxfattribs={"layer": color_layer, "color": 4})
+
+
 def _add_dimension(msp, x1, y1, x2, y2, label, horizontal=True, offset=6.0):
     color_layer = "DIMENSIONS"
-    tick = 1.2
     if horizontal:
         dim_y = y1 + offset
         msp.add_line((x1, y1), (x1, dim_y - 1.0), dxfattribs={"layer": color_layer})
         msp.add_line((x2, y2), (x2, dim_y - 1.0), dxfattribs={"layer": color_layer})
         msp.add_line((x1, dim_y), (x2, dim_y), dxfattribs={"layer": color_layer})
-        for x in (x1, x2):
-            msp.add_line((x - tick, dim_y - tick), (x + tick, dim_y + tick), dxfattribs={"layer": color_layer})
+        direction = 1.0 if x2 >= x1 else -1.0
+        _add_arrowhead(msp, x1, dim_y, -direction, 0)
+        _add_arrowhead(msp, x2, dim_y, direction, 0)
         msp.add_text(label, dxfattribs={"insert": ((x1 + x2) / 2.0, dim_y + 1.6), "height": 2.5,
                                         "style": "工程字", "layer": color_layer, "halign": 1,
                                         "align_point": ((x1 + x2) / 2.0, dim_y + 1.6)})
@@ -44,8 +52,9 @@ def _add_dimension(msp, x1, y1, x2, y2, label, horizontal=True, offset=6.0):
         msp.add_line((x1, y1), (dim_x - 1.0, y1), dxfattribs={"layer": color_layer})
         msp.add_line((x2, y2), (dim_x - 1.0, y2), dxfattribs={"layer": color_layer})
         msp.add_line((dim_x, y1), (dim_x, y2), dxfattribs={"layer": color_layer})
-        for y in (y1, y2):
-            msp.add_line((dim_x - tick, y - tick), (dim_x + tick, y + tick), dxfattribs={"layer": color_layer})
+        direction = 1.0 if y2 >= y1 else -1.0
+        _add_arrowhead(msp, dim_x, y1, 0, -direction)
+        _add_arrowhead(msp, dim_x, y2, 0, direction)
         msp.add_text(label, dxfattribs={"insert": (dim_x - 2.0, (y1 + y2) / 2.0), "height": 2.5,
                                         "rotation": 90, "style": "工程字", "layer": color_layer})
 

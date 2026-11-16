@@ -86,25 +86,40 @@ def _text(c: canvas.Canvas, text: str, x: float, y: float, size: float = 2.5,
         c.drawString(px, py, text)
 
 
+def _arrowhead(c: canvas.Canvas, x: float, y: float, ux: float, uy: float, color=cyan) -> None:
+    length, half_width = 1.6, 0.25
+    base_x, base_y = x - ux * length, y - uy * length
+    px, py = -uy * half_width, ux * half_width
+    path = c.beginPath()
+    path.moveTo(*_xy(x, y))
+    path.lineTo(*_xy(base_x + px, base_y + py))
+    path.lineTo(*_xy(base_x - px, base_y - py))
+    path.close()
+    c.setFillColor(color)
+    c.setStrokeColor(color)
+    c.drawPath(path, stroke=0, fill=1)
+
+
 def _dimension(c: canvas.Canvas, x1: float, y1: float, x2: float, y2: float,
                label: str, horizontal: bool, offset: float) -> None:
-    col = green
-    tick = 1.15
+    col = cyan
     if horizontal:
         dy = max(y1, y2) + offset
         _line(c, x1, y1, x1, dy - 1.0, col, 0.18)
         _line(c, x2, y2, x2, dy - 1.0, col, 0.18)
         _line(c, x1, dy, x2, dy, col, 0.18)
-        _line(c, x1 - tick, dy - tick, x1 + tick, dy + tick, col, 0.18)
-        _line(c, x2 - tick, dy - tick, x2 + tick, dy + tick, col, 0.18)
+        direction = 1.0 if x2 >= x1 else -1.0
+        _arrowhead(c, x1, dy, -direction, 0, col)
+        _arrowhead(c, x2, dy, direction, 0, col)
         _text(c, label, (x1 + x2) / 2.0, dy + 1.4, 2.7, col, "center")
     else:
         dx = x1 - offset
         _line(c, x1, y1, dx - 1.0, y1, col, 0.18)
         _line(c, x2, y2, dx - 1.0, y2, col, 0.18)
         _line(c, dx, y1, dx, y2, col, 0.18)
-        _line(c, dx - tick, y1 - tick, dx + tick, y1 + tick, col, 0.18)
-        _line(c, dx - tick, y2 - tick, dx + tick, y2 + tick, col, 0.18)
+        direction = 1.0 if y2 >= y1 else -1.0
+        _arrowhead(c, dx, y1, 0, -direction, col)
+        _arrowhead(c, dx, y2, 0, direction, col)
         c.saveState()
         c.translate(*_xy(dx - 2.0, (y1 + y2) / 2.0))
         c.rotate(90)

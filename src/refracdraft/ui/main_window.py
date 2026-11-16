@@ -136,15 +136,29 @@ class DrawingPreview(QGraphicsView):
         self._add_text(scene, label, ox + (max_x - min_x) * scale / 2 - 3, oy + label_y, 4, "#111111")
 
     def _dim_line(self, scene, x1, y1, x2, y2, label, horizontal):
-        pen = QPen(QColor("#00aa00"), 0.18)
+        pen = QPen(QColor("#00ffff"), 0.18)
         scene.addLine(x1, 210 - y1, x2, 210 - y2, pen)
-        tick = 1.0
-        for x, y in ((x1, y1), (x2, y2)):
-            scene.addLine(x - tick, 210 - y - tick, x + tick, 210 - y + tick, pen)
+
+        def arrow(x, y, ux, uy):
+            length, half_width = 1.6, 0.25
+            bx, by = x - ux * length, y - uy * length
+            px, py = -uy * half_width, ux * half_width
+            tip = (x, 210 - y)
+            left = (bx + px, 210 - (by + py))
+            right = (bx - px, 210 - (by - py))
+            scene.addLine(tip[0], tip[1], left[0], left[1], pen)
+            scene.addLine(tip[0], tip[1], right[0], right[1], pen)
+
         if horizontal:
-            self._add_text(scene, label, (x1 + x2) / 2 - 2, y1 + 1.5, 2.5, "#00aa00")
+            direction = 1.0 if x2 >= x1 else -1.0
+            arrow(x1, y1, -direction, 0)
+            arrow(x2, y2, direction, 0)
+            self._add_text(scene, label, (x1 + x2) / 2 - 2, y1 + 1.5, 2.5, "#00ffff")
         else:
-            self._add_text(scene, label, x1 - 2, (y1 + y2) / 2, 2.5, "#00aa00")
+            direction = 1.0 if y2 >= y1 else -1.0
+            arrow(x1, y1, 0, -direction)
+            arrow(x2, y2, 0, direction)
+            self._add_text(scene, label, x1 - 2, (y1 + y2) / 2, 2.5, "#00ffff")
 
 
 class MainWindow(QMainWindow):
