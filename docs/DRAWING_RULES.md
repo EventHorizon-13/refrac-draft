@@ -14,6 +14,7 @@
 
 - Anchor `positions` are the geometric center coordinates used to place the corresponding symbol, not automatically the top-edge attachment point.
 - In the source M-shaped board-face block, the symbol center is 35.4391501542 mm below the board's top edge. For B1/B2/B4 on a 230 mm-high board face, the center Y coordinate is therefore 194.5608498458 mm.
+- In the source diamond board-face block, the symbol center is 70 mm below the board's top edge. This offset is independent of the board-face length and is used by the Standard editor when the anchor layout is not an explicit-coordinate full-edition layout.
 - The source M-shaped board-face symbol contains its own blue structural lines and red center/end marks. Preserve the source DXF ACI colors; do not draw an additional red/yellow marker at the symbol insertion center.
 - The front-view marker style is anchor-type-specific: the M-shaped anchor uses the target marker; the quick-insert front profile uses a red cross marker.
 
@@ -29,3 +30,8 @@
 - 两类梯形的左右端面高度分别由左高、右高参数定义，两个长边都倾斜，不是“底边水平、只斜顶边”的直角梯形。
 - 左右端面的中点处于同一水平中心线上。若左右高度为 H_L、H_R，整体高度 H=max(H_L,H_R)，左右底边抬高量分别为 (H-H_L)/2、(H-H_R)/2。
 - 正敲只改变正面轮廓；侧敲只改变侧面轮廓。侧敲仍然需要正面、夹板面、侧面三个视图。
+
+## 12. 锚固件与无锚固件膨胀面标记
+
+- 侧视图的锚固件是一个代表性符号，不按锚固数量重复绘制。M型参考插入横向比例为 175/300；菱形为 139.3939/300，并按源块应用 0.916667 比例和 180° 旋转。
+- 无锚固件模块的正面和侧面都需要四根渐短的膨胀面标记。正面沿用 `*U824` 的比例；侧面按同一纵向比例生成，并沿梯形顶边斜率倾斜。

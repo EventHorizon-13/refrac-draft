@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from refracdraft.domain.models import (
     AnchorParameters,
@@ -24,6 +25,9 @@ class StandardModuleValues:
     small_head_mm: float | None = None
     taper_type: GeometryType = GeometryType.FRONT_TAPER
     board_exists: bool = True
+    material: str = ""
+    production_quantity: int = 1
+    board_material: str = "9厘夹板"
 
 
 @dataclass(frozen=True)
@@ -34,12 +38,32 @@ class StandardAnchorValues:
     count: int = 1
     anchor_type: AnchorType = AnchorType.M_SHAPE
     embedment_depth_mm: float | None = None
+    material: str = "310"
+    thread_spec: str = "M10"
+    pin_diameter_mm: float | None = 8.0
+    hose_spec: str = "32胶管"
 
 
 def _positive(value: float | None, label: str, module_id: str) -> float:
     if value is None or value <= 0:
         raise ValueError(f"{module_id}: {label}必须大于 0")
     return float(value)
+
+
+def _default_hose_spec(thread_spec: str) -> str:
+    thread = thread_spec.strip().upper()
+    if thread == "M8":
+        return "25胶管"
+    if thread == "M10":
+        return "32胶管"
+    return "32胶管"
+
+
+def _board_thickness(material: str, fallback: float | None) -> float | None:
+    match = re.search(r"(\d+(?:\.\d+)?)\s*(?:厘|mm)", material, re.I)
+    if match:
+        return float(match.group(1))
+    return fallback
 
 
 def build_standard_module(
@@ -55,6 +79,8 @@ def build_standard_module(
     data = base.model_dump(mode="python") if base else {}
     data.update(
         module_id=module_id,
+        material=values.material.strip(),
+        production_quantity=max(1, int(values.production_quantity)),
         front_width_mm=length,
         expansion_length_mm=expansion,
         board_face_width_mm=length,
@@ -107,15 +133,17 @@ def build_standard_board(
     base: BoardParameters | None,
     module_id: str,
     exists: bool,
+    material: str = "9厘夹板",
 ) -> BoardParameters:
     data = base.model_dump(mode="python") if base else {}
     data.update(module_id=module_id, exists=exists)
     if exists:
-        data.setdefault("material", "9厘夹板")
-        if not data.get("material"):
-            data["material"] = "9厘夹板"
-        if data.get("thickness_mm") is None:
-            data["thickness_mm"] = 9.0
+        board_material = material.strip() or "9厘夹板"
+        data["material"] = board_material
+        parsed_thickness = _board_thickness(board_material, data.get("thickness_mm"))
+        if parsed_thickness is None:
+            parsed_thickness = 9.0
+        data["thickness_mm"] = parsed_thickness
     return BoardParameters.model_validate(data)
 
 
@@ -128,6 +156,10 @@ def build_standard_anchor(
     data = base.model_dump(mode="python") if base else {}
     data.update(
         module_id=module_id,
+        material=values.material.strip(),
+        thread_spec=values.thread_spec.strip(),
+        diameter_mm=values.pin_diameter_mm,
+        hose_spec=values.hose_spec.strip(),
         dimension_horizontal=False,
         dimension_vertical=False,
     )
@@ -193,6 +225,9 @@ def standard_module_values(
         small_head_mm=small,
         taper_type=module.geometry_type if taper else GeometryType.FRONT_TAPER,
         board_exists=board.exists,
+        material=module.material,
+        production_quantity=module.production_quantity,
+        board_material=board.material,
     )
 
 
@@ -215,6 +250,10 @@ def standard_anchor_values(anchor: AnchorParameters) -> StandardAnchorValues:
         count=anchor.count,
         anchor_type=anchor.anchor_type,
         embedment_depth_mm=anchor.embedment_depth_mm,
+        material=anchor.material,
+        thread_spec=anchor.thread_spec,
+        pin_diameter_mm=anchor.diameter_mm if anchor.diameter_mm is not None else 8.0,
+        hose_spec=anchor.hose_spec or _default_hose_spec(anchor.thread_spec),
     )
 
 

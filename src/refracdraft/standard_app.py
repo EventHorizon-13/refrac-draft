@@ -46,12 +46,34 @@ def main() -> None:
                 raise ValueError("大小头参数未按 B2 示例载入")
             if not row.anchor_check.isChecked():
                 raise ValueError("锚固件参数未按 B2 示例载入")
+            if row.material_combo.currentText() != "1430材质" or row.quantity_spin.value() != 26:
+                raise ValueError("模块材质或数量未按 B2 示例载入")
+            if row.board_type_combo.currentText() != "9厘夹板":
+                raise ValueError("夹板类型未按 B2 示例载入")
+            if (
+                row.anchor_material_combo.currentText() != "310"
+                or row.thread_combo.currentText() != "M10"
+                or row.pin_diameter_combo.currentText() != "8"
+                or row.hose_combo.currentText() != "32胶管"
+            ):
+                raise ValueError("锚固件材质、螺栓、插针或胶管未按 B2 示例载入")
             roundtrip = window._collect_project()
             module = roundtrip.modules[0]
             if module.front_width_mm != 300 or module.board_face_height_mm != 230:
                 raise ValueError("单行参数未正确映射到模块尺寸")
             if module.front_left_height_mm != 289 or module.front_right_height_mm != 220:
                 raise ValueError("大小头尺寸映射错误")
+            if module.material != "1430材质" or module.production_quantity != 26:
+                raise ValueError("模块材质或数量映射错误")
+            if roundtrip.boards[0].material != "9厘夹板":
+                raise ValueError("夹板类型映射错误")
+            if (
+                roundtrip.anchors[0].material != "310"
+                or roundtrip.anchors[0].thread_spec != "M10"
+                or roundtrip.anchors[0].diameter_mm != 8
+                or roundtrip.anchors[0].hose_spec != "32胶管"
+            ):
+                raise ValueError("锚固件明细参数映射错误")
             trace.write_text("row mapping passed\n", encoding="utf-8")
             from refracdraft.drawing.generator import DrawingGenerator
             from refracdraft.reference.library import ReferenceLibrary

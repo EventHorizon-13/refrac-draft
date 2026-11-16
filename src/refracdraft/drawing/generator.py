@@ -7,7 +7,6 @@ from refracdraft.domain.models import (
     LayoutMode,
     OpeningMode,
     OutlineKind,
-    StructureType,
     Project,
 )
 from refracdraft.drawing.model import Dimension, DrawingDocument, ModuleDrawing, SheetPage, PlacedModule, ViewDrawing
@@ -21,13 +20,25 @@ ANCHOR_SYMBOL_ID = {
 }
 
 
-def _anchor_positions(anchor: AnchorParameters, width: float, height: float):
+BOARD_ANCHOR_TOP_OFFSET_MM = {
+    AnchorType.M_SHAPE: 35.4391501542,
+    AnchorType.DIAMOND: 70.0,
+    AnchorType.WELDED_DIAMOND: 70.0,
+}
+
+SIDE_ANCHOR_X_RATIO = {
+    AnchorType.M_SHAPE: 175.0 / 300.0,
+    AnchorType.DIAMOND: 139.3939 / 300.0,
+}
+
+
+def _anchor_x_positions(anchor: AnchorParameters, width: float) -> list[float]:
     if not anchor.exists or anchor.anchor_type == AnchorType.NONE or anchor.count == 0:
         return []
     if anchor.layout_mode == LayoutMode.EXPLICIT:
-        return [(p.x_mm, p.y_mm) for p in anchor.positions]
+        return [p.x_mm for p in anchor.positions]
     if anchor.layout_mode == LayoutMode.EQUAL:
-        return [(p.x, p.y) for p in equal_anchor_positions(width, height, anchor.count, anchor.edge_offset_mm)]
+        return [p.x for p in equal_anchor_positions(width, 1.0, anchor.count, anchor.edge_offset_mm)]
     # Fixed-spacing mode is centered as a group; explicit coordinates remain the preferred
     # way to reproduce the segmented positioning dimensions in the supplied PDFs.
     spacing = anchor.spacing_mm or 0.0
@@ -35,7 +46,24 @@ def _anchor_positions(anchor: AnchorParameters, width: float, height: float):
     start = anchor.edge_offset_mm
     if start + group_width > width:
         raise ValueError("锚固件端部留边与固定间距超出夹板面宽度")
-    return [(start + i * spacing, height / 2.0) for i in range(anchor.count)]
+    return [start + i * spacing for i in range(anchor.count)]
+
+
+def _anchor_positions(
+    anchor: AnchorParameters,
+    width: float,
+    height: float,
+    board_face: bool = False,
+):
+    if board_face and anchor.layout_mode == LayoutMode.EXPLICIT and anchor.positions:
+        return [(p.x_mm, p.y_mm) for p in anchor.positions]
+    xs = _anchor_x_positions(anchor, width)
+    if board_face:
+        offset = BOARD_ANCHOR_TOP_OFFSET_MM.get(anchor.anchor_type, 35.4391501542)
+        y = max(0.0, height - offset)
+    else:
+        y = height / 2.0
+    return [(x, y) for x in xs]
 
 
 def _translate_symbol(symbol: tuple[Polyline, ...], x: float, y: float) -> tuple[Polyline, ...]:
@@ -48,11 +76,15 @@ def _details(module, board, anchor) -> tuple[str, ...]:
     if not anchor.exists or anchor.anchor_type == AnchorType.NONE:
         lines.extend(("3、锚固件：无", "4、锚固件长度：无"))
     else:
-        diameter = f"Ø{anchor.diameter_mm:g}" if anchor.diameter_mm else ""
-        spec = f"{anchor.thread_spec}{diameter}" if anchor.thread_spec else diameter
+        spec_parts = []
+        if anchor.thread_spec:
+            spec_parts.append(anchor.thread_spec)
+        if anchor.diameter_mm:
+            spec_parts.append(f"插针φ{anchor.diameter_mm:g}")
+        spec = "，".join(spec_parts)
         anchor_name = {
-            AnchorType.M_SHAPE: "", AnchorType.DIAMOND: "菱形", AnchorType.SIDE_INSERT: "旁插",
-            AnchorType.QUICK_INSERT: "", AnchorType.WELDED_DIAMOND: "焊接菱形",
+            AnchorType.M_SHAPE: "M型", AnchorType.DIAMOND: "菱形", AnchorType.SIDE_INSERT: "旁插",
+            AnchorType.QUICK_INSERT: "快插", AnchorType.WELDED_DIAMOND: "焊接菱形",
             AnchorType.CUSTOM: "自定义",
         }.get(anchor.anchor_type, "")
         embedment = (
@@ -60,7 +92,8 @@ def _details(module, board, anchor) -> tuple[str, ...]:
             if anchor.anchor_type == AnchorType.DIAMOND and anchor.embedment_depth_mm
             else ""
         )
-        lines.extend((f"3、锚固件：{anchor.material}{anchor_name}锚固件{spec}{embedment}",
+        material = anchor.material or "未填写材质"
+        lines.extend((f"3、锚固件：{material}{anchor_name}锚固件{spec}{embedment}",
                       f"4、锚固件长度：{anchor.length_mm:g}mm" if anchor.length_mm else "4、锚固件长度：未填写"))
     lines.append(f"5、数量：{module.production_quantity} Pcs")
     lines.append(f"6、容重：{module.density_kg_m3:g} kg/m³" if module.density_kg_m3 else "6、容重：未填写")
@@ -142,7 +175,7 @@ class DrawingGenerator:
                     front_symbol_lineweights.extend(profile_lineweights)
             except KeyError as exc:
                 warnings.append(str(exc))
-        elif module.structure_type == StructureType.STACKED and self.reference_library:
+        elif not positions and self.reference_library:
             front_internal = self.reference_library.stacked_front_lines(module.front_width_mm, module.front_height_mm)
         front_points = tuple((x * module.front_width_mm / module.board_face_width_mm,
                               module.front_height_mm / 2.0) for x, _y in positions) if positions else ()
@@ -177,22 +210,31 @@ class DrawingGenerator:
             side_symbol_colors: list[int] = []
             side_symbol_lineweights: list[int] = []
             side_points: list[tuple[float, float]] = []
+            side_internal: tuple[Polyline, ...] = ()
             if positions and self.reference_library:
                 try:
                     side_profile = self.reference_library.side_anchor_symbol(anchor.anchor_type.value)
                     profile_colors = side_profile.colors if len(side_profile.colors) == len(side_profile.polylines) else (7,) * len(side_profile.polylines)
                     profile_lineweights = side_profile.lineweights if len(side_profile.lineweights) == len(side_profile.polylines) else (25,) * len(side_profile.polylines)
-                    for x, _y in positions:
-                        sx = x * (module.side_length_mm or module.board_face_width_mm) / module.board_face_width_mm
-                        side_symbols.extend(_translate_symbol(side_profile.polylines, sx, side_overall_h / 2.0))
-                        side_symbol_colors.extend(profile_colors)
-                        side_symbol_lineweights.extend(profile_lineweights)
-                        side_points.append((sx, side_overall_h / 2.0))
+                    side_width = module.side_length_mm or module.board_face_width_mm
+                    sx = side_width * SIDE_ANCHOR_X_RATIO.get(anchor.anchor_type, 0.5)
+                    side_symbols.extend(_translate_symbol(side_profile.polylines, sx, side_overall_h / 2.0))
+                    side_symbol_colors.extend(profile_colors)
+                    side_symbol_lineweights.extend(profile_lineweights)
+                    side_points.append((sx, side_overall_h / 2.0))
                 except KeyError as exc:
                     warnings.append(str(exc))
+            elif self.reference_library:
+                side_internal = self.reference_library.side_expansion_lines(
+                    module.side_length_mm or module.board_face_width_mm,
+                    side_overall_h,
+                    side_left_h,
+                    side_right_h,
+                )
             side_view = ViewDrawing("side", "侧面", side, side_dims, tuple(side_symbols), tuple(side_points),
                                     anchor_symbol_colors=tuple(side_symbol_colors),
-                                    anchor_symbol_lineweights=tuple(side_symbol_lineweights))
+                                    anchor_symbol_lineweights=tuple(side_symbol_lineweights),
+                                    internal_lines=side_internal)
 
         if module.board_face_outline:
             board_outline = parametric_outline(module.board_face_width_mm, module.board_face_height_mm,
@@ -206,7 +248,12 @@ class DrawingGenerator:
             warnings.append(f"未加载参考 DXF，夹板面模板 {module.board_face_template_id} 暂以矩形代替")
             board_outline = rectangle(module.board_face_width_mm, module.board_face_height_mm)
 
-        positions = _anchor_positions(anchor, module.board_face_width_mm, module.board_face_height_mm)
+        positions = _anchor_positions(
+            anchor,
+            module.board_face_width_mm,
+            module.board_face_height_mm,
+            board_face=True,
+        )
         for x, y in positions:
             if not point_in_outline(board_outline, (x, y)):
                 raise ValueError(f"{module.module_id}: 锚固件坐标 ({x:g}, {y:g}) 位于夹板面轮廓之外")
@@ -266,7 +313,7 @@ class DrawingGenerator:
                     board_dims.append(Dimension((x, y), (x, module.board_face_height_mm),
                                                 f"{offset:g}", "vertical", -50))
                     seen_offsets.add(offset)
-        board_note = "无夹板" if not board.exists else ("夹板" if not anchor.exists else "")
+        board_note = "无夹板" if not board.exists else ""
         # The source board-face blocks already contain their own center marks and end marks.
         # Do not add a second marker at the insertion point (which sits on the board edge).
         board_view = ViewDrawing(

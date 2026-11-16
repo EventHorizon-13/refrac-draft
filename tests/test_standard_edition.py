@@ -1,5 +1,6 @@
 import pytest
 
+from refracdraft.drawing.generator import DrawingGenerator, _anchor_positions, _details
 from refracdraft.domain.models import (
     AnchorParameters,
     AnchorType,
@@ -10,6 +11,7 @@ from refracdraft.domain.models import (
     Project,
 )
 from refracdraft.importers.excel import _normalize_row
+from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.standard import (
     StandardAnchorValues,
     StandardModuleValues,
@@ -196,4 +198,86 @@ def test_standard_excel_generic_heads_move_to_side_for_side_taper():
     assert normalized["side_right_height_mm"] == 200
     assert "front_left_height_mm" not in normalized
     assert "front_right_height_mm" not in normalized
+
+
+@pytest.mark.parametrize(
+    ("anchor_type", "expected_y"),
+    [
+        (AnchorType.M_SHAPE, 230 - 35.4391501542),
+        (AnchorType.DIAMOND, 160.0),
+    ],
+)
+def test_board_face_anchor_uses_source_top_offset(anchor_type, expected_y):
+    anchor = AnchorParameters(
+        module_id="A1",
+        exists=True,
+        anchor_type=anchor_type,
+        count=1,
+        layout_mode=LayoutMode.FIXED_SPACING,
+        edge_offset_mm=150,
+        spacing_mm=300,
+    )
+    positions = _anchor_positions(anchor, 300, 230, board_face=True)
+    assert positions[0][0] == 150.0
+    assert positions[0][1] == pytest.approx(expected_y)
+
+
+def test_standard_details_include_new_manufacturing_fields():
+    module = build_standard_module(
+        None,
+        StandardModuleValues(
+            "A1", 300, 300, 330, True, 300, 200, GeometryType.SIDE_TAPER,
+            material="1350板材", production_quantity=84, board_material="12厘夹板",
+        ),
+    )
+    board = build_standard_board(None, "A1", True, "12厘夹板")
+    anchor = build_standard_anchor(
+        None,
+        "A1",
+        300,
+        StandardAnchorValues(
+            True, 150, 300, 1, AnchorType.DIAMOND, 60,
+            material="304", thread_spec="M8", pin_diameter_mm=8, hose_spec="25胶管",
+        ),
+    )
+    text = "\n".join(_details(module, board, anchor))
+    assert "1350板材" in text
+    assert "304菱形锚固件M8" in text
+    assert "插针φ8" in text
+    assert "嵌入深度 60mm" in text
+    assert "数量：84 Pcs" in text
+    assert "25胶管，12厘夹板" in text
+
+
+def test_no_anchor_views_include_expansion_face_marks():
+    module = build_standard_module(
+        None,
+        StandardModuleValues("A2", 300, 300, 330, True, 300, 220, GeometryType.SIDE_TAPER),
+    )
+    board = build_standard_board(None, "A2", True)
+    anchor = build_standard_anchor(None, "A2", 300, StandardAnchorValues(False))
+    project = Project(modules=[module], boards=[board], anchors=[anchor])
+    document = DrawingGenerator(ReferenceLibrary("references/示例.dxf")).generate(project)
+    drawing = document.pages[0].modules[0].drawing
+    assert len(drawing.front_view.internal_lines) == 4
+    assert len(drawing.side_view.internal_lines) == 4
+
+
+def test_diamond_side_anchor_uses_source_position_scale_and_rotation():
+    module = build_standard_module(
+        None,
+        StandardModuleValues("A1", 300, 300, 330, True, 300, 200, GeometryType.SIDE_TAPER),
+    )
+    board = build_standard_board(None, "A1", True)
+    anchor = build_standard_anchor(
+        None,
+        "A1",
+        300,
+        StandardAnchorValues(True, 150, 300, 1, AnchorType.DIAMOND, 50),
+    )
+    project = Project(modules=[module], boards=[board], anchors=[anchor])
+    document = DrawingGenerator(ReferenceLibrary("references/示例.dxf")).generate(project)
+    side_view = document.pages[0].modules[0].drawing.side_view
+    assert side_view is not None
+    assert side_view.anchor_points[0][0] == pytest.approx(330 * 139.3939 / 300)
 

@@ -190,6 +190,40 @@ class ReferenceLibrary:
             result.append(Polyline(((x1, y1), (x2, y2)), closed=False))
         return tuple(result)
 
+    def side_expansion_lines(
+        self,
+        width_mm: float,
+        height_mm: float,
+        left_height_mm: float,
+        right_height_mm: float,
+    ) -> tuple[Polyline, ...]:
+        """Derive the four no-anchor expansion marks for a side taper view.
+
+        The front-view source marks start at the right edge and become shorter
+        from top to bottom. The side view follows the same proportions, with
+        each line angled parallel to the sloped top edge.
+        """
+        source_lines = (
+            (0.383, 0.880, 0.880),
+            (0.464, 0.773, 0.880),
+            (0.562, 0.670, 0.880),
+            (0.665, 0.555, 0.880),
+        )
+        overall = max(left_height_mm, right_height_mm)
+        left_bottom = (overall - left_height_mm) / 2.0
+        right_bottom = (overall - right_height_mm) / 2.0
+        top_left = left_bottom + left_height_mm
+        top_right = right_bottom + right_height_mm
+        slope = (top_right - top_left) / width_mm if width_mm else 0.0
+        result = []
+        for start_fraction, y_fraction, end_fraction in source_lines:
+            x1 = width_mm * start_fraction
+            x2 = width_mm * end_fraction
+            y1 = height_mm * y_fraction
+            y2 = y1 + slope * (x2 - x1)
+            result.append(Polyline(((x1, y1), (x2, y2)), closed=False))
+        return tuple(result)
+
     def front_anchor_symbol(self, anchor_type: str) -> SymbolGeometry:
         blocks = {"M型": "*U168", "菱形": "*U163", "快插": "快插锚固件-右视图"}
         if anchor_type not in blocks:
@@ -211,7 +245,16 @@ class ReferenceLibrary:
         blocks = {"M型": "*U330", "菱形": "*U445"}
         if anchor_type not in blocks:
             raise KeyError(f"尚未确认 {anchor_type} 的侧面锚固件图块")
-        return self.symbol_from_block(blocks[anchor_type])
+        symbol = self.symbol_from_block(blocks[anchor_type])
+        if anchor_type != "菱形":
+            return symbol
+        # The source side block inserts *U445 with scale 0.916667 and rotation 180.
+        scale = 0.916667
+        rotated = tuple(
+            Polyline(tuple((-x * scale, -y * scale) for x, y in line.points), line.closed)
+            for line in symbol.polylines
+        )
+        return SymbolGeometry(rotated, symbol.colors, symbol.lineweights)
 
 
     def standard_opening(self, anchor_type: str) -> tuple[Polyline, ...]:

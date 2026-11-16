@@ -152,7 +152,7 @@ def test_stacked_no_anchor_uses_source_layer_marks():
     drawing = DrawingGenerator(ReferenceLibrary(REF_DXF) if REF_DXF.exists() else None).generate(project).pages[0].modules[0].drawing
     if REF_DXF.exists():
         assert len(drawing.front_view.internal_lines) == 4
-    assert drawing.board_view.note == "夹板"
+    assert drawing.board_view.note == ""
 
 
 def test_anchor_position_dimension_flags_are_explicit():
@@ -216,7 +216,7 @@ def test_pdf_keeps_diameter_and_density_symbols(tmp_path):
     drawing = DrawingGenerator().generate(Project(modules=[module], anchors=[anchor]))
     path = export_pdf(drawing, tmp_path / "symbols.pdf")
     text = fitz.open(path)[0].get_text()
-    assert "Ø8" in text
+    assert "φ8" in text
     assert "kg/m³" in text
 
 
