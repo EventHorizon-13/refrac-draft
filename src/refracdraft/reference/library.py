@@ -178,7 +178,17 @@ class ReferenceLibrary:
         blocks = {"M型": "*U168", "菱形": "*U163", "快插": "快插锚固件-右视图"}
         if anchor_type not in blocks:
             raise KeyError(f"尚未确认 {anchor_type} 的正面锚固件图块")
-        return self.symbol_from_block(blocks[anchor_type])
+        symbol = self.symbol_from_block(blocks[anchor_type])
+        if anchor_type == "快插":
+            # The named source block is drawn at 25 x 102 local units, while the accepted
+            # B3/B10/B11/B12 PDF profile measures about 18.35 x 220 mm. The sample's
+            # dynamic-block stretch is therefore anisotropic and must be reproduced here.
+            sx, sy = 18.35 / 25.0, 220.0 / 102.0
+            return SymbolGeometry(
+                tuple(line.transformed(sx=sx, sy=sy) for line in symbol.polylines),
+                symbol.colors,
+            )
+        return symbol
 
     def side_anchor_symbol(self, anchor_type: str) -> SymbolGeometry:
         blocks = {"M型": "*U330", "菱形": "*U445"}
