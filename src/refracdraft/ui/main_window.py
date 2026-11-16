@@ -21,7 +21,7 @@ from refracdraft.resources import resource_path
 
 
 MODULE_COLUMNS = [
-    "module_id", "name", "structure_type", "geometry_type", "front_width_mm", "front_height_mm",
+    "module_id", "name", "structure_type", "geometry_type", "front_width_mm", "front_height_mm", "expansion_length_mm",
     "front_left_height_mm", "front_right_height_mm", "side_length_mm", "side_left_height_mm",
     "side_right_height_mm", "board_face_width_mm", "board_face_height_mm", "board_face_template_id",
     "material", "density_kg_m3", "production_quantity", "source_note",
@@ -29,15 +29,15 @@ MODULE_COLUMNS = [
 BOARD_COLUMNS = ["module_id", "exists", "material", "thickness_mm", "opening_mode", "custom_opening", "source_note"]
 ANCHOR_COLUMNS = [
     "module_id", "exists", "anchor_type", "material", "thread_spec", "diameter_mm", "length_mm",
-    "count", "layout_mode", "positions", "edge_offset_mm", "spacing_mm", "hose_spec",
+    "embedment_depth_mm", "count", "layout_mode", "positions", "edge_offset_mm", "spacing_mm", "hose_spec",
     "dimension_horizontal", "dimension_vertical", "source_note",
 ]
-MODULE_LABELS = ["模块编号", "模块名称", "结构类型", "几何类型", "正面宽度(mm)", "正面高度(mm)",
+MODULE_LABELS = ["模块编号", "模块名称", "结构类型", "几何类型", "正面宽度(mm)", "正面高度(mm)", "膨胀长度(mm)",
                  "正面左高(mm)", "正面右高(mm)", "侧面长度(mm)", "侧面左高(mm)", "侧面右高(mm)",
-                 "夹板面宽(mm)", "夹板面高(mm)", "夹板面类型", "模块材质", "容重(kg/m³)", "生产数量"]
-BOARD_LABELS = ["模块编号", "有无夹板", "夹板材质", "夹板厚度(mm)", "开口模式", "自定义开口坐标(JSON)"]
+                 "夹板面宽(mm)", "夹板面高(mm)", "夹板面类型", "模块材质", "容重(kg/m³)", "生产数量", "备注"]
+BOARD_LABELS = ["模块编号", "有无夹板", "夹板材质", "夹板厚度(mm)", "开口模式", "自定义开口坐标(JSON)", "备注"]
 ANCHOR_LABELS = ["模块编号", "有无锚固件", "锚固件类型", "锚固件材质", "螺纹规格", "直径(mm)",
-                 "长度(mm)", "数量", "布置方式", "坐标(JSON)", "端部留边(mm)", "间距(mm)", "胶管规格",
+                 "长度(mm)", "嵌入深度(mm)", "数量", "布置方式", "坐标(JSON)", "端部留边(mm)", "间距(mm)", "胶管规格",
                  "标注水平定位尺寸", "标注垂直定位尺寸", "备注"]
 
 

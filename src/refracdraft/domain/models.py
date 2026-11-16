@@ -80,6 +80,9 @@ class ModuleParameters(BaseModel):
     # Front view. For 正敲, use the two end heights; for 普通 use front_height_mm.
     front_width_mm: float = Field(gt=0)
     front_height_mm: float = Field(gt=0)
+    # Uncompressed module length from the source dynamic blocks. The standard
+    # editor always writes it and older files derive it from front_height_mm.
+    expansion_length_mm: float | None = Field(default=None, gt=0)
     front_left_height_mm: float | None = Field(default=None, gt=0)
     front_right_height_mm: float | None = Field(default=None, gt=0)
 
@@ -102,6 +105,8 @@ class ModuleParameters(BaseModel):
 
     @model_validator(mode="after")
     def validate_geometry(self) -> "ModuleParameters":
+        if self.expansion_length_mm is None:
+            self.expansion_length_mm = self.front_height_mm
         if self.front_outline and self.geometry_type == GeometryType.FRONT_TAPER:
             raise ValueError("正敲正面异形组合尚未定义，不能忽略异形参数")
         if self.board_face_outline and self.board_face_template_id != "rectangular":
@@ -155,6 +160,8 @@ class AnchorParameters(BaseModel):
     thread_spec: str = "M10"
     diameter_mm: float | None = Field(default=None, gt=0)
     length_mm: float | None = Field(default=None, gt=0)
+    # Source dynamic-block parameter used by diamond anchors.
+    embedment_depth_mm: float | None = Field(default=None, gt=0)
     count: int = Field(default=1, ge=0)
     layout_mode: LayoutMode = LayoutMode.EXPLICIT
     positions: list[AnchorPosition] = Field(default_factory=list)
@@ -169,6 +176,8 @@ class AnchorParameters(BaseModel):
     def validate_layout(self) -> "AnchorParameters":
         if not self.exists or self.anchor_type == AnchorType.NONE:
             return self
+        if self.anchor_type == AnchorType.DIAMOND and self.embedment_depth_mm is None:
+            self.embedment_depth_mm = 50.0
         if self.layout_mode == LayoutMode.EXPLICIT and self.count and len(self.positions) != self.count:
             raise ValueError("指定坐标模式下，锚固件数量必须与坐标数量一致")
         if self.layout_mode == LayoutMode.FIXED_SPACING and self.spacing_mm is None:

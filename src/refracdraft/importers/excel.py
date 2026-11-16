@@ -22,13 +22,14 @@ FIELD_ALIASES = {
         "name": {"模块名称", "名称"},
         "structure_type": {"结构类型", "模块结构"},
         "geometry_type": {"几何类型", "模块几何", "敲型"},
-        "front_width_mm": {"正面宽度", "正面长度", "正面宽度mm", "宽度"},
+        "front_width_mm": {"正面宽度", "正面长度", "正面宽度mm", "宽度", "长度"},
         "front_height_mm": {"正面高度", "高度"},
-        "front_left_height_mm": {"正面左高", "左端高度", "左侧高度", "大头高度"},
-        "front_right_height_mm": {"正面右高", "右端高度", "右侧高度", "小头高度"},
+        "expansion_length_mm": {"膨胀长度", "展开长度", "膨胀长度mm"},
+        "front_left_height_mm": {"正面左高", "左端高度", "左侧高度", "大头高度", "大头", "长边"},
+        "front_right_height_mm": {"正面右高", "右端高度", "右侧高度", "小头高度", "小头", "短边"},
         "side_length_mm": {"侧面长度", "侧面宽度"},
-        "side_left_height_mm": {"侧面左高", "侧面左端高度"},
-        "side_right_height_mm": {"侧面右高", "侧面右端高度"},
+        "side_left_height_mm": {"侧面左高", "侧面左端高度", "侧面大头"},
+        "side_right_height_mm": {"侧面右高", "侧面右端高度", "侧面小头"},
         "board_face_width_mm": {"夹板面宽度", "夹板面长度", "夹板宽度"},
         "board_face_height_mm": {"夹板面高度", "夹板高度"},
         "board_face_template_id": {"夹板面类型", "夹板面模板", "异形夹板面"},
@@ -49,15 +50,16 @@ FIELD_ALIASES = {
     "anchors": {
         "module_id": {"模块编号", "编号", "型号", "模块型号"},
         "exists": {"是否有锚固件", "有无锚固件"},
-        "anchor_type": {"锚固件类型", "锚固件形式", "锚固件"},
+        "anchor_type": {"锚固件类型", "锚固件形式", "锚固件", "类型"},
         "material": {"锚固件材质", "材质"},
         "thread_spec": {"螺纹规格", "规格", "螺纹"},
         "diameter_mm": {"直径", "锚固件直径"},
         "length_mm": {"锚固件长度", "长度"},
+        "embedment_depth_mm": {"嵌入深度", "埋入深度", "锚固件嵌入深度"},
         "count": {"锚固件数量", "锚固件个数", "数量"},
         "layout_mode": {"布置方式", "排列方式"},
         "positions": {"锚固件坐标", "坐标", "位置坐标"},
-        "edge_offset_mm": {"端部留边", "边距"},
+        "edge_offset_mm": {"端部留边", "边距", "锚固件位置", "位置"},
         "spacing_mm": {"锚固件间距", "间距"},
         "hose_spec": {"胶管规格", "胶管"},
         "dimension_horizontal": {"标注水平定位尺寸", "水平定位尺寸", "是否标注水平定位"},
@@ -155,16 +157,23 @@ def _normalize_row(row: dict[str, Any], group: str) -> dict[str, Any]:
             continue
         if field in {"exists", "dimension_horizontal", "dimension_vertical"}:
             value = _bool(value)
-        elif field in {"front_width_mm", "front_height_mm", "front_left_height_mm", "front_right_height_mm",
+        elif field in {"front_width_mm", "front_height_mm", "expansion_length_mm", "front_left_height_mm", "front_right_height_mm",
                        "side_length_mm", "side_left_height_mm", "side_right_height_mm", "board_face_width_mm",
                        "board_face_height_mm", "density_kg_m3", "production_quantity", "thickness_mm",
-                       "diameter_mm", "length_mm", "count", "edge_offset_mm", "spacing_mm"}:
+                       "diameter_mm", "length_mm", "embedment_depth_mm", "count", "edge_offset_mm", "spacing_mm"}:
             value = _number(value)
         elif field in {"geometry_type", "structure_type", "anchor_type", "layout_mode", "opening_mode"}:
             value = _enum_value(field, value)
         elif field in {"positions", "custom_opening"} and isinstance(value, str):
             value = json.loads(value) if value.strip().startswith("[") else value
         normalized[field] = value
+    if group == "modules" and normalized.get("geometry_type") == "侧敲":
+        for front_field, side_field in (
+            ("front_left_height_mm", "side_left_height_mm"),
+            ("front_right_height_mm", "side_right_height_mm"),
+        ):
+            if side_field not in normalized and front_field in normalized:
+                normalized[side_field] = normalized.pop(front_field)
     return normalized
 
 

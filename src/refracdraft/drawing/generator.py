@@ -55,7 +55,12 @@ def _details(module, board, anchor) -> tuple[str, ...]:
             AnchorType.QUICK_INSERT: "", AnchorType.WELDED_DIAMOND: "焊接菱形",
             AnchorType.CUSTOM: "自定义",
         }.get(anchor.anchor_type, "")
-        lines.extend((f"3、锚固件：{anchor.material}{anchor_name}锚固件{spec}",
+        embedment = (
+            f"，嵌入深度 {anchor.embedment_depth_mm:g}mm"
+            if anchor.anchor_type == AnchorType.DIAMOND and anchor.embedment_depth_mm
+            else ""
+        )
+        lines.extend((f"3、锚固件：{anchor.material}{anchor_name}锚固件{spec}{embedment}",
                       f"4、锚固件长度：{anchor.length_mm:g}mm" if anchor.length_mm else "4、锚固件长度：未填写"))
     lines.append(f"5、数量：{module.production_quantity} Pcs")
     lines.append(f"6、容重：{module.density_kg_m3:g} kg/m³" if module.density_kg_m3 else "6、容重：未填写")

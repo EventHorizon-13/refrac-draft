@@ -15,6 +15,7 @@
       "geometry_type": "正敲",
       "front_width_mm": 300,
       "front_height_mm": 289,
+      "expansion_length_mm": 300,
       "front_left_height_mm": 289,
       "front_right_height_mm": 220,
       "board_face_width_mm": 300,
