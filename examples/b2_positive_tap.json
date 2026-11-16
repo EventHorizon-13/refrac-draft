@@ -45,7 +45,7 @@
       "length_mm": 180,
       "count": 1,
       "layout_mode": "指定坐标",
-      "positions": [{"x_mm": 150, "y_mm": 180}],
+      "positions": [{"x_mm": 150, "y_mm": 230}],
       "hose_spec": "32胶管"
     }
   ]

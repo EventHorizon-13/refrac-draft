@@ -1,0 +1,155 @@
+{
+  "metadata": {
+    "project_name": "上下盖模块详情图"
+  },
+  "modules": [
+    {
+      "module_id": "S1",
+      "name": "层叠模块",
+      "structure_type": "层叠模块",
+      "geometry_type": "普通",
+      "front_width_mm": 300,
+      "front_height_mm": 300,
+      "board_face_width_mm": 300,
+      "board_face_height_mm": 150,
+      "material": "1350材质",
+      "density_kg_m3": 220,
+      "production_quantity": 63,
+      "source_note": "S1/S2 正面四条层叠线按参考DXF动态模块默认块提取；需最终与源PDF逐项比对。"
+    },
+    {
+      "module_id": "S2",
+      "name": "层叠模块",
+      "structure_type": "层叠模块",
+      "geometry_type": "普通",
+      "front_width_mm": 370,
+      "front_height_mm": 300,
+      "board_face_width_mm": 370,
+      "board_face_height_mm": 150,
+      "material": "1350材质",
+      "density_kg_m3": 220,
+      "production_quantity": 7,
+      "source_note": "S1/S2 正面四条层叠线按参考DXF动态模块默认块提取；需最终与源PDF逐项比对。"
+    },
+    {
+      "module_id": "S3",
+      "name": "层叠模块",
+      "structure_type": "层叠模块",
+      "geometry_type": "普通",
+      "front_width_mm": 410,
+      "front_height_mm": 300,
+      "board_face_width_mm": 410,
+      "board_face_height_mm": 200,
+      "material": "1350材质",
+      "density_kg_m3": 220,
+      "production_quantity": 14,
+      "source_note": ""
+    },
+    {
+      "module_id": "S4",
+      "name": "层叠模块",
+      "structure_type": "层叠模块",
+      "geometry_type": "普通",
+      "front_width_mm": 410,
+      "front_height_mm": 330,
+      "board_face_width_mm": 410,
+      "board_face_height_mm": 200,
+      "material": "1350材质",
+      "density_kg_m3": 220,
+      "production_quantity": 16,
+      "source_note": ""
+    }
+  ],
+  "boards": [
+    {
+      "module_id": "S1",
+      "exists": true,
+      "material": "9厘夹板",
+      "thickness_mm": 9
+    },
+    {
+      "module_id": "S2",
+      "exists": true,
+      "material": "9厘夹板",
+      "thickness_mm": 9
+    },
+    {
+      "module_id": "S3",
+      "exists": true,
+      "material": "9厘夹板",
+      "thickness_mm": 9
+    },
+    {
+      "module_id": "S4",
+      "exists": true,
+      "material": "9厘夹板",
+      "thickness_mm": 9
+    }
+  ],
+  "anchors": [
+    {
+      "module_id": "S1",
+      "exists": false,
+      "anchor_type": "无",
+      "material": "",
+      "thread_spec": "",
+      "count": 0,
+      "layout_mode": "指定坐标",
+      "positions": [],
+      "hose_spec": "",
+      "dimension_horizontal": false,
+      "dimension_vertical": false
+    },
+    {
+      "module_id": "S2",
+      "exists": false,
+      "anchor_type": "无",
+      "material": "",
+      "thread_spec": "",
+      "count": 0,
+      "layout_mode": "指定坐标",
+      "positions": [],
+      "hose_spec": "",
+      "dimension_horizontal": false,
+      "dimension_vertical": false
+    },
+    {
+      "module_id": "S3",
+      "exists": true,
+      "anchor_type": "菱形",
+      "material": "304",
+      "thread_spec": "M8",
+      "length_mm": 230,
+      "count": 1,
+      "layout_mode": "指定坐标",
+      "positions": [
+        {
+          "x_mm": 310,
+          "y_mm": 150
+        }
+      ],
+      "hose_spec": "25胶管",
+      "dimension_horizontal": true,
+      "dimension_vertical": true
+    },
+    {
+      "module_id": "S4",
+      "exists": true,
+      "anchor_type": "菱形",
+      "material": "304",
+      "thread_spec": "M8",
+      "length_mm": 230,
+      "count": 1,
+      "layout_mode": "指定坐标",
+      "positions": [
+        {
+          "x_mm": 100,
+          "y_mm": 150
+        }
+      ],
+      "hose_spec": "25胶管",
+      "dimension_horizontal": true,
+      "dimension_vertical": true
+    }
+  ]
+}

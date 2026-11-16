@@ -76,3 +76,13 @@ The DXF contains AutoCAD dynamic-block data (`ACDB_BLOCKREPRESENTATION_DATA`) an
 - The full set of dynamic block visibility states and parameters must be inspected; ezdxf's generic reader does not preserve all proprietary dynamic-block metadata.
 - Some source PDF text is plotted as vector outlines and is not available as normal selectable text. OCR or visual review must be used for any ambiguous label.
 - The exact automatic panel-packing algorithm must be inferred from more sample jobs or confirmed by the user; do not hardcode the observed four-page grouping as a universal law.
+
+## 7. Module-view source geometry discovered during implementation
+
+- `动态模块-无锚固件-上` contains the 300×300 front-view outline and nested `*U824`. The `*U824` insert produces four internal horizontal marks. These are reused for the S1/S2 no-anchor stacked-module front view, scaled to the module front dimensions.
+- `动态模块-M形锚固件-上` contains nested `*U168`, used as the M-shaped front profile.
+- `动态模块-菱形锚固件-上` contains nested `*U163`, used as the diamond front profile.
+- `动态模块-侧敲-1` contains nested `*U330`, used as the M-shaped side-view profile.
+- `动态模块-侧敲-菱形-1` contains nested `*U445`, used as the diamond side-view profile.
+- `快插锚固件-右视图` is used as a provisional quick-insert front profile because it visually matches the thin profile in B3/B10/B11/B12. The PDF BOM only states `310锚固件M10`, so this classification remains an inference.
+- The B10 board-face mark on PDF page 3 was traced into `references/derived/quick_insert_opening_candidate.json` (outer contour + four slot contours, about 22.578×16.933 mm at 1:10). It is used as a provisional quick-insert opening candidate, not a confirmed manufacturing rule.

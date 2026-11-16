@@ -140,3 +140,33 @@ def test_exporters_create_readable_vector_files(tmp_path):
     parsed_pdf = fitz.open(pdf_path)
     assert len(parsed_pdf) == 1
     assert len(parsed_pdf[0].get_drawings()) > 20
+
+
+def test_stacked_no_anchor_uses_source_layer_marks():
+    module = ModuleParameters(
+        module_id="S1", structure_type="层叠模块", geometry_type=GeometryType.NORMAL,
+        front_width_mm=300, front_height_mm=300,
+        board_face_width_mm=300, board_face_height_mm=150,
+    )
+    project = Project(modules=[module], anchors=[AnchorParameters(module_id="S1", exists=False, anchor_type=AnchorType.NONE, count=0)])
+    drawing = DrawingGenerator(ReferenceLibrary(REF_DXF) if REF_DXF.exists() else None).generate(project).pages[0].modules[0].drawing
+    if REF_DXF.exists():
+        assert len(drawing.front_view.internal_lines) == 4
+    assert drawing.board_view.note == "夹板"
+
+
+def test_anchor_position_dimension_flags_are_explicit():
+    module = ModuleParameters(
+        module_id="B3", geometry_type=GeometryType.FRONT_TAPER,
+        front_width_mm=300, front_height_mm=289, front_left_height_mm=289, front_right_height_mm=220,
+        board_face_width_mm=300, board_face_height_mm=230,
+    )
+    anchor = AnchorParameters(module_id="B3", anchor_type=AnchorType.QUICK_INSERT, count=1,
+                              positions=[{"x_mm":150,"y_mm":180}], dimension_vertical=True)
+    drawing = DrawingGenerator(ReferenceLibrary(REF_DXF) if REF_DXF.exists() else None).generate(Project(modules=[module],anchors=[anchor])).pages[0].modules[0].drawing
+    labels = [d.label for d in drawing.board_view.dimensions]
+    assert "50" in labels
+    assert labels.count("150") == 0
+    if REF_DXF.exists():
+        assert len(drawing.board_view.cutouts) == 5
+    assert drawing.board_view.anchor_points == ()

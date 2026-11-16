@@ -7,7 +7,8 @@
 - Separate geometry rules for 普通 / 正敲 / 侧敲.
 - Explicit, equal, and fixed-spacing anchor layout modes.
 - Read-only reference-DXF parser for the 15 named board-face templates.
-- Recursive extraction and direct use of the confirmed visible M-shaped and diamond board-face symbols. Side-insert and welded-diamond nested geometry is catalogued but intentionally not auto-used until its role/orientation is confirmed.
+- Recursive extraction and direct use of M-shaped and diamond front/side profiles. Side-insert and welded-diamond nested geometry is catalogued but intentionally not auto-used until its role/orientation is confirmed.
+- Sample-derived quick-insert board-face opening candidate is loaded from `references/derived/quick_insert_opening_candidate.json` and placed per anchor position.
 - Generate-on-click drawing model and basic page packing.
 - DXF export with millimetre units, editable vector geometry, SHX text style references, and imported A4 frame/title-block definitions from the reference DXF.
 - PDF export as vector linework; title-block and footer strips are reused from the accepted sample PDF as vector PDF content.

@@ -31,3 +31,17 @@ The board-face blocks contain nested anonymous inserts that can be recursively d
 - The current implementation directly maps only the M-shaped and diamond nested representations to board-face symbols. Side-insert and welded-diamond nested geometry is catalogued but deliberately not auto-used until its role and orientation are confirmed.
 - The source DXF includes anonymous dynamic-block state blocks. Recursively flattening the default nested insert is useful for a visible symbol, but does not prove that every dynamic visibility state or action parameter has been recovered.
 - Preserve anchor symbols as editable vector geometry. Avoid replacing them with generic dots/icons in final production drawings.
+
+## Additional view-profile mappings extracted from module blocks
+
+| Anchor type | Front-view source geometry | Side-view source geometry | Status |
+|---|---|---|---|
+| M-shaped | `*U168` nested in `动态模块-M形锚固件-上` (about 136×220 source units) | `*U330` nested in `动态模块-侧敲-1` (about 136×240) | Used by the initial generator |
+| Diamond | `*U163` nested in `动态模块-菱形锚固件-上` (about 19.26×220) | `*U445` nested in `动态模块-侧敲-菱形-1` (about 21×240) | Used by the initial generator |
+| Quick insert | `快插锚固件-右视图` | Candidate right-side profile block | Front profile used provisionally; PDF BOM classification still needs confirmation |
+
+## Quick-insert board-face opening candidate
+
+`references/derived/quick_insert_opening_candidate.json` stores a vector contour traced from the B10 board-face mark in page 3 of `江阴铁包-11098-qf.pdf`. It contains one outer contour and four internal slot contours, approximately **22.578 × 16.933 mm** at the drawing's 1:10 scale.
+
+The generator currently places this candidate automatically when the anchor type is quick insert and a physical board exists. This reproduces the visible B10/B11/B12 board-face mark, but the PDF does not explicitly label the mark as a machining opening. It is therefore flagged as **unconfirmed** and must be checked with the user before production use.
