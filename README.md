@@ -75,5 +75,5 @@ The examples are the output standard. Do not modernize, simplify, or redesign th
 
 ## Standard edition branch
 
-The `feat/standard-edition` branch builds a separate Windows x64 portable app, `RefracDraft-Standard.exe`. It keeps only the ordinary rectangular module, front taper (正敲), and side taper (侧敲) in its GUI. One unified row shows the module, board, and anchor inputs together; the saved project still contains three independent parameter tables. Existing irregular inputs are rejected with a module-specific error instead of being silently replaced. The full edition remains on `feat/phase-1-core-engine`. See [Windows Standard guide](docs/WINDOWS_STANDARD.md).
+The `feat/standard-edition` branch builds a separate Windows x64 portable app, `RefracDraft-Standard.exe`. It keeps only the ordinary rectangular module, front taper (正敲), and side taper (侧敲) in its GUI. A module list, grouped property editor, and drawing preview share one window; the saved project still contains three independent parameter tables. Existing irregular inputs are rejected with a module-specific error instead of being silently replaced. The full edition remains on `feat/phase-1-core-engine`. See [Windows Standard guide](docs/WINDOWS_STANDARD.md).
 

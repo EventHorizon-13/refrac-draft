@@ -6,6 +6,9 @@ on:
       - feat/standard-edition
     paths:
       - .github/workflows/windows-standard.yml
+      - src/**
+      - pyproject.toml
+      - docs/WINDOWS_STANDARD.md
   workflow_dispatch:
 
 permissions:
@@ -51,6 +54,12 @@ jobs:
         run: |
           Copy-Item "docs/WINDOWS_STANDARD.md" "dist/RefracDraft-Standard/README.md"
           python -m pip freeze | Out-File "dist/RefracDraft-Standard/BUILD-DEPENDENCIES.txt" -Encoding utf8
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RefracDraft-Standard-layout-preview
+          path: RefracDraft-Standard-layout.png
+          if-no-files-found: error
+          retention-days: 30
       - uses: actions/upload-artifact@v4
         with:
           name: RefracDraft-Standard-Windows-x64-portable
