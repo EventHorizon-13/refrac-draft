@@ -27,8 +27,21 @@ def rectangle(width: float, height: float) -> Polyline:
 
 
 def trapezoid(width: float, left_height: float, right_height: float) -> Polyline:
-    """A front-facing taper: the two end heights differ across the width."""
-    return Polyline(((0.0, 0.0), (width, 0.0), (width, right_height), (0.0, left_height)))
+    """A centered end-height taper with both long edges sloped.
+
+    The left and right vertical edges retain their specified lengths. Their
+    midpoints share a common horizontal centerline, matching the 正敲/侧敲
+    profiles in the supplied manufacturing drawings.
+    """
+    overall_height = max(left_height, right_height)
+    left_bottom = (overall_height - left_height) / 2.0
+    right_bottom = (overall_height - right_height) / 2.0
+    return Polyline((
+        (0.0, left_bottom),
+        (width, right_bottom),
+        (width, right_bottom + right_height),
+        (0.0, left_bottom + left_height),
+    ))
 
 
 def module_front_outline(module: ModuleParameters) -> Polyline:

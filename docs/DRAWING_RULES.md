@@ -21,3 +21,11 @@
 ## 10. Quick-insert front-profile scale
 
 - The source DXF block `快插锚固件-右视图` has a visible profile envelope of approximately 25 × 100 units. The accepted B3/B10/B11/B12 PDF front profile measures approximately 18.35 × 220 mm. Apply independent X/Y scale factors (18.35/25 and 220/102) before placement; uniform scaling produces a visibly undersized symbol.
+
+
+## 11. 正敲 / 侧敲梯形轮廓
+
+- 正敲是正面梯形，侧敲是侧面梯形；不要把其中一类误画成另一类。
+- 两类梯形的左右端面高度分别由左高、右高参数定义，两个长边都倾斜，不是“底边水平、只斜顶边”的直角梯形。
+- 左右端面的中点处于同一水平中心线上。若左右高度为 H_L、H_R，整体高度 H=max(H_L,H_R)，左右底边抬高量分别为 (H-H_L)/2、(H-H_R)/2。
+- 正敲只改变正面轮廓；侧敲只改变侧面轮廓。侧敲仍然需要正面、夹板面、侧面三个视图。

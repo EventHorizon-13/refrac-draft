@@ -29,7 +29,7 @@ def test_positive_tap_is_front_trapezoid():
         board_face_width_mm=300, board_face_height_mm=230,
     )
     outline = module_front_outline(module)
-    assert outline.points == ((0.0, 0.0), (300.0, 0.0), (300.0, 220.0), (0.0, 289.0))
+    assert outline.points == ((0.0, 0.0), (300.0, 34.5), (300.0, 254.5), (0.0, 289.0))
     assert module_side_outline(module) is None
 
 
@@ -44,7 +44,7 @@ def test_side_tap_has_separate_side_trapezoid():
     side = module_side_outline(module)
     assert side is not None
     assert side.bounds == (0, 0, 300, 300)
-    assert side.points[2] == (300, 200)
+    assert side.points == ((0.0, 0.0), (300.0, 50.0), (300.0, 250.0), (0.0, 300.0))
 
 
 def test_reference_library_has_irregular_board_templates():
@@ -218,4 +218,17 @@ def test_pdf_keeps_diameter_and_density_symbols(tmp_path):
     text = fitz.open(path)[0].get_text()
     assert "Ø8" in text
     assert "kg/m³" in text
+
+
+
+def test_b1_front_taper_matches_reference_two_sloped_edges():
+    module = ModuleParameters(
+        module_id="B1", geometry_type=GeometryType.FRONT_TAPER,
+        front_width_mm=300, front_height_mm=318,
+        front_left_height_mm=318, front_right_height_mm=259,
+        board_face_width_mm=300, board_face_height_mm=230,
+    )
+    assert module_front_outline(module).points == (
+        (0.0, 0.0), (300.0, 29.5), (300.0, 288.5), (0.0, 318.0)
+    )
 
