@@ -222,7 +222,8 @@ def _draw_view(c: canvas.Canvas, view: ViewDrawing, origin: tuple[float, float],
     label = view.note or module_id
     label_y = height * 0.5
     if view.view_type != "board-face" and (view.anchor_symbols or view.anchor_points):
-        label_y = height * 0.05
+        bottom_mid = (view.outline.points[0][1] + view.outline.points[1][1]) / 2.0
+        label_y = bottom_mid + 5.0
     _text(c, label, ox + width * scale / 2.0, oy + label_y * scale - 1.0, 4.0, black, "center")
 
 
@@ -326,7 +327,8 @@ def export_pdf(document: DrawingDocument, output_path: str | Path,
                 _draw_view(c, drawing.front_view, (x0, front_y), drawing.module_id, scale)
             board_w = (drawing.board_view.outline.bounds[2] - drawing.board_view.outline.bounds[0]) * scale
             board_x = x0
-            _draw_view(c, drawing.board_view, (board_x, 106.17), drawing.module_id, scale, board_label=True)
+            board_y = 106.66 if drawing.front_view.anchor_marker_style == "cross" else 106.17
+            _draw_view(c, drawing.board_view, (board_x, board_y), drawing.module_id, scale, board_label=True)
             detail_baselines = (82.90, 76.20, 69.55, 62.79, 56.36, 49.71, 44.15)
             for line_no, line in enumerate(drawing.details):
                 baseline = detail_baselines[line_no] if line_no < len(detail_baselines) else 44.15 - (line_no - 6) * 5.2

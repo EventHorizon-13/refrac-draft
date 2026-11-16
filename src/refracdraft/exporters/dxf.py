@@ -94,7 +94,10 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
             msp.add_line((cx - 1.5, cy), (cx + 1.5, cy), dxfattribs={"layer": "CENTER", "color": 1})
             msp.add_line((cx, cy - 1.5), (cx, cy + 1.5), dxfattribs={"layer": "CENTER", "color": 1})
     label = view.note or module_id
-    msp.add_text(label, dxfattribs={"insert": (ox + width * scale / 2.0, oy + height * scale / 2.0),
+    label_y = height / 2.0
+    if view.view_type != "board-face" and (view.anchor_symbols or view.anchor_points):
+        label_y = (view.outline.points[0][1] + view.outline.points[1][1]) / 2.0 + 5.0
+    msp.add_text(label, dxfattribs={"insert": (ox + width * scale / 2.0, oy + label_y * scale),
                                     "height": 4.0, "style": "工程字", "layer": "TEXT", "halign": 1,
                                     "align_point": (ox + width * scale / 2.0, oy + height * scale / 2.0)})
 
@@ -156,7 +159,8 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
                 front_y = page_y + center_y - (drawing.front_view.outline.bounds[3] - drawing.front_view.outline.bounds[1]) * scale / 2.0
                 _add_view(msp, drawing.front_view, (x0, front_y), drawing.module_id, scale)
             bx = x0
-            _add_view(msp, drawing.board_view, (bx, page_y + 106.17), drawing.module_id, scale)
+            board_y = 106.66 if drawing.front_view.anchor_marker_style == "cross" else 106.17
+            _add_view(msp, drawing.board_view, (bx, page_y + board_y), drawing.module_id, scale)
             detail_baselines = (82.90, 76.20, 69.55, 62.79, 56.36, 49.71, 44.15)
             for line_no, text in enumerate(drawing.details):
                 baseline = detail_baselines[line_no] if line_no < len(detail_baselines) else 44.15 - (line_no - 6) * 5.2
