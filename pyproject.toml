@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "refrac-draft"
+version = "0.1.0"
+description = "Parameter-driven 2D refractory module manufacturing drawing generator"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "RefracDraft contributors" }]
+dependencies = [
+  "ezdxf>=1.4.4,<2",
+  "reportlab>=4.2,<5",
+  "openpyxl>=3.1,<4",
+  "pydantic>=2.7,<3",
+  "pymupdf>=1.24,<2",
+]
+
+[project.optional-dependencies]
+ui = ["PySide6>=6.7,<7"]
+dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10", "matplotlib>=3.8"]
+
+[project.scripts]
+refrac-draft = "refracdraft.cli:main"
+refrac-draft-gui = "refracdraft.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
