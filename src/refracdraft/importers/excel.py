@@ -109,8 +109,8 @@ def _enum_value(field: str, value: Any) -> Any:
     v = value.strip()
     if field == "anchor_type":
         for token, normalized in (("无", "无"), ("M型", "M型"), ("M形", "M型"),
-                                  ("菱形", "菱形"), ("旁插", "旁插"), ("快插", "快插"),
-                                  ("焊接菱形", "焊接菱形")):
+                                  ("焊接菱形", "焊接菱形"), ("菱形", "菱形"),
+                                  ("旁插", "旁插"), ("快插", "快插")):
             if token in v:
                 return normalized
     if field == "geometry_type":
@@ -183,3 +183,4 @@ def import_project_xlsx(path: str | Path) -> Project:
     boards = [BoardParameters.model_validate(row) for row in found["boards"]]
     anchors = [AnchorParameters.model_validate(row) for row in found["anchors"]]
     return Project(modules=modules, boards=boards, anchors=anchors)
+

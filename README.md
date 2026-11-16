@@ -72,3 +72,8 @@ The examples are the output standard. Do not modernize, simplify, or redesign th
 - Quick-insert standard board-opening geometry remains unresolved.
 - Page grouping currently follows the observed sample pattern (4 standard-width modules, 3 when an oversized/three-view group requires it); the general packing rules need more sample jobs.
 - The initial UI provides editable parameter tables, Excel/JSON import, generate-on-click preview, and export actions. Spreadsheet-grade fill-handle/undo/redo refinements are planned after geometry and output validation.
+
+## Standard edition branch
+
+The `feat/standard-edition` branch builds a separate Windows x64 portable app, `RefracDraft-Standard.exe`. It keeps only the ordinary rectangular module, front taper (正敲), and side taper (侧敲) in its GUI. One unified row shows the module, board, and anchor inputs together; the saved project still contains three independent parameter tables. Existing irregular inputs are rejected with a module-specific error instead of being silently replaced. The full edition remains on `feat/phase-1-core-engine`. See [Windows Standard guide](docs/WINDOWS_STANDARD.md).
+
