@@ -123,7 +123,7 @@ class ReferenceLibrary:
         ys = [p[1] for line in polylines for p in line.points]
         cx, cy = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
         normalized = tuple(line.transformed(tx=-cx, ty=-cy) for line in polylines)
-        return SymbolGeometry(normalized)
+        return SymbolGeometry(normalized, tuple(colors))
 
 
     def symbol_from_block(self, block_name: str) -> SymbolGeometry:
