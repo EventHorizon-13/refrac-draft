@@ -63,6 +63,9 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
     for cutout in view.cutouts:
         pts = [(ox + x * scale, oy + y * scale) for x, y in cutout.points]
         _add_polyline(msp, pts, cutout.closed, "OUTLINE")
+    for line in view.internal_lines:
+        pts = [(ox + x * scale, oy + y * scale) for x, y in line.points]
+        _add_polyline(msp, pts, line.closed, "OUTLINE")
     for symbol in view.anchor_symbols:
         pts = [(ox + x * scale, oy + y * scale) for x, y in symbol.points]
         _add_polyline(msp, pts, symbol.closed, "ANCHORS")

@@ -35,6 +35,7 @@ FIELD_ALIASES = {
         "material": {"材质", "模块材质"},
         "density_kg_m3": {"容重", "密度", "容重kgm3"},
         "production_quantity": {"模块数量", "生产数量", "数量"},
+        "source_note": {"备注", "来源说明", "待确认事项"},
     },
     "boards": {
         "module_id": {"模块编号", "编号", "型号", "模块型号"},
@@ -43,6 +44,7 @@ FIELD_ALIASES = {
         "thickness_mm": {"夹板厚度", "厚度"},
         "opening_mode": {"开口模式", "快插开口", "开口类型"},
         "custom_opening": {"自定义开口坐标", "开口坐标"},
+        "source_note": {"备注", "来源说明", "待确认事项"},
     },
     "anchors": {
         "module_id": {"模块编号", "编号", "型号", "模块型号"},
@@ -58,6 +60,9 @@ FIELD_ALIASES = {
         "edge_offset_mm": {"端部留边", "边距"},
         "spacing_mm": {"锚固件间距", "间距"},
         "hose_spec": {"胶管规格", "胶管"},
+        "dimension_horizontal": {"标注水平定位尺寸", "水平定位尺寸", "是否标注水平定位"},
+        "dimension_vertical": {"标注垂直定位尺寸", "垂直定位尺寸", "是否标注垂直定位"},
+        "source_note": {"备注", "来源说明", "待确认事项"},
     },
 }
 
@@ -148,7 +153,7 @@ def _normalize_row(row: dict[str, Any], group: str) -> dict[str, Any]:
         field = key_clean if key_clean in aliases else reverse.get(key_clean)
         if not field:
             continue
-        if field in {"exists"}:
+        if field in {"exists", "dimension_horizontal", "dimension_vertical"}:
             value = _bool(value)
         elif field in {"front_width_mm", "front_height_mm", "front_left_height_mm", "front_right_height_mm",
                        "side_length_mm", "side_left_height_mm", "side_right_height_mm", "board_face_width_mm",

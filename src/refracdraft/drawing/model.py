@@ -24,6 +24,7 @@ class ViewDrawing:
     anchor_points: tuple[tuple[float, float], ...] = ()
     note: str = ""
     cutouts: tuple[Polyline, ...] = ()
+    internal_lines: tuple[Polyline, ...] = ()
 
 
 @dataclass(frozen=True)

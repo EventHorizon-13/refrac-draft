@@ -10,6 +10,10 @@ This directory is the source-of-truth input for drawing-rule analysis and golden
 | `B2_正敲示例.png` | 正敲: trapezoid on front face; two views | Present in repository |
 | `A1_侧敲示例.png` | 侧敲: trapezoid on side face; three views | Present in repository |
 
+## Derived source geometry
+
+- `derived/quick_insert_opening_candidate.json` is a vector contour candidate traced from the B10 board-face mark in the sample PDF. It is used provisionally for quick-insert board openings and is not yet a confirmed manufacturing standard.
+
 ## Upload procedure
 
 Upload `RefracDraft-reference-materials.zip` to the repository root and extract it from the repository root. The archive contains the original three source files under `references/` and a SHA-256 checksum list. Preserve original bytes and filenames.

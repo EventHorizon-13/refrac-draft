@@ -75,6 +75,7 @@ class ModuleParameters(BaseModel):
     material: str = ""
     density_kg_m3: float | None = Field(default=None, gt=0)
     production_quantity: int = Field(default=1, ge=1)
+    source_note: str = ""
 
     @model_validator(mode="after")
     def validate_geometry(self) -> "ModuleParameters":
@@ -100,6 +101,7 @@ class BoardParameters(BaseModel):
     opening_mode: OpeningMode = OpeningMode.NONE
     # Custom opening polygon is expressed in board-face local millimetres.
     custom_opening: list[Point2D] = Field(default_factory=list)
+    source_note: str = ""
 
     @model_validator(mode="after")
     def validate_opening(self) -> "BoardParameters":
@@ -132,6 +134,9 @@ class AnchorParameters(BaseModel):
     edge_offset_mm: float = Field(default=50, ge=0)
     spacing_mm: float | None = Field(default=None, gt=0)
     hose_spec: str = ""
+    dimension_horizontal: bool = False
+    dimension_vertical: bool = False
+    source_note: str = ""
 
     @model_validator(mode="after")
     def validate_layout(self) -> "AnchorParameters":

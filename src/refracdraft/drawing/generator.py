@@ -6,6 +6,7 @@ from refracdraft.domain.models import (
     GeometryType,
     LayoutMode,
     OpeningMode,
+    StructureType,
     Project,
 )
 from refracdraft.drawing.model import Dimension, DrawingDocument, ModuleDrawing, SheetPage, PlacedModule, ViewDrawing
@@ -50,7 +51,7 @@ def _details(module, board, anchor) -> tuple[str, ...]:
         spec = f"{anchor.thread_spec}{diameter}" if anchor.thread_spec else diameter
         anchor_name = {
             AnchorType.M_SHAPE: "", AnchorType.DIAMOND: "菱形", AnchorType.SIDE_INSERT: "旁插",
-            AnchorType.QUICK_INSERT: "快插", AnchorType.WELDED_DIAMOND: "焊接菱形",
+            AnchorType.QUICK_INSERT: "", AnchorType.WELDED_DIAMOND: "焊接菱形",
             AnchorType.CUSTOM: "自定义",
         }.get(anchor.anchor_type, "")
         lines.extend((f"3、锚固件：{anchor.material}{anchor_name}锚固件{spec}",
@@ -71,6 +72,9 @@ class DrawingGenerator:
         board = project.board_for(module.module_id)
         anchor = project.anchor_for(module.module_id)
         warnings: list[str] = []
+        for note in (module.source_note, board.source_note, anchor.source_note):
+            if note:
+                warnings.append(note)
 
         front = module_front_outline(module)
         if module.geometry_type == GeometryType.FRONT_TAPER:
@@ -88,15 +92,22 @@ class DrawingGenerator:
                 Dimension((0, 0), (0, module.front_height_mm), f"{module.front_height_mm:g}", "vertical", 50),
             )
         front_symbols: list[Polyline] = []
+        front_internal: tuple[Polyline, ...] = ()
         positions = _anchor_positions(anchor, module.board_face_width_mm, module.board_face_height_mm)
-        if positions and self.reference_library and anchor.anchor_type == AnchorType.M_SHAPE:
-            profile = self.reference_library.symbol_from_block("M形锚固件本体").polylines
-            for x, _y in positions:
-                fx = x * module.front_width_mm / module.board_face_width_mm
-                front_symbols.extend(_translate_symbol(profile, fx, module.front_height_mm / 2.0))
+        if positions and self.reference_library:
+            try:
+                profile = self.reference_library.front_anchor_symbol(anchor.anchor_type.value).polylines
+                for x, _y in positions:
+                    fx = x * module.front_width_mm / module.board_face_width_mm
+                    front_symbols.extend(_translate_symbol(profile, fx, module.front_height_mm / 2.0))
+            except KeyError as exc:
+                warnings.append(str(exc))
+        elif module.structure_type == StructureType.STACKED and self.reference_library:
+            front_internal = self.reference_library.stacked_front_lines(module.front_width_mm, module.front_height_mm)
         front_points = tuple((x * module.front_width_mm / module.board_face_width_mm,
                               module.front_height_mm / 2.0) for x, _y in positions) if positions else ()
-        front_view = ViewDrawing("front", "正面", front, front_dims, tuple(front_symbols), front_points)
+        front_view = ViewDrawing("front", "正面", front, front_dims, tuple(front_symbols), front_points,
+                                 internal_lines=front_internal)
 
         side_view = None
         side = module_side_outline(module)
@@ -111,7 +122,18 @@ class DrawingGenerator:
                           (module.side_length_mm or 0, module.side_right_height_mm or 0),
                           f"{module.side_right_height_mm:g}", "vertical", -50),
             )
-            side_view = ViewDrawing("side", "侧面", side, side_dims)
+            side_symbols: list[Polyline] = []
+            side_points: list[tuple[float, float]] = []
+            if positions and self.reference_library:
+                try:
+                    side_profile = self.reference_library.side_anchor_symbol(anchor.anchor_type.value).polylines
+                    for x, _y in positions:
+                        sx = x * (module.side_length_mm or module.board_face_width_mm) / module.board_face_width_mm
+                        side_symbols.extend(_translate_symbol(side_profile, sx, ((module.side_left_height_mm or 0) + (module.side_right_height_mm or 0)) / 4.0))
+                        side_points.append((sx, ((module.side_left_height_mm or 0) + (module.side_right_height_mm or 0)) / 4.0))
+                except KeyError as exc:
+                    warnings.append(str(exc))
+            side_view = ViewDrawing("side", "侧面", side, side_dims, tuple(side_symbols), tuple(side_points))
 
         if module.board_face_template_id == "rectangular":
             board_outline = rectangle(module.board_face_width_mm, module.board_face_height_mm)
@@ -129,25 +151,33 @@ class DrawingGenerator:
             symbol = self.reference_library.anchor_symbol(symbol_id).polylines
             for x, y in positions:
                 symbol_lines.extend(_translate_symbol(symbol, x, y))
-        elif positions and anchor.anchor_type == AnchorType.QUICK_INSERT:
-            warnings.append("参考 DXF 目前只发现快插锚固件右视图，未发现可确认的夹板面标准开口；请补充标准开口样板，当前不猜测开口形状")
-        elif positions and anchor.anchor_type not in (AnchorType.NONE, AnchorType.CUSTOM):
+        elif positions and anchor.anchor_type not in (AnchorType.NONE, AnchorType.CUSTOM, AnchorType.QUICK_INSERT):
             warnings.append(f"锚固件类型 {anchor.anchor_type.value} 的参考符号尚未加载")
-
-        if board.opening_mode == OpeningMode.STANDARD and anchor.anchor_type == AnchorType.QUICK_INSERT:
-            warnings.append("快插标准开口尚未从参考资料中确认，未自动绘制未经验证的开口")
         cutouts: list[Polyline] = []
-        if board.opening_mode == OpeningMode.CUSTOM and board.custom_opening:
-            cutouts.append(Polyline(tuple((p.x, p.y) for p in board.custom_opening), closed=True))
+        if board.exists and board.opening_mode == OpeningMode.CUSTOM and board.custom_opening:
+            opening = Polyline(tuple((p.x, p.y) for p in board.custom_opening), closed=True)
+            opening_positions = positions or [(module.board_face_width_mm / 2.0, module.board_face_height_mm / 2.0)]
+            for x, y in opening_positions:
+                cutouts.append(_translate_symbol((opening,), x, y)[0])
+        elif board.exists and anchor.anchor_type == AnchorType.QUICK_INSERT:
+            try:
+                standard = self.reference_library.standard_opening(anchor.anchor_type.value) if self.reference_library else ()
+                if standard:
+                    for x, y in positions:
+                        cutouts.extend(_translate_symbol(standard, x, y))
+                    warnings.append("快插标准开口采用B10参考图提取的候选轮廓，实际加工含义/尺寸仍需用户确认。")
+                else:
+                    warnings.append("未找到快插锚固件的标准夹板开口模板。")
+            except (KeyError, FileNotFoundError) as exc:
+                warnings.append(str(exc))
+        elif board.exists and board.opening_mode == OpeningMode.STANDARD:
+            warnings.append(f"尚未建立 {anchor.anchor_type.value} 锚固件的标准夹板开口模板。")
 
         board_dims = [
             Dimension((0, 0), (module.board_face_width_mm, 0), f"{module.board_face_width_mm:g}", "horizontal", -50),
             Dimension((0, 0), (0, module.board_face_height_mm), f"{module.board_face_height_mm:g}", "vertical", 50),
         ]
-        has_dimensioned_anchor_layout = len(positions) > 1 or any(
-            abs(x - module.board_face_width_mm / 2.0) > 0.01 for x, _y in positions
-        )
-        if has_dimensioned_anchor_layout:
+        if anchor.dimension_horizontal:
             xs = sorted(p[0] for p in positions)
             chain = [0.0, *xs, module.board_face_width_mm]
             for start_x, end_x in zip(chain, chain[1:]):
@@ -155,6 +185,7 @@ class DrawingGenerator:
                     board_dims.append(Dimension((start_x, module.board_face_height_mm),
                                                 (end_x, module.board_face_height_mm),
                                                 f"{end_x - start_x:g}", "horizontal", 35))
+        if anchor.dimension_vertical:
             seen_offsets: set[float] = set()
             for x, y in positions:
                 offset = round(module.board_face_height_mm - y, 3)
@@ -162,9 +193,11 @@ class DrawingGenerator:
                     board_dims.append(Dimension((x, y), (x, module.board_face_height_mm),
                                                 f"{offset:g}", "vertical", -50))
                     seen_offsets.add(offset)
+        board_note = "无夹板" if not board.exists else ("夹板" if not anchor.exists else "")
+        board_anchor_points = tuple(positions) if anchor.anchor_type in (AnchorType.M_SHAPE, AnchorType.DIAMOND) else ()
         board_view = ViewDrawing(
             "board-face", "夹板面", board_outline, tuple(board_dims),
-            tuple(symbol_lines), tuple(positions), "" if board.exists else "无夹板", tuple(cutouts),
+            tuple(symbol_lines), board_anchor_points, board_note, tuple(cutouts),
         )
         return ModuleDrawing(
             module.module_id, module.name or module.structure_type.value,

@@ -19,9 +19,10 @@ def create_template(path: Path) -> None:
     boards.append(["B2", "有", "9厘夹板", 9, "无开口", None])
     anchors = wb.create_sheet("锚固件参数")
     anchors.append(["模块编号", "是否有锚固件", "锚固件类型", "锚固件材质", "螺纹规格", "直径", "锚固件长度",
-                    "锚固件数量", "布置方式", "锚固件坐标", "端部留边", "锚固件间距", "胶管规格"])
+                    "锚固件数量", "布置方式", "锚固件坐标", "端部留边", "锚固件间距", "胶管规格",
+                    "标注水平定位尺寸", "标注垂直定位尺寸"])
     anchors.append(["B2", "有", "M型", "310", "M10", 8, 180, 1, "指定坐标",
-                    '[{"x_mm":150,"y_mm":180}]', 50, None, "32胶管"])
+                    '[{"x_mm":150,"y_mm":230}]', 50, None, "32胶管", "否", "否"])
     for ws in wb.worksheets:
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions

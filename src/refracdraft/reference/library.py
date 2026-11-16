@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from math import hypot
 from pathlib import Path
 
@@ -52,6 +53,7 @@ class ReferenceLibrary:
 
     def __init__(self, dxf_path: str | Path):
         self.path = Path(dxf_path)
+        self.dxf_path = self.path
         if not self.path.exists():
             raise FileNotFoundError(self.path)
         self.doc = ezdxf.readfile(self.path)
@@ -134,6 +136,57 @@ class ReferenceLibrary:
         ys = [p[1] for line in polylines for p in line.points]
         cx, cy = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
         return SymbolGeometry(tuple(line.transformed(tx=-cx, ty=-cy) for line in polylines))
+
+
+    def stacked_front_lines(self, width_mm: float, height_mm: float) -> tuple[Polyline, ...]:
+        """Extract the four internal layer marks from the source no-anchor top-view block.
+
+        Source block `动态模块-无锚固件-上` inserts `*U824` at (300, 0), scale 1.8.
+        The source block uses a 300 x 300 local view with its top edge at y=0.
+        """
+        source = self.doc.blocks["*U824"]
+        sx, sy = width_mm / 300.0, height_mm / 300.0
+        result: list[Polyline] = []
+        for entity in source:
+            if entity.dxftype() != "LINE":
+                continue
+            start = entity.dxf.start
+            end = entity.dxf.end
+            x1 = (300.0 + float(start.x) * 1.8) * sx
+            x2 = (300.0 + float(end.x) * 1.8) * sx
+            y1 = (height_mm + float(start.y) * 1.8) * sy
+            y2 = (height_mm + float(end.y) * 1.8) * sy
+            result.append(Polyline(((x1, y1), (x2, y2)), closed=False))
+        return tuple(result)
+
+    def front_anchor_symbol(self, anchor_type: str) -> SymbolGeometry:
+        blocks = {"M型": "*U168", "菱形": "*U163", "快插": "快插锚固件-右视图"}
+        if anchor_type not in blocks:
+            raise KeyError(f"尚未确认 {anchor_type} 的正面锚固件图块")
+        return self.symbol_from_block(blocks[anchor_type])
+
+    def side_anchor_symbol(self, anchor_type: str) -> SymbolGeometry:
+        blocks = {"M型": "*U330", "菱形": "*U445"}
+        if anchor_type not in blocks:
+            raise KeyError(f"尚未确认 {anchor_type} 的侧面锚固件图块")
+        return self.symbol_from_block(blocks[anchor_type])
+
+
+    def standard_opening(self, anchor_type: str) -> tuple[Polyline, ...]:
+        """Return the sample-derived standard board opening for an anchor type.
+
+        The quick-insert contour is traced from the vector-rendered B10 board-face mark
+        in the supplied PDF. It is explicitly marked as a candidate pending user confirmation.
+        """
+        if anchor_type != "快插":
+            raise KeyError(f"尚未建立 {anchor_type} 锚固件的标准夹板开口")
+        path = self.dxf_path.parent / "derived" / "quick_insert_opening_candidate.json"
+        if not path.exists():
+            raise FileNotFoundError(f"缺少标准开口模板：{path}")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return tuple(Polyline(tuple((float(x), float(y)) for x, y in contour["points"]),
+                              closed=bool(contour.get("closed", True)))
+                     for contour in data["contours"])
 
     def board_face_catalog(self) -> list[dict[str, object]]:
         catalog = []

@@ -105,6 +105,15 @@ def _draw_view(c: canvas.Canvas, view: ViewDrawing, origin: tuple[float, float],
             path.close()
         c.drawPath(path, stroke=1, fill=0)
 
+    c.setStrokeColor(black)
+    c.setLineWidth(0.24 * MM)
+    for line in view.internal_lines:
+        if len(line.points) < 2:
+            continue
+        a, b = line.points[0], line.points[-1]
+        _line(c, ox + a[0] * scale, oy + a[1] * scale,
+              ox + b[0] * scale, oy + b[1] * scale, black, 0.24)
+
     # Anchor linework is taken from the supplied reference DXF block geometry.
     c.setStrokeColor(blue)
     c.setLineWidth(0.22 * MM)
@@ -125,8 +134,11 @@ def _draw_view(c: canvas.Canvas, view: ViewDrawing, origin: tuple[float, float],
         c.circle(*_xy(cx, cy), 0.75 * MM, stroke=1, fill=1)
         _line(c, cx - 1.5, cy, cx + 1.5, cy, red, 0.16)
 
-    label = "无夹板" if view.note == "无夹板" else module_id
-    _text(c, label, ox + width * scale / 2.0, oy + height * scale / 2.0 - 1.0, 4.0, black, "center")
+    label = view.note or module_id
+    label_y = height * 0.5
+    if view.view_type != "board-face" and (view.anchor_symbols or view.anchor_points):
+        label_y = height * 0.05
+    _text(c, label, ox + width * scale / 2.0, oy + label_y * scale - 1.0, 4.0, black, "center")
 
 
 def _draw_page_frame(c: canvas.Canvas, column_count: int) -> None:

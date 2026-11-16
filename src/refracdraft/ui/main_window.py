@@ -23,19 +23,21 @@ MODULE_COLUMNS = [
     "module_id", "name", "structure_type", "geometry_type", "front_width_mm", "front_height_mm",
     "front_left_height_mm", "front_right_height_mm", "side_length_mm", "side_left_height_mm",
     "side_right_height_mm", "board_face_width_mm", "board_face_height_mm", "board_face_template_id",
-    "material", "density_kg_m3", "production_quantity",
+    "material", "density_kg_m3", "production_quantity", "source_note",
 ]
-BOARD_COLUMNS = ["module_id", "exists", "material", "thickness_mm", "opening_mode", "custom_opening"]
+BOARD_COLUMNS = ["module_id", "exists", "material", "thickness_mm", "opening_mode", "custom_opening", "source_note"]
 ANCHOR_COLUMNS = [
     "module_id", "exists", "anchor_type", "material", "thread_spec", "diameter_mm", "length_mm",
     "count", "layout_mode", "positions", "edge_offset_mm", "spacing_mm", "hose_spec",
+    "dimension_horizontal", "dimension_vertical", "source_note",
 ]
 MODULE_LABELS = ["模块编号", "模块名称", "结构类型", "几何类型", "正面宽度(mm)", "正面高度(mm)",
                  "正面左高(mm)", "正面右高(mm)", "侧面长度(mm)", "侧面左高(mm)", "侧面右高(mm)",
                  "夹板面宽(mm)", "夹板面高(mm)", "夹板面类型", "模块材质", "容重(kg/m³)", "生产数量"]
 BOARD_LABELS = ["模块编号", "有无夹板", "夹板材质", "夹板厚度(mm)", "开口模式", "自定义开口坐标(JSON)"]
 ANCHOR_LABELS = ["模块编号", "有无锚固件", "锚固件类型", "锚固件材质", "螺纹规格", "直径(mm)",
-                 "长度(mm)", "数量", "布置方式", "坐标(JSON)", "端部留边(mm)", "间距(mm)", "胶管规格"]
+                 "长度(mm)", "数量", "布置方式", "坐标(JSON)", "端部留边(mm)", "间距(mm)", "胶管规格",
+                 "标注水平定位尺寸", "标注垂直定位尺寸", "备注"]
 
 
 class DrawingPreview(QGraphicsView):
@@ -106,6 +108,10 @@ class DrawingPreview(QGraphicsView):
             p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in cutout.points]
             for a, b in zip(p, p[1:] + ([p[0]] if cutout.closed else [])):
                 scene.addLine(a[0], a[1], b[0], b[1], QPen(QColor("#111111"), 0.25))
+        for line in view.internal_lines:
+            p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in line.points]
+            for a, b in zip(p, p[1:]):
+                scene.addLine(a[0], a[1], b[0], b[1], QPen(QColor("#111111"), 0.22))
         for symbol in view.anchor_symbols:
             p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in symbol.points]
             for a, b in zip(p, p[1:] + ([p[0]] if symbol.closed else [])):
@@ -114,8 +120,11 @@ class DrawingPreview(QGraphicsView):
             cx, cy = ox + x * scale, 210 - (oy + y * scale)
             scene.addEllipse(cx - 0.6, cy - 0.6, 1.2, 1.2, QPen(QColor("#ff0000")), QBrush(QColor("#ffff00")))
         min_x, min_y, max_x, max_y = view.outline.bounds
-        label = "无夹板" if view.note == "无夹板" else module_id
-        self._add_text(scene, label, ox + (max_x - min_x) * scale / 2 - 3, oy + (max_y - min_y) * scale / 2, 4, "#111111")
+        label = view.note or module_id
+        label_y = (max_y - min_y) / 2
+        if view.view_type != "board-face" and (view.anchor_symbols or view.anchor_points):
+            label_y = (max_y - min_y) * 0.12
+        self._add_text(scene, label, ox + (max_x - min_x) * scale / 2 - 3, oy + label_y, 4, "#111111")
 
     def _dim_line(self, scene, x1, y1, x2, y2, label, horizontal):
         pen = QPen(QColor("#00aa00"), 0.18)
