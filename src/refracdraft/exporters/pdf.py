@@ -52,7 +52,7 @@ def _ensure_symbol_font() -> None:
 
 
 def _text(c: canvas.Canvas, text: str, x: float, y: float, size: float = 2.5,
-          color=black, align: str = "left") -> None:
+          color=black, align: str = "left", horizontal_scale: float = 1.0) -> None:
     c.setFillColor(color)
     base_font = PDF_FONT_NAME or "STSong-Light"
     font_size = size * MM
@@ -69,13 +69,31 @@ def _text(c: canvas.Canvas, text: str, x: float, y: float, size: float = 2.5,
                 runs.append((font, char))
         total_width = sum(pdfmetrics.stringWidth(run, font, font_size) for font, run in runs)
         if align == "center":
-            px -= total_width / 2.0
+            px -= total_width * horizontal_scale / 2.0
         elif align == "right":
-            px -= total_width
+            px -= total_width * horizontal_scale
+        c.saveState()
+        c.translate(px, py)
+        c.scale(horizontal_scale, 1.0)
+        run_x = 0.0
         for font, run in runs:
             c.setFont(font, font_size)
-            c.drawString(px, py, run)
-            px += pdfmetrics.stringWidth(run, font, font_size)
+            c.drawString(run_x, 0, run)
+            run_x += pdfmetrics.stringWidth(run, font, font_size)
+        c.restoreState()
+        return
+    if horizontal_scale != 1.0:
+        width = pdfmetrics.stringWidth(text, base_font, font_size)
+        if align == "center":
+            px -= width * horizontal_scale / 2.0
+        elif align == "right":
+            px -= width * horizontal_scale
+        c.saveState()
+        c.translate(px, py)
+        c.scale(horizontal_scale, 1.0)
+        c.setFont(base_font, font_size)
+        c.drawString(0, 0, text)
+        c.restoreState()
         return
     c.setFont(base_font, font_size)
     if align == "center":
@@ -111,7 +129,7 @@ def _dimension(c: canvas.Canvas, x1: float, y1: float, x2: float, y2: float,
         direction = 1.0 if x2 >= x1 else -1.0
         _arrowhead(c, x1, dy, -direction, 0, col)
         _arrowhead(c, x2, dy, direction, 0, col)
-        _text(c, label, (x1 + x2) / 2.0, dy + 1.4, 2.7, col, "center")
+        _text(c, label, (x1 + x2) / 2.0, dy + 1.4, 2.7, green, "center", horizontal_scale=1.46)
     else:
         dx = x1 - offset
         _line(c, x1, y1, dx - 1.0, y1, col, 0.18)
@@ -123,7 +141,7 @@ def _dimension(c: canvas.Canvas, x1: float, y1: float, x2: float, y2: float,
         c.saveState()
         c.translate(*_xy(dx - 2.0, (y1 + y2) / 2.0))
         c.rotate(90)
-        _text(c, label, 0, 0, 2.7, col, "center")
+        _text(c, label, 0, 0, 2.7, green, "center", horizontal_scale=1.46)
         c.restoreState()
 
 
@@ -176,10 +194,11 @@ def _draw_view(c: canvas.Canvas, view: ViewDrawing, origin: tuple[float, float],
     # Anchor linework is taken from the supplied reference DXF block geometry.
     aci_colors = {1: red, 2: yellow, 3: green, 4: cyan, 5: blue, 6: Color(1, 0, 1), 7: black,
                   8: Color(0.5, 0.5, 0.5), 9: Color(0.75, 0.75, 0.75)}
-    c.setLineWidth(0.22 * MM)
     for symbol_index, symbol in enumerate(view.anchor_symbols):
         aci = view.anchor_symbol_colors[symbol_index] if symbol_index < len(view.anchor_symbol_colors) else 5
+        lineweight = view.anchor_symbol_lineweights[symbol_index] if symbol_index < len(view.anchor_symbol_lineweights) else 22
         c.setStrokeColor(aci_colors.get(aci, black))
+        c.setLineWidth((lineweight / 100.0) * MM)
         if len(symbol.points) < 2:
             continue
         path = c.beginPath()
@@ -195,10 +214,10 @@ def _draw_view(c: canvas.Canvas, view: ViewDrawing, origin: tuple[float, float],
         if view.anchor_marker_style == "target":
             c.setFillColor(yellow)
             c.circle(*_xy(cx, cy), 0.75 * MM, stroke=1, fill=1)
-            _line(c, cx - 1.5, cy, cx + 1.5, cy, red, 0.16)
+            _line(c, cx - 1.5, cy, cx + 1.5, cy, red, 0.25)
         else:
-            _line(c, cx - 1.5, cy, cx + 1.5, cy, red, 0.18)
-            _line(c, cx, cy - 1.5, cx, cy + 1.5, red, 0.18)
+            _line(c, cx - 1.5, cy, cx + 1.5, cy, red, 0.25)
+            _line(c, cx, cy - 1.5, cx, cy + 1.5, red, 0.25)
 
     label = view.note or module_id
     label_y = height * 0.5
@@ -288,24 +307,33 @@ def export_pdf(document: DrawingDocument, output_path: str | Path,
         for placed in page.modules:
             drawing = placed.drawing
             px, panel_w = placed.x_mm, placed.panel_width_mm
-            scale = 0.1
+            scale = 0.0992
             if drawing.side_view:
                 front_w = (drawing.front_view.outline.bounds[2] - drawing.front_view.outline.bounds[0]) * scale
                 side_w = (drawing.side_view.outline.bounds[2] - drawing.side_view.outline.bounds[0]) * scale
                 gap = 18.0
                 total = front_w + side_w + gap
                 x0 = px + max(3.0, (panel_w - total) / 2.0)
-                _draw_view(c, drawing.front_view, (x0, 150), drawing.module_id, scale)
-                _draw_view(c, drawing.side_view, (x0 + front_w + gap, 150), drawing.module_id, scale)
+                front_y = 150.0
+                _draw_view(c, drawing.front_view, (x0, front_y), drawing.module_id, scale)
+                _draw_view(c, drawing.side_view, (x0 + front_w + gap, front_y), drawing.module_id, scale)
             else:
                 front_w = (drawing.front_view.outline.bounds[2] - drawing.front_view.outline.bounds[0]) * scale
-                x0 = px + (panel_w - front_w) / 2.0
-                _draw_view(c, drawing.front_view, (x0, 148), drawing.module_id, scale)
+                x_adjust = -2.43 if drawing.front_view.anchor_marker_style == "cross" else -5.57
+                x0 = px + (panel_w - front_w) / 2.0 + x_adjust
+                center_y = 163.2655555556 if drawing.front_view.anchor_marker_style == "cross" else 161.2123888889
+                front_y = center_y - (drawing.front_view.outline.bounds[3] - drawing.front_view.outline.bounds[1]) * scale / 2.0
+                _draw_view(c, drawing.front_view, (x0, front_y), drawing.module_id, scale)
             board_w = (drawing.board_view.outline.bounds[2] - drawing.board_view.outline.bounds[0]) * scale
-            board_x = px + (panel_w - board_w) / 2.0
-            _draw_view(c, drawing.board_view, (board_x, 105), drawing.module_id, scale, board_label=True)
+            board_x = x0
+            _draw_view(c, drawing.board_view, (board_x, 106.17), drawing.module_id, scale, board_label=True)
+            detail_baselines = (82.90, 76.20, 69.55, 62.79, 56.36, 49.71, 44.15)
             for line_no, line in enumerate(drawing.details):
-                _text(c, line, px + 5.0, 88 - line_no * 6.1, 3.4, black)
+                baseline = detail_baselines[line_no] if line_no < len(detail_baselines) else 44.15 - (line_no - 6) * 5.2
+                if line_no < 6:
+                    _text(c, line, px + 9.7, baseline, 5.67, black, horizontal_scale=0.67)
+                else:
+                    _text(c, line, px + 9.7, baseline, 4.2, black, horizontal_scale=0.97)
         c.showPage()
     c.save()
     _overlay_reference_titleblock(output_path, reference_pdf)
