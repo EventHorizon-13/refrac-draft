@@ -15,6 +15,7 @@ from refracdraft.drawing.model import DrawingDocument, ModuleDrawing, ViewDrawin
 
 PAGE_W, PAGE_H = landscape(A4)
 MM = 72.0 / 25.4
+PDF_FONT_NAME: str | None = None
 
 
 def _xy(x_mm: float, y_mm: float) -> tuple[float, float]:
@@ -31,7 +32,7 @@ def _line(c: canvas.Canvas, x1: float, y1: float, x2: float, y2: float,
 def _text(c: canvas.Canvas, text: str, x: float, y: float, size: float = 2.5,
           color=black, align: str = "left") -> None:
     c.setFillColor(color)
-    c.setFont("RefracCJK", size * MM)
+    c.setFont(PDF_FONT_NAME or "STSong-Light", size * MM)
     px, py = _xy(x, y)
     if align == "center":
         c.drawCentredString(px, py, text)
@@ -161,35 +162,46 @@ def _overlay_reference_titleblock(output_path: Path, reference_pdf: str | Path |
     temp_path.replace(output_path)
 
 
+def _ensure_cjk_font() -> None:
+    global PDF_FONT_NAME
+    if PDF_FONT_NAME:
+        return
+    try:
+        pdfmetrics.getFont("RefracCJK")
+        PDF_FONT_NAME = "RefracCJK"
+        return
+    except KeyError:
+        pass
+    configured = os.environ.get("REFRACDRAFT_CJK_FONT")
+    candidates = [
+        Path(configured) if configured else None,
+        Path(r"C:\Windows\Fonts\msyh.ttc"),
+        Path(r"C:\Windows\Fonts\simsun.ttc"),
+        Path("/usr/share/fonts/truetype/arphic/uming.ttc"),
+        Path("/System/Library/Fonts/PingFang.ttc"),
+    ]
+    for font_path in candidates:
+        if not font_path or not font_path.exists():
+            continue
+        try:
+            pdfmetrics.registerFont(TTFont("RefracCJK", str(font_path), subfontIndex=0))
+            PDF_FONT_NAME = "RefracCJK"
+            return
+        except Exception:
+            continue
+    # Last-resort built-in CID font; some uncommon glyphs may be substituted.
+    try:
+        pdfmetrics.getFont("STSong-Light")
+    except KeyError:
+        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+    PDF_FONT_NAME = "STSong-Light"
+
+
 def export_pdf(document: DrawingDocument, output_path: str | Path,
                reference_pdf: str | Path | None = None) -> Path:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        pdfmetrics.getFont("RefracCJK")
-    except KeyError:
-        configured = os.environ.get("REFRACDRAFT_CJK_FONT")
-        candidates = [
-            Path(configured) if configured else None,
-            Path(r"C:\Windows\Fonts\msyh.ttc"),
-            Path(r"C:\Windows\Fonts\simsun.ttc"),
-            Path("/usr/share/fonts/truetype/arphic/uming.ttc"),
-            Path("/System/Library/Fonts/PingFang.ttc"),
-        ]
-        registered = False
-        for font_path in candidates:
-            if not font_path or not font_path.exists():
-                continue
-            try:
-                pdfmetrics.registerFont(TTFont("RefracCJK", str(font_path), subfontIndex=0))
-                registered = True
-                break
-            except Exception:
-                continue
-        if not registered:
-            # Last-resort built-in CID font; some uncommon glyphs may be substituted.
-            pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
-            pdfmetrics.registerFontFamily("RefracCJK", normal="STSong-Light")
+    _ensure_cjk_font()
     c = canvas.Canvas(str(output_path), pagesize=landscape(A4), pageCompression=1)
     c.setTitle(document.project_name)
 
