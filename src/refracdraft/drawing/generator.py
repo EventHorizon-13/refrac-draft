@@ -6,11 +6,12 @@ from refracdraft.domain.models import (
     GeometryType,
     LayoutMode,
     OpeningMode,
+    OutlineKind,
     StructureType,
     Project,
 )
 from refracdraft.drawing.model import Dimension, DrawingDocument, ModuleDrawing, SheetPage, PlacedModule, ViewDrawing
-from refracdraft.geometry.primitives import Polyline, equal_anchor_positions, module_front_outline, module_side_outline, rectangle, scale_template
+from refracdraft.geometry.primitives import Polyline, equal_anchor_positions, module_front_outline, module_side_outline, parametric_outline, point_in_outline, rectangle, scale_template
 from refracdraft.reference.library import ReferenceLibrary
 
 
@@ -64,6 +65,21 @@ def _details(module, board, anchor) -> tuple[str, ...]:
     return tuple(lines)
 
 
+def _feature_dimensions(spec, width: float) -> tuple[Dimension, Dimension]:
+    """Dimension the feature dimensions from the same values that make the contour."""
+    fw, fh = spec.feature_width_mm, spec.feature_height_mm
+    if spec.kind == OutlineKind.EDGE_NOTCH:
+        left, right = spec.offset_mm, spec.offset_mm + fw
+    else:
+        left, right = width - fw, width
+    if spec.mirror_x:
+        left, right = width - right, width - left
+    return (
+        Dimension((left, fh), (right, fh), f"{fw:g}", "horizontal", -18),
+        Dimension((left, 0), (left, fh), f"{fh:g}", "vertical", 18),
+    )
+
+
 class DrawingGenerator:
     def __init__(self, reference_library: ReferenceLibrary | None = None):
         self.reference_library = reference_library
@@ -96,11 +112,19 @@ class DrawingGenerator:
                           f"{module.front_width_mm:g}", "horizontal", 32),
                 Dimension((0, 0), (0, module.front_height_mm), f"{module.front_height_mm:g}", "vertical", 40),
             )
+        if module.front_outline:
+            front_dims += _feature_dimensions(module.front_outline, module.front_width_mm)
         front_symbols: list[Polyline] = []
         front_symbol_colors: list[int] = []
         front_symbol_lineweights: list[int] = []
         front_internal: tuple[Polyline, ...] = ()
         positions = _anchor_positions(anchor, module.board_face_width_mm, module.board_face_height_mm)
+        if module.front_outline:
+            for x, _y in positions:
+                front_point = (x * module.front_width_mm / module.board_face_width_mm,
+                               module.front_height_mm / 2.0)
+                if not point_in_outline(front, front_point):
+                    raise ValueError(f"{module.module_id}: 锚固件正面投影位于模块轮廓之外")
         if positions and self.reference_library:
             try:
                 profile = self.reference_library.front_anchor_symbol(anchor.anchor_type.value)
@@ -165,7 +189,10 @@ class DrawingGenerator:
                                     anchor_symbol_colors=tuple(side_symbol_colors),
                                     anchor_symbol_lineweights=tuple(side_symbol_lineweights))
 
-        if module.board_face_template_id == "rectangular":
+        if module.board_face_outline:
+            board_outline = parametric_outline(module.board_face_width_mm, module.board_face_height_mm,
+                                               module.board_face_outline)
+        elif module.board_face_template_id == "rectangular":
             board_outline = rectangle(module.board_face_width_mm, module.board_face_height_mm)
         elif self.reference_library:
             source_outline = self.reference_library.board_outline(module.board_face_template_id)
@@ -175,6 +202,9 @@ class DrawingGenerator:
             board_outline = rectangle(module.board_face_width_mm, module.board_face_height_mm)
 
         positions = _anchor_positions(anchor, module.board_face_width_mm, module.board_face_height_mm)
+        for x, y in positions:
+            if not point_in_outline(board_outline, (x, y)):
+                raise ValueError(f"{module.module_id}: 锚固件坐标 ({x:g}, {y:g}) 位于夹板面轮廓之外")
         symbol_lines: list[Polyline] = []
         symbol_colors: list[int] = []
         symbol_lineweights: list[int] = []
@@ -213,6 +243,8 @@ class DrawingGenerator:
             Dimension((0, 0), (module.board_face_width_mm, 0), f"{module.board_face_width_mm:g}", "horizontal", -68),
             Dimension((0, 0), (0, module.board_face_height_mm), f"{module.board_face_height_mm:g}", "vertical", 40),
         ]
+        if module.board_face_outline:
+            board_dims.extend(_feature_dimensions(module.board_face_outline, module.board_face_width_mm))
         if anchor.dimension_horizontal:
             xs = sorted(p[0] for p in positions)
             chain = [0.0, *xs, module.board_face_width_mm]
@@ -273,3 +305,4 @@ class DrawingGenerator:
             page_number += 1
         warnings = tuple(w for drawing in drawings for w in drawing.warnings)
         return DrawingDocument(project.metadata.project_name, tuple(pages), warnings)
+

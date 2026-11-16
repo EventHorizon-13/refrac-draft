@@ -52,3 +52,11 @@
 
 - Quick-insert front profile is anisotropically scaled to the measured 18.35 × 220 mm envelope in the accepted B3/B10/B11/B12 source views.
 - PDF symbol font fallback uses a separate glyph font for diameter and superscript-three characters so `Ø8` and `kg/m³` do not render as missing-glyph boxes.
+
+## Parameter-driven irregular outlines (in progress)
+
+- Added directly computed corner-cut, top-edge notch, and step contours for front and board-face views, each with independent dimensions and optional horizontal mirroring. Their feature dimensions are generated from the same parameters as the geometry.
+- Anchor centres outside a computed board-face contour, or projected outside a computed irregular front contour, now stop generation with the module ID.
+- Added focused regression cases for two sizes per new contour, feature dimensions, invalid inputs, anchor placement, and no-board behavior. See `docs/PARAMETRIC_OUTLINES.md` for JSON input and explicit limits.
+- These new contours do not yet replace the legacy scaled DXF board-face templates. Arcs, custom DXF contours, compound features, full symbol/opening interference, UI/Excel editing, and golden-master visual acceptance remain open.
+

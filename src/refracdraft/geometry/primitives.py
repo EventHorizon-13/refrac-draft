@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from math import hypot
 from typing import Iterable
 
-from refracdraft.domain.models import GeometryType, ModuleParameters, Point2D
+from refracdraft.domain.models import GeometryType, ModuleParameters, OutlineKind, OutlineSpec, Point2D
 
 
 @dataclass(frozen=True)
@@ -44,7 +44,50 @@ def trapezoid(width: float, left_height: float, right_height: float) -> Polyline
     ))
 
 
+def parametric_outline(width: float, height: float, spec: OutlineSpec) -> Polyline:
+    """Construct a closed contour from feature dimensions, without block scaling."""
+    fw, fh = spec.feature_width_mm, spec.feature_height_mm
+    if fw >= width or fh >= height:
+        raise ValueError("异形特征尺寸必须小于所在面的宽度和高度")
+    if spec.kind == OutlineKind.CORNER_CUT:
+        points = ((0, 0), (width - fw, 0), (width, fh), (width, height), (0, height))
+    elif spec.kind == OutlineKind.STEP:
+        points = ((0, 0), (width - fw, 0), (width - fw, fh),
+                  (width, fh), (width, height), (0, height))
+    elif spec.kind == OutlineKind.EDGE_NOTCH:
+        start = spec.offset_mm
+        if start <= 0 or start + fw >= width:
+            raise ValueError("开槽起点和槽宽必须位于轮廓顶边内部")
+        points = ((0, 0), (start, 0), (start, fh), (start + fw, fh),
+                  (start + fw, 0), (width, 0), (width, height), (0, height))
+    else:
+        raise ValueError(f"未知异形类型: {spec.kind}")
+    if spec.mirror_x:
+        points = tuple((width - x, y) for x, y in reversed(points))
+    return Polyline(tuple((float(x), float(y)) for x, y in points))
+
+
+def point_in_outline(outline: Polyline, point: tuple[float, float]) -> bool:
+    """Include the boundary; reject anchor centres in removed material."""
+    x, y = point
+    pts = outline.points
+    inside = False
+    for a, b in zip(pts, pts[1:] + pts[:1]):
+        ax, ay = a
+        bx, by = b
+        cross = (x - ax) * (by - ay) - (y - ay) * (bx - ax)
+        if abs(cross) < 1e-8 and min(ax, bx) - 1e-8 <= x <= max(ax, bx) + 1e-8 and min(ay, by) - 1e-8 <= y <= max(ay, by) + 1e-8:
+            return True
+        if (ay > y) != (by > y):
+            hit_x = ax + (y - ay) * (bx - ax) / (by - ay)
+            if x < hit_x:
+                inside = not inside
+    return inside
+
+
 def module_front_outline(module: ModuleParameters) -> Polyline:
+    if module.front_outline:
+        return parametric_outline(module.front_width_mm, module.front_height_mm, module.front_outline)
     if module.geometry_type == GeometryType.FRONT_TAPER:
         return trapezoid(module.front_width_mm, module.front_left_height_mm or module.front_height_mm,
                          module.front_right_height_mm or module.front_height_mm)
@@ -85,3 +128,4 @@ def equal_anchor_positions(width: float, height: float, count: int, edge_offset:
         raise ValueError("锚固件两端留边之和大于夹板面宽度")
     step = usable / (count - 1)
     return [Point2D(x=edge_offset + i * step, y=height / 2.0) for i in range(count)]
+

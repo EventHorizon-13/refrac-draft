@@ -40,6 +40,27 @@ class OpeningMode(StrEnum):
     CUSTOM = "自定义开口"
 
 
+class OutlineKind(StrEnum):
+    CORNER_CUT = "corner-cut"
+    EDGE_NOTCH = "edge-notch"
+    STEP = "step"
+
+
+class OutlineSpec(BaseModel):
+    """Dimensions for an independently computed front or board-face contour.
+
+    Features originate at the upper right, except the top-edge notch, whose
+    offset is measured from the left. mirror_x reflects the result horizontally.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: OutlineKind
+    feature_width_mm: float = Field(gt=0)
+    feature_height_mm: float = Field(gt=0)
+    offset_mm: float = Field(default=0, ge=0)
+    mirror_x: bool = False
+
+
 class Point2D(BaseModel):
     model_config = ConfigDict(frozen=True)
     x: float
@@ -71,6 +92,8 @@ class ModuleParameters(BaseModel):
     board_face_width_mm: float = Field(gt=0)
     board_face_height_mm: float = Field(gt=0)
     board_face_template_id: str = "rectangular"
+    front_outline: OutlineSpec | None = None
+    board_face_outline: OutlineSpec | None = None
 
     material: str = ""
     density_kg_m3: float | None = Field(default=None, gt=0)
@@ -79,6 +102,10 @@ class ModuleParameters(BaseModel):
 
     @model_validator(mode="after")
     def validate_geometry(self) -> "ModuleParameters":
+        if self.front_outline and self.geometry_type == GeometryType.FRONT_TAPER:
+            raise ValueError("正敲正面异形组合尚未定义，不能忽略异形参数")
+        if self.board_face_outline and self.board_face_template_id != "rectangular":
+            raise ValueError("参数化夹板面轮廓不能与参考 DXF 模板同时指定")
         if self.geometry_type == GeometryType.FRONT_TAPER:
             if self.front_left_height_mm is None or self.front_right_height_mm is None:
                 raise ValueError("正敲模块必须输入正面两端高度 front_left_height_mm / front_right_height_mm")
@@ -191,3 +218,4 @@ class Project(BaseModel):
             (x for x in self.anchors if x.module_id == module_id),
             AnchorParameters(module_id=module_id, exists=False, anchor_type=AnchorType.NONE, count=0),
         )
+
