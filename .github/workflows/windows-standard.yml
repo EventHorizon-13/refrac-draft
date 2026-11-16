@@ -47,6 +47,9 @@ jobs:
             throw "Packaged application smoke test failed."
           }
           if ($process.ExitCode -ne 0) {
+            if (Test-Path "RefracDraft-Standard-smoke-trace.txt") {
+              Get-Content "RefracDraft-Standard-smoke-trace.txt"
+            }
             throw "Packaged application exited with code $($process.ExitCode)."
           }
       - name: Add portable instructions
@@ -56,15 +59,7 @@ jobs:
           python -m pip freeze | Out-File "dist/RefracDraft-Standard/BUILD-DEPENDENCIES.txt" -Encoding utf8
       - uses: actions/upload-artifact@v4
         with:
-          name: RefracDraft-Standard-layout-preview
-          path: RefracDraft-Standard-layout.png
-          if-no-files-found: error
-          retention-days: 30
-      - uses: actions/upload-artifact@v4
-        with:
           name: RefracDraft-Standard-Windows-x64-portable
           path: dist/RefracDraft-Standard/
           if-no-files-found: error
           retention-days: 30
-
-
