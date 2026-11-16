@@ -9,6 +9,7 @@ from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 import fitz
+import os
 
 from refracdraft.drawing.model import DrawingDocument, ModuleDrawing, ViewDrawing
 
@@ -167,11 +168,28 @@ def export_pdf(document: DrawingDocument, output_path: str | Path,
     try:
         pdfmetrics.getFont("RefracCJK")
     except KeyError:
-        cjk_font = Path("/usr/share/fonts/truetype/arphic/uming.ttc")
-        if cjk_font.exists():
-            pdfmetrics.registerFont(TTFont("RefracCJK", str(cjk_font), subfontIndex=0))
-        else:
+        configured = os.environ.get("REFRACDRAFT_CJK_FONT")
+        candidates = [
+            Path(configured) if configured else None,
+            Path(r"C:\Windows\Fonts\msyh.ttc"),
+            Path(r"C:\Windows\Fonts\simsun.ttc"),
+            Path("/usr/share/fonts/truetype/arphic/uming.ttc"),
+            Path("/System/Library/Fonts/PingFang.ttc"),
+        ]
+        registered = False
+        for font_path in candidates:
+            if not font_path or not font_path.exists():
+                continue
+            try:
+                pdfmetrics.registerFont(TTFont("RefracCJK", str(font_path), subfontIndex=0))
+                registered = True
+                break
+            except Exception:
+                continue
+        if not registered:
+            # Last-resort built-in CID font; some uncommon glyphs may be substituted.
             pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+            pdfmetrics.registerFontFamily("RefracCJK", normal="STSong-Light")
     c = canvas.Canvas(str(output_path), pagesize=landscape(A4), pageCompression=1)
     c.setTitle(document.project_name)
 
