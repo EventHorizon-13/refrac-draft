@@ -17,6 +17,7 @@ from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import export_pdf
 from refracdraft.importers.excel import import_project_xlsx
 from refracdraft.reference.library import ReferenceLibrary
+from refracdraft.resources import resource_path
 
 
 MODULE_COLUMNS = [
@@ -169,8 +170,8 @@ class MainWindow(QMainWindow):
         self.resize(1500, 900)
         self.project = Project()
         self.drawing_document = None
-        self.reference_dxf = Path("references/示例.dxf")
-        self.reference_pdf = Path("references/江阴铁包-11098-qf.pdf")
+        self.reference_dxf = resource_path("references/示例.dxf")
+        self.reference_pdf = resource_path("references/江阴铁包-11098-qf.pdf")
         self.tables: dict[str, QTableWidget] = {}
         self._build_ui()
         self._add_empty_rows()
@@ -380,3 +381,4 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"PDF 已导出：{path}")
         except Exception as exc:
             QMessageBox.critical(self, "PDF 导出失败", str(exc))
+
