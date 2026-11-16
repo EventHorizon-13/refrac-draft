@@ -1,0 +1,203 @@
+from __future__ import annotations
+
+from refracdraft.domain.models import (
+    AnchorParameters,
+    AnchorType,
+    GeometryType,
+    LayoutMode,
+    OpeningMode,
+    Project,
+)
+from refracdraft.drawing.model import Dimension, DrawingDocument, ModuleDrawing, SheetPage, PlacedModule, ViewDrawing
+from refracdraft.geometry.primitives import Polyline, equal_anchor_positions, module_front_outline, module_side_outline, rectangle, scale_template
+from refracdraft.reference.library import ReferenceLibrary
+
+
+ANCHOR_SYMBOL_ID = {
+    AnchorType.M_SHAPE: "m-shaped",
+    AnchorType.DIAMOND: "diamond",
+}
+
+
+def _anchor_positions(anchor: AnchorParameters, width: float, height: float):
+    if not anchor.exists or anchor.anchor_type == AnchorType.NONE or anchor.count == 0:
+        return []
+    if anchor.layout_mode == LayoutMode.EXPLICIT:
+        return [(p.x_mm, p.y_mm) for p in anchor.positions]
+    if anchor.layout_mode == LayoutMode.EQUAL:
+        return [(p.x, p.y) for p in equal_anchor_positions(width, height, anchor.count, anchor.edge_offset_mm)]
+    # Fixed-spacing mode is centered as a group; explicit coordinates remain the preferred
+    # way to reproduce the segmented positioning dimensions in the supplied PDFs.
+    spacing = anchor.spacing_mm or 0.0
+    group_width = spacing * max(0, anchor.count - 1)
+    start = anchor.edge_offset_mm
+    if start + group_width > width:
+        raise ValueError("锚固件端部留边与固定间距超出夹板面宽度")
+    return [(start + i * spacing, height / 2.0) for i in range(anchor.count)]
+
+
+def _translate_symbol(symbol: tuple[Polyline, ...], x: float, y: float) -> tuple[Polyline, ...]:
+    return tuple(line.transformed(tx=x, ty=y) for line in symbol)
+
+
+def _details(module, board, anchor) -> tuple[str, ...]:
+    name = module.name or module.structure_type.value
+    lines = [f"1、名称：{name}{module.module_id}", f"2、材质：{module.material or '未填写'}"]
+    if not anchor.exists or anchor.anchor_type == AnchorType.NONE:
+        lines.extend(("3、锚固件：无", "4、锚固件长度：无"))
+    else:
+        diameter = f"Ø{anchor.diameter_mm:g}" if anchor.diameter_mm else ""
+        spec = f"{anchor.thread_spec}{diameter}" if anchor.thread_spec else diameter
+        anchor_name = {
+            AnchorType.M_SHAPE: "", AnchorType.DIAMOND: "菱形", AnchorType.SIDE_INSERT: "旁插",
+            AnchorType.QUICK_INSERT: "快插", AnchorType.WELDED_DIAMOND: "焊接菱形",
+            AnchorType.CUSTOM: "自定义",
+        }.get(anchor.anchor_type, "")
+        lines.extend((f"3、锚固件：{anchor.material}{anchor_name}锚固件{spec}",
+                      f"4、锚固件长度：{anchor.length_mm:g}mm" if anchor.length_mm else "4、锚固件长度：未填写"))
+    lines.append(f"5、数量：{module.production_quantity} Pcs")
+    lines.append(f"6、容重：{module.density_kg_m3:g} kg/m³" if module.density_kg_m3 else "6、容重：未填写")
+    hose = anchor.hose_spec if anchor.exists else "无胶管"
+    board_text = board.material if board.exists else "无夹板"
+    lines.append(f"{hose or '未填写胶管'}，{board_text}")
+    return tuple(lines)
+
+
+class DrawingGenerator:
+    def __init__(self, reference_library: ReferenceLibrary | None = None):
+        self.reference_library = reference_library
+
+    def build_module(self, project: Project, module) -> ModuleDrawing:
+        board = project.board_for(module.module_id)
+        anchor = project.anchor_for(module.module_id)
+        warnings: list[str] = []
+
+        front = module_front_outline(module)
+        if module.geometry_type == GeometryType.FRONT_TAPER:
+            left_h = module.front_left_height_mm or module.front_height_mm
+            right_h = module.front_right_height_mm or module.front_height_mm
+            front_dims = (
+                Dimension((0, left_h), (module.front_width_mm, right_h), f"{module.front_width_mm:g}", "horizontal", 50),
+                Dimension((0, 0), (0, left_h), f"{left_h:g}", "vertical", 50),
+                Dimension((module.front_width_mm, 0), (module.front_width_mm, right_h), f"{right_h:g}", "vertical", -50),
+            )
+        else:
+            front_dims = (
+                Dimension((0, module.front_height_mm), (module.front_width_mm, module.front_height_mm),
+                          f"{module.front_width_mm:g}", "horizontal", 50),
+                Dimension((0, 0), (0, module.front_height_mm), f"{module.front_height_mm:g}", "vertical", 50),
+            )
+        front_symbols: list[Polyline] = []
+        positions = _anchor_positions(anchor, module.board_face_width_mm, module.board_face_height_mm)
+        if positions and self.reference_library and anchor.anchor_type == AnchorType.M_SHAPE:
+            profile = self.reference_library.symbol_from_block("M形锚固件本体").polylines
+            for x, _y in positions:
+                fx = x * module.front_width_mm / module.board_face_width_mm
+                front_symbols.extend(_translate_symbol(profile, fx, module.front_height_mm / 2.0))
+        front_points = tuple((x * module.front_width_mm / module.board_face_width_mm,
+                              module.front_height_mm / 2.0) for x, _y in positions) if positions else ()
+        front_view = ViewDrawing("front", "正面", front, front_dims, tuple(front_symbols), front_points)
+
+        side_view = None
+        side = module_side_outline(module)
+        if side is not None:
+            side_dims = (
+                Dimension((0, module.side_left_height_mm or 0),
+                          (module.side_length_mm or 0, module.side_right_height_mm or 0),
+                          f"{module.side_length_mm:g}", "horizontal", 50),
+                Dimension((0, 0), (0, module.side_left_height_mm or 0),
+                          f"{module.side_left_height_mm:g}", "vertical", 50),
+                Dimension((module.side_length_mm or 0, 0),
+                          (module.side_length_mm or 0, module.side_right_height_mm or 0),
+                          f"{module.side_right_height_mm:g}", "vertical", -50),
+            )
+            side_view = ViewDrawing("side", "侧面", side, side_dims)
+
+        if module.board_face_template_id == "rectangular":
+            board_outline = rectangle(module.board_face_width_mm, module.board_face_height_mm)
+        elif self.reference_library:
+            source_outline = self.reference_library.board_outline(module.board_face_template_id)
+            board_outline = scale_template(source_outline.points, module.board_face_width_mm, module.board_face_height_mm)
+        else:
+            warnings.append(f"未加载参考 DXF，夹板面模板 {module.board_face_template_id} 暂以矩形代替")
+            board_outline = rectangle(module.board_face_width_mm, module.board_face_height_mm)
+
+        positions = _anchor_positions(anchor, module.board_face_width_mm, module.board_face_height_mm)
+        symbol_lines: list[Polyline] = []
+        symbol_id = ANCHOR_SYMBOL_ID.get(anchor.anchor_type) if anchor.exists else None
+        if positions and symbol_id and self.reference_library:
+            symbol = self.reference_library.anchor_symbol(symbol_id).polylines
+            for x, y in positions:
+                symbol_lines.extend(_translate_symbol(symbol, x, y))
+        elif positions and anchor.anchor_type == AnchorType.QUICK_INSERT:
+            warnings.append("参考 DXF 目前只发现快插锚固件右视图，未发现可确认的夹板面标准开口；请补充标准开口样板，当前不猜测开口形状")
+        elif positions and anchor.anchor_type not in (AnchorType.NONE, AnchorType.CUSTOM):
+            warnings.append(f"锚固件类型 {anchor.anchor_type.value} 的参考符号尚未加载")
+
+        if board.opening_mode == OpeningMode.STANDARD and anchor.anchor_type == AnchorType.QUICK_INSERT:
+            warnings.append("快插标准开口尚未从参考资料中确认，未自动绘制未经验证的开口")
+        cutouts: list[Polyline] = []
+        if board.opening_mode == OpeningMode.CUSTOM and board.custom_opening:
+            cutouts.append(Polyline(tuple((p.x, p.y) for p in board.custom_opening), closed=True))
+
+        board_dims = [
+            Dimension((0, 0), (module.board_face_width_mm, 0), f"{module.board_face_width_mm:g}", "horizontal", -50),
+            Dimension((0, 0), (0, module.board_face_height_mm), f"{module.board_face_height_mm:g}", "vertical", 50),
+        ]
+        has_dimensioned_anchor_layout = len(positions) > 1 or any(
+            abs(x - module.board_face_width_mm / 2.0) > 0.01 for x, _y in positions
+        )
+        if has_dimensioned_anchor_layout:
+            xs = sorted(p[0] for p in positions)
+            chain = [0.0, *xs, module.board_face_width_mm]
+            for start_x, end_x in zip(chain, chain[1:]):
+                if end_x - start_x > 0.01:
+                    board_dims.append(Dimension((start_x, module.board_face_height_mm),
+                                                (end_x, module.board_face_height_mm),
+                                                f"{end_x - start_x:g}", "horizontal", 35))
+            seen_offsets: set[float] = set()
+            for x, y in positions:
+                offset = round(module.board_face_height_mm - y, 3)
+                if 0 < offset < module.board_face_height_mm and offset not in seen_offsets:
+                    board_dims.append(Dimension((x, y), (x, module.board_face_height_mm),
+                                                f"{offset:g}", "vertical", -50))
+                    seen_offsets.add(offset)
+        board_view = ViewDrawing(
+            "board-face", "夹板面", board_outline, tuple(board_dims),
+            tuple(symbol_lines), tuple(positions), "" if board.exists else "无夹板", tuple(cutouts),
+        )
+        return ModuleDrawing(
+            module.module_id, module.name or module.structure_type.value,
+            _details(module, board, anchor), front_view, side_view, board_view, tuple(warnings),
+        )
+
+    def generate(self, project: Project) -> DrawingDocument:
+        drawings = [self.build_module(project, module) for module in project.modules]
+        pages: list[SheetPage] = []
+        index = 0
+        page_number = 1
+        available_width = 297.0 - 14.0
+        while index < len(drawings):
+            remaining = drawings[index:]
+            candidate4 = remaining[:4]
+            widths = [d.front_view.outline.bounds[2] - d.front_view.outline.bounds[0] for d in candidate4]
+            # This packing rule mirrors the supplied four-page example: 4 standard-width
+            # modules, 3 when an oversized module (e.g. B6/B7) enters the next group.
+            has_side_view = any(d.side_view is not None for d in candidate4)
+            if len(candidate4) == 4 and max(widths, default=0) <= 650 and not has_side_view:
+                count = 4
+            elif len(remaining) >= 3:
+                count = 3
+            else:
+                count = len(remaining)
+            group = drawings[index:index + count]
+            panel_width = available_width / count
+            placed = tuple(
+                PlacedModule(drawing=d, x_mm=7.0 + i * panel_width, panel_width_mm=panel_width, panel_index=i)
+                for i, d in enumerate(group)
+            )
+            pages.append(SheetPage(page_number, placed, count))
+            index += count
+            page_number += 1
+        warnings = tuple(w for drawing in drawings for w in drawing.warnings)
+        return DrawingDocument(project.metadata.project_name, tuple(pages), warnings)

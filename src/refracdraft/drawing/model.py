@@ -1,0 +1,59 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from refracdraft.geometry.primitives import Polyline
+
+
+@dataclass(frozen=True)
+class Dimension:
+    start: tuple[float, float]
+    end: tuple[float, float]
+    label: str
+    orientation: str = "horizontal"
+    offset: float = 8.0
+
+
+@dataclass(frozen=True)
+class ViewDrawing:
+    view_type: str
+    label: str
+    outline: Polyline
+    dimensions: tuple[Dimension, ...] = ()
+    anchor_symbols: tuple[Polyline, ...] = ()
+    anchor_points: tuple[tuple[float, float], ...] = ()
+    note: str = ""
+    cutouts: tuple[Polyline, ...] = ()
+
+
+@dataclass(frozen=True)
+class ModuleDrawing:
+    module_id: str
+    name: str
+    details: tuple[str, ...]
+    front_view: ViewDrawing
+    side_view: ViewDrawing | None
+    board_view: ViewDrawing
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PlacedModule:
+    drawing: ModuleDrawing
+    x_mm: float
+    panel_width_mm: float
+    panel_index: int
+
+
+@dataclass(frozen=True)
+class SheetPage:
+    page_number: int
+    modules: tuple[PlacedModule, ...]
+    column_count: int
+
+
+@dataclass(frozen=True)
+class DrawingDocument:
+    project_name: str
+    pages: tuple[SheetPage, ...]
+    warnings: tuple[str, ...] = field(default_factory=tuple)
