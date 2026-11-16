@@ -18,9 +18,12 @@ LAYER_COLORS = {
 }
 
 
-def _add_polyline(msp, points, closed=True, layer="OUTLINE"):
+def _add_polyline(msp, points, closed=True, layer="OUTLINE", color=None):
     if len(points) >= 2:
-        msp.add_lwpolyline(points, close=closed, dxfattribs={"layer": layer})
+        attrs = {"layer": layer}
+        if color is not None:
+            attrs["color"] = int(color)
+        msp.add_lwpolyline(points, close=closed, dxfattribs=attrs)
 
 
 def _add_dimension(msp, x1, y1, x2, y2, label, horizontal=True, offset=6.0):
@@ -66,20 +69,22 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
     for line in view.internal_lines:
         pts = [(ox + x * scale, oy + y * scale) for x, y in line.points]
         _add_polyline(msp, pts, line.closed, "OUTLINE")
-    for symbol in view.anchor_symbols:
+    for symbol_index, symbol in enumerate(view.anchor_symbols):
         pts = [(ox + x * scale, oy + y * scale) for x, y in symbol.points]
-        _add_polyline(msp, pts, symbol.closed, "ANCHORS")
+        aci = view.anchor_symbol_colors[symbol_index] if symbol_index < len(view.anchor_symbol_colors) else None
+        _add_polyline(msp, pts, symbol.closed, "ANCHORS", color=aci)
     for x, y in view.anchor_points:
         cx, cy = ox + x * scale, oy + y * scale
-        msp.add_circle((cx, cy), 0.6, dxfattribs={"layer": "CENTER"})
-        msp.add_line((cx - 1.5, cy), (cx + 1.5, cy), dxfattribs={"layer": "CENTER"})
-    msp.add_text(module_id, dxfattribs={"insert": (ox + width * scale / 2.0, oy + height * scale / 2.0),
-                                        "height": 4.0, "style": "工程字", "layer": "TEXT", "halign": 1,
-                                        "align_point": (ox + width * scale / 2.0, oy + height * scale / 2.0)})
-    if view.note:
-        msp.add_text(view.note, dxfattribs={"insert": (ox + width * scale / 2.0, oy + height * scale / 2.0),
-                                            "height": 3.5, "style": "工程字", "layer": "TEXT", "halign": 1,
-                                            "align_point": (ox + width * scale / 2.0, oy + height * scale / 2.0)})
+        if view.anchor_marker_style == "target":
+            msp.add_circle((cx, cy), 0.6, dxfattribs={"layer": "CENTER", "color": 1})
+            msp.add_line((cx - 1.5, cy), (cx + 1.5, cy), dxfattribs={"layer": "CENTER", "color": 1})
+        else:
+            msp.add_line((cx - 1.5, cy), (cx + 1.5, cy), dxfattribs={"layer": "CENTER", "color": 1})
+            msp.add_line((cx, cy - 1.5), (cx, cy + 1.5), dxfattribs={"layer": "CENTER", "color": 1})
+    label = view.note or module_id
+    msp.add_text(label, dxfattribs={"insert": (ox + width * scale / 2.0, oy + height * scale / 2.0),
+                                    "height": 4.0, "style": "工程字", "layer": "TEXT", "halign": 1,
+                                    "align_point": (ox + width * scale / 2.0, oy + height * scale / 2.0)})
 
 
 def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf: str | Path | None = None) -> Path:

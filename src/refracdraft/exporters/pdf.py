@@ -115,9 +115,12 @@ def _draw_view(c: canvas.Canvas, view: ViewDrawing, origin: tuple[float, float],
               ox + b[0] * scale, oy + b[1] * scale, black, 0.24)
 
     # Anchor linework is taken from the supplied reference DXF block geometry.
-    c.setStrokeColor(blue)
+    aci_colors = {1: red, 2: yellow, 3: green, 4: cyan, 5: blue, 6: Color(1, 0, 1), 7: black,
+                  8: Color(0.5, 0.5, 0.5), 9: Color(0.75, 0.75, 0.75)}
     c.setLineWidth(0.22 * MM)
-    for symbol in view.anchor_symbols:
+    for symbol_index, symbol in enumerate(view.anchor_symbols):
+        aci = view.anchor_symbol_colors[symbol_index] if symbol_index < len(view.anchor_symbol_colors) else 5
+        c.setStrokeColor(aci_colors.get(aci, black))
         if len(symbol.points) < 2:
             continue
         path = c.beginPath()
@@ -130,9 +133,13 @@ def _draw_view(c: canvas.Canvas, view: ViewDrawing, origin: tuple[float, float],
     for x, y in view.anchor_points:
         cx, cy = ox + x * scale, oy + y * scale
         c.setStrokeColor(red)
-        c.setFillColor(yellow)
-        c.circle(*_xy(cx, cy), 0.75 * MM, stroke=1, fill=1)
-        _line(c, cx - 1.5, cy, cx + 1.5, cy, red, 0.16)
+        if view.anchor_marker_style == "target":
+            c.setFillColor(yellow)
+            c.circle(*_xy(cx, cy), 0.75 * MM, stroke=1, fill=1)
+            _line(c, cx - 1.5, cy, cx + 1.5, cy, red, 0.16)
+        else:
+            _line(c, cx - 1.5, cy, cx + 1.5, cy, red, 0.18)
+            _line(c, cx, cy - 1.5, cx, cy + 1.5, red, 0.18)
 
     label = view.note or module_id
     label_y = height * 0.5

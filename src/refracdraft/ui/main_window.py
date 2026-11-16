@@ -112,13 +112,22 @@ class DrawingPreview(QGraphicsView):
             p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in line.points]
             for a, b in zip(p, p[1:]):
                 scene.addLine(a[0], a[1], b[0], b[1], QPen(QColor("#111111"), 0.22))
-        for symbol in view.anchor_symbols:
+        aci_colors = {1: "#ff0000", 2: "#ffff00", 3: "#00ff00", 4: "#00ffff", 5: "#0000ff",
+                      6: "#ff00ff", 7: "#111111", 8: "#808080", 9: "#c0c0c0"}
+        for symbol_index, symbol in enumerate(view.anchor_symbols):
             p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in symbol.points]
+            aci = view.anchor_symbol_colors[symbol_index] if symbol_index < len(view.anchor_symbol_colors) else 5
+            pen = QPen(QColor(aci_colors.get(aci, "#111111")), 0.22)
             for a, b in zip(p, p[1:] + ([p[0]] if symbol.closed else [])):
-                scene.addLine(a[0], a[1], b[0], b[1], QPen(QColor("#0000ff"), 0.22))
+                scene.addLine(a[0], a[1], b[0], b[1], pen)
         for x, y in view.anchor_points:
             cx, cy = ox + x * scale, 210 - (oy + y * scale)
-            scene.addEllipse(cx - 0.6, cy - 0.6, 1.2, 1.2, QPen(QColor("#ff0000")), QBrush(QColor("#ffff00")))
+            if view.anchor_marker_style == "target":
+                scene.addEllipse(cx - 0.6, cy - 0.6, 1.2, 1.2, QPen(QColor("#ff0000")), QBrush(QColor("#ffff00")))
+                scene.addLine(cx - 1.5, cy, cx + 1.5, cy, QPen(QColor("#ff0000"), 0.18))
+            else:
+                scene.addLine(cx - 1.5, cy, cx + 1.5, cy, QPen(QColor("#ff0000"), 0.18))
+                scene.addLine(cx, cy - 1.5, cx, cy + 1.5, QPen(QColor("#ff0000"), 0.18))
         min_x, min_y, max_x, max_y = view.outline.bounds
         label = view.note or module_id
         label_y = (max_y - min_y) / 2
