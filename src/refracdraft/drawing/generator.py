@@ -80,10 +80,15 @@ class DrawingGenerator:
         if module.geometry_type == GeometryType.FRONT_TAPER:
             left_h = module.front_left_height_mm or module.front_height_mm
             right_h = module.front_right_height_mm or module.front_height_mm
+            overall_h = max(left_h, right_h)
+            left_bottom = (overall_h - left_h) / 2.0
+            right_bottom = (overall_h - right_h) / 2.0
+            top_left = left_bottom + left_h
+            top_right = right_bottom + right_h
             front_dims = (
-                Dimension((0, left_h), (module.front_width_mm, right_h), f"{module.front_width_mm:g}", "horizontal", 32),
-                Dimension((0, 0), (0, left_h), f"{left_h:g}", "vertical", 40),
-                Dimension((module.front_width_mm, 0), (module.front_width_mm, right_h), f"{right_h:g}", "vertical", -40),
+                Dimension((0, top_left), (module.front_width_mm, top_right), f"{module.front_width_mm:g}", "horizontal", 32),
+                Dimension((0, left_bottom), (0, top_left), f"{left_h:g}", "vertical", 40),
+                Dimension((module.front_width_mm, right_bottom), (module.front_width_mm, top_right), f"{right_h:g}", "vertical", -40),
             )
         else:
             front_dims = (
@@ -122,15 +127,22 @@ class DrawingGenerator:
         side_view = None
         side = module_side_outline(module)
         if side is not None:
+            side_left_h = module.side_left_height_mm or 0
+            side_right_h = module.side_right_height_mm or 0
+            side_overall_h = max(side_left_h, side_right_h)
+            side_left_bottom = (side_overall_h - side_left_h) / 2.0
+            side_right_bottom = (side_overall_h - side_right_h) / 2.0
+            side_top_left = side_left_bottom + side_left_h
+            side_top_right = side_right_bottom + side_right_h
             side_dims = (
-                Dimension((0, module.side_left_height_mm or 0),
-                          (module.side_length_mm or 0, module.side_right_height_mm or 0),
+                Dimension((0, side_top_left),
+                          (module.side_length_mm or 0, side_top_right),
                           f"{module.side_length_mm:g}", "horizontal", 32),
-                Dimension((0, 0), (0, module.side_left_height_mm or 0),
-                          f"{module.side_left_height_mm:g}", "vertical", 40),
-                Dimension((module.side_length_mm or 0, 0),
-                          (module.side_length_mm or 0, module.side_right_height_mm or 0),
-                          f"{module.side_right_height_mm:g}", "vertical", -40),
+                Dimension((0, side_left_bottom), (0, side_top_left),
+                          f"{side_left_h:g}", "vertical", 40),
+                Dimension((module.side_length_mm or 0, side_right_bottom),
+                          (module.side_length_mm or 0, side_top_right),
+                          f"{side_right_h:g}", "vertical", -40),
             )
             side_symbols: list[Polyline] = []
             side_symbol_colors: list[int] = []
@@ -143,10 +155,10 @@ class DrawingGenerator:
                     profile_lineweights = side_profile.lineweights if len(side_profile.lineweights) == len(side_profile.polylines) else (25,) * len(side_profile.polylines)
                     for x, _y in positions:
                         sx = x * (module.side_length_mm or module.board_face_width_mm) / module.board_face_width_mm
-                        side_symbols.extend(_translate_symbol(side_profile.polylines, sx, ((module.side_left_height_mm or 0) + (module.side_right_height_mm or 0)) / 4.0))
+                        side_symbols.extend(_translate_symbol(side_profile.polylines, sx, side_overall_h / 2.0))
                         side_symbol_colors.extend(profile_colors)
                         side_symbol_lineweights.extend(profile_lineweights)
-                        side_points.append((sx, ((module.side_left_height_mm or 0) + (module.side_right_height_mm or 0)) / 4.0))
+                        side_points.append((sx, side_overall_h / 2.0))
                 except KeyError as exc:
                     warnings.append(str(exc))
             side_view = ViewDrawing("side", "侧面", side, side_dims, tuple(side_symbols), tuple(side_points),
