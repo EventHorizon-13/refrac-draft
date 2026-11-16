@@ -42,6 +42,7 @@ ANCHOR_SYMBOL_BLOCKS: dict[str, str] = {
 @dataclass(frozen=True)
 class SymbolGeometry:
     polylines: tuple[Polyline, ...]
+    colors: tuple[int, ...] = ()
 
 
 class ReferenceLibrary:
@@ -57,6 +58,16 @@ class ReferenceLibrary:
         if not self.path.exists():
             raise FileNotFoundError(self.path)
         self.doc = ezdxf.readfile(self.path)
+
+    def _entity_aci_color(self, entity) -> int:
+        color = int(entity.dxf.get("color", 256))
+        if color in (0, 256):
+            layer_name = entity.dxf.get("layer", "0")
+            try:
+                color = int(self.doc.layers.get(layer_name).dxf.color)
+            except Exception:
+                color = 7
+        return abs(color) or 7
 
     def board_outline(self, template_id: str) -> Polyline:
         block_name = BOARD_FACE_BLOCKS.get(template_id, template_id)
@@ -93,6 +104,7 @@ class ReferenceLibrary:
             return SymbolGeometry(())
         symbol_entities = list(recursive_decompose(inserts))
         polylines: list[Polyline] = []
+        colors: list[int] = []
         for entity in symbol_entities:
             try:
                 path = make_path(entity)
@@ -102,6 +114,7 @@ class ReferenceLibrary:
                     if closed:
                         pts = pts[:-1]
                     polylines.append(Polyline(tuple(pts), closed=closed))
+                    colors.append(self._entity_aci_color(entity))
             except (TypeError, AttributeError, ValueError):
                 continue
         if not polylines:
@@ -119,6 +132,7 @@ class ReferenceLibrary:
             raise KeyError(f"参考 DXF 中不存在图块: {block_name}")
         entities = list(recursive_decompose(self.doc.blocks[block_name]))
         polylines: list[Polyline] = []
+        colors: list[int] = []
         for entity in entities:
             try:
                 path = make_path(entity)
@@ -128,6 +142,7 @@ class ReferenceLibrary:
                     if closed:
                         pts = pts[:-1]
                     polylines.append(Polyline(tuple(pts), closed=closed))
+                    colors.append(self._entity_aci_color(entity))
             except (TypeError, AttributeError, ValueError):
                 continue
         if not polylines:
@@ -135,7 +150,7 @@ class ReferenceLibrary:
         xs = [p[0] for line in polylines for p in line.points]
         ys = [p[1] for line in polylines for p in line.points]
         cx, cy = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
-        return SymbolGeometry(tuple(line.transformed(tx=-cx, ty=-cy) for line in polylines))
+        return SymbolGeometry(tuple(line.transformed(tx=-cx, ty=-cy) for line in polylines), tuple(colors))
 
 
     def stacked_front_lines(self, width_mm: float, height_mm: float) -> tuple[Polyline, ...]:

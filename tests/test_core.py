@@ -170,3 +170,27 @@ def test_anchor_position_dimension_flags_are_explicit():
     if REF_DXF.exists():
         assert len(drawing.board_view.cutouts) == 5
     assert drawing.board_view.anchor_points == ()
+    assert drawing.front_view.anchor_marker_style == "cross"
+
+
+def test_m_anchor_board_symbol_preserves_reference_colors_without_extra_center_marker():
+    if not REF_DXF.exists():
+        pytest.skip("reference DXF not mounted")
+    module = ModuleParameters(
+        module_id="B1", geometry_type=GeometryType.FRONT_TAPER,
+        front_width_mm=300, front_height_mm=318,
+        front_left_height_mm=318, front_right_height_mm=259,
+        board_face_width_mm=300, board_face_height_mm=230,
+    )
+    anchor = AnchorParameters(
+        module_id="B1", anchor_type=AnchorType.M_SHAPE, count=1,
+        positions=[{"x_mm": 150, "y_mm": 194.5608498458106}],
+    )
+    drawing = DrawingGenerator(ReferenceLibrary(REF_DXF)).generate(
+        Project(modules=[module], anchors=[anchor])
+    ).pages[0].modules[0].drawing
+    assert drawing.board_view.anchor_points == ()
+    assert drawing.board_view.anchor_symbols
+    assert 5 in drawing.board_view.anchor_symbol_colors
+    assert 1 in drawing.board_view.anchor_symbol_colors
+

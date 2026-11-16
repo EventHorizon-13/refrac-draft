@@ -25,6 +25,9 @@ class ViewDrawing:
     note: str = ""
     cutouts: tuple[Polyline, ...] = ()
     internal_lines: tuple[Polyline, ...] = ()
+    # ACI color for each corresponding anchor polyline; preserves source-DXF layer colors.
+    anchor_symbol_colors: tuple[int, ...] = ()
+    anchor_marker_style: str = "target"
 
 
 @dataclass(frozen=True)
