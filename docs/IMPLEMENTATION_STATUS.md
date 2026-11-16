@@ -7,7 +7,7 @@
 - Separate geometry rules for 普通 / 正敲 / 侧敲.
 - Explicit, equal, and fixed-spacing anchor layout modes.
 - Read-only reference-DXF parser for the 15 named board-face templates.
-- Recursive extraction and direct use of M-shaped and diamond front/side profiles. Side-insert and welded-diamond nested geometry is catalogued but intentionally not auto-used until its role/orientation is confirmed.
+- Recursive extraction and direct use of M-shaped and diamond front/side profiles, preserving source-DXF ACI/layer colors. Side-insert and welded-diamond nested geometry is catalogued but intentionally not auto-used until its role/orientation is confirmed.
 - Sample-derived quick-insert board-face opening candidate is loaded from `references/derived/quick_insert_opening_candidate.json` and placed per anchor position.
 - Generate-on-click drawing model and basic page packing.
 - DXF export with millimetre units, editable vector geometry, SHX text style references, and imported A4 frame/title-block definitions from the reference DXF.
@@ -27,7 +27,7 @@
 
 - The current UI has not yet received full manual interaction testing on Windows.
 - Dynamic-block action/lookup/visibility state recovery is not complete.
-- Quick-insert standard opening geometry is not confirmed by the current reference materials.
+- Quick-insert board-face geometry is rendered from the B10 source mark as a candidate outline; confirm whether it is a machined opening or a plan symbol before production acceptance.
 - Several anchor profile mappings and all B1–B13 / S1–S4 parameters still require page-by-page validation against the supplied samples.
 - The current layout algorithm is an initial approximation, not a universal packing rule.
 - PDF font/line-weight tuning and exact annotation spacing still need golden-master comparison.
@@ -40,3 +40,11 @@
 3. Transcribe B1–B13 and S1–S4 into golden-master input datasets with source-page references.
 4. Compare generated output page-by-page and correct geometry, annotation placement, text hierarchy, title block and page packing.
 5. Test the desktop UI on Windows with the actual sample workbook.
+
+
+## B1-B4 source alignment corrections
+
+- B1/B2/B4 M-shaped board-face anchor coordinates now use the source-block symbol center 35.4391501542 mm below the board top edge (Y=194.5608498458 for a 230 mm board face), instead of incorrectly placing the symbol center on the top edge.
+- M-shaped and diamond board-face symbols preserve their source ACI colors; the duplicate insertion-point marker has been removed.
+- Quick-insert front view uses a red cross marker, matching the B3 sample, instead of the yellow/red target marker used for M-shaped anchors.
+- DXF export uses the view note as the board-face label rather than overlapping the module ID and note.
