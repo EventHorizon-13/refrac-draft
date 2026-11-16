@@ -19,3 +19,24 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest -q
+      - name: Generate B1-B4 reference preview
+        run: |
+          python -m refracdraft.cli generate examples/jiangyin_b1_b4.json --outdir artifacts/b1-b4 --reference-dxf references/示例.dxf --reference-pdf references/江阴铁包-11098-qf.pdf
+          python - <<'PY'
+          import fitz, ezdxf
+          from pathlib import Path
+          pdf = fitz.open("artifacts/b1-b4/jiangyin_b1_b4.pdf")
+          dxf = ezdxf.readfile("artifacts/b1-b4/jiangyin_b1_b4.dxf")
+          Path("artifacts/b1-b4/VALIDATION.txt").write_text(
+              f"PDF pages: {len(pdf)}\\nPDF vector paths: {[len(p.get_drawings()) for p in pdf]}\\nDXF modelspace entities: {len(dxf.modelspace())}\\n",
+              encoding="utf-8",
+          )
+          assert len(pdf) == 1
+          assert len(dxf.modelspace()) > 100
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: refracdraft-b1-b4-preview
+          path: artifacts/b1-b4/*
+          if-no-files-found: error
+          retention-days: 14
