@@ -133,7 +133,7 @@ class DrawingPreview(QGraphicsView):
         label = view.note or module_id
         label_y = (max_y - min_y) / 2
         if view.view_type != "board-face" and (view.anchor_symbols or view.anchor_points):
-            label_y = (max_y - min_y) * 0.12
+            label_y = (view.outline.points[0][1] + view.outline.points[1][1]) / 2 + 5.0
         self._add_text(scene, label, ox + (max_x - min_x) * scale / 2 - 3, oy + label_y, 4, "#111111")
 
     def _dim_line(self, scene, x1, y1, x2, y2, label, horizontal):
