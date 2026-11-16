@@ -81,3 +81,14 @@ After the binary files are committed to this repository, Codex must:
 4. Build an anchor template catalog with actual thumbnails.
 5. Record drawing rules with source page/block references.
 6. Separate confirmed source facts, geometric interpretations, and items needing user confirmation.
+
+
+## 6. Golden-master status of the examples
+
+The supplied examples are the accepted final drawing output standard. They are not loose style inspiration. Implementation must closely reproduce their actual drafting language and page composition.
+
+- The DXF is the primary CAD source for reusable vector geometry, blocks, layers, linetypes, text/dimension styles, frames, and title blocks.
+- The PDFs are the primary final-output source for page composition, view ordering, dimensions and annotation placement, module panels, BOM/detail presentation, title blocks, and pagination.
+- The B2 正敲 and A1 侧敲 images clarify the intended geometry and must be followed for those two types.
+- Use original sample dimensions and properties to build golden-master input datasets. Generate output and compare page-by-page and view-by-view against the supplied references.
+- A successful export alone is not acceptance. Fidelity of geometry, annotations, text, details, frames, title blocks, and layout is part of functional correctness.
