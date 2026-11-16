@@ -27,6 +27,8 @@ class ViewDrawing:
     internal_lines: tuple[Polyline, ...] = ()
     # ACI color for each corresponding anchor polyline; preserves source-DXF layer colors.
     anchor_symbol_colors: tuple[int, ...] = ()
+    # DXF lineweight in hundredths of a millimetre for each anchor polyline.
+    anchor_symbol_lineweights: tuple[int, ...] = ()
     anchor_marker_style: str = "target"
 
 

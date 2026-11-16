@@ -198,6 +198,7 @@ def test_m_anchor_board_symbol_preserves_reference_colors_without_extra_center_m
     assert drawing.board_view.anchor_symbols
     assert 5 in drawing.board_view.anchor_symbol_colors
     assert 1 in drawing.board_view.anchor_symbol_colors
+    assert 13 in drawing.board_view.anchor_symbol_lineweights
 
 
 

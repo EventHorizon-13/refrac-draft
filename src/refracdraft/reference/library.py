@@ -43,6 +43,7 @@ ANCHOR_SYMBOL_BLOCKS: dict[str, str] = {
 class SymbolGeometry:
     polylines: tuple[Polyline, ...]
     colors: tuple[int, ...] = ()
+    lineweights: tuple[int, ...] = ()
 
 
 class ReferenceLibrary:
@@ -68,6 +69,16 @@ class ReferenceLibrary:
             except Exception:
                 color = 7
         return abs(color) or 7
+
+    def _entity_lineweight(self, entity) -> int:
+        lineweight = int(entity.dxf.get("lineweight", -1))
+        if lineweight < 0:
+            layer_name = entity.dxf.get("layer", "0")
+            try:
+                lineweight = int(self.doc.layers.get(layer_name).dxf.lineweight)
+            except Exception:
+                lineweight = -1
+        return 25 if lineweight < 0 else lineweight
 
     def board_outline(self, template_id: str) -> Polyline:
         block_name = BOARD_FACE_BLOCKS.get(template_id, template_id)
@@ -105,6 +116,7 @@ class ReferenceLibrary:
         symbol_entities = list(recursive_decompose(inserts))
         polylines: list[Polyline] = []
         colors: list[int] = []
+        lineweights: list[int] = []
         for entity in symbol_entities:
             try:
                 path = make_path(entity)
@@ -115,6 +127,7 @@ class ReferenceLibrary:
                         pts = pts[:-1]
                     polylines.append(Polyline(tuple(pts), closed=closed))
                     colors.append(self._entity_aci_color(entity))
+                    lineweights.append(self._entity_lineweight(entity))
             except (TypeError, AttributeError, ValueError):
                 continue
         if not polylines:
@@ -123,7 +136,7 @@ class ReferenceLibrary:
         ys = [p[1] for line in polylines for p in line.points]
         cx, cy = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
         normalized = tuple(line.transformed(tx=-cx, ty=-cy) for line in polylines)
-        return SymbolGeometry(normalized, tuple(colors))
+        return SymbolGeometry(normalized, tuple(colors), tuple(lineweights))
 
 
     def symbol_from_block(self, block_name: str) -> SymbolGeometry:
@@ -133,6 +146,7 @@ class ReferenceLibrary:
         entities = list(recursive_decompose(self.doc.blocks[block_name]))
         polylines: list[Polyline] = []
         colors: list[int] = []
+        lineweights: list[int] = []
         for entity in entities:
             try:
                 path = make_path(entity)
@@ -143,6 +157,7 @@ class ReferenceLibrary:
                         pts = pts[:-1]
                     polylines.append(Polyline(tuple(pts), closed=closed))
                     colors.append(self._entity_aci_color(entity))
+                    lineweights.append(self._entity_lineweight(entity))
             except (TypeError, AttributeError, ValueError):
                 continue
         if not polylines:
@@ -150,7 +165,8 @@ class ReferenceLibrary:
         xs = [p[0] for line in polylines for p in line.points]
         ys = [p[1] for line in polylines for p in line.points]
         cx, cy = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
-        return SymbolGeometry(tuple(line.transformed(tx=-cx, ty=-cy) for line in polylines), tuple(colors))
+        return SymbolGeometry(tuple(line.transformed(tx=-cx, ty=-cy) for line in polylines),
+                              tuple(colors), tuple(lineweights))
 
 
     def stacked_front_lines(self, width_mm: float, height_mm: float) -> tuple[Polyline, ...]:
@@ -187,6 +203,7 @@ class ReferenceLibrary:
             return SymbolGeometry(
                 tuple(line.transformed(sx=sx, sy=sy) for line in symbol.polylines),
                 symbol.colors,
+                symbol.lineweights,
             )
         return symbol
 

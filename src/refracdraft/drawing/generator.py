@@ -93,16 +93,19 @@ class DrawingGenerator:
             )
         front_symbols: list[Polyline] = []
         front_symbol_colors: list[int] = []
+        front_symbol_lineweights: list[int] = []
         front_internal: tuple[Polyline, ...] = ()
         positions = _anchor_positions(anchor, module.board_face_width_mm, module.board_face_height_mm)
         if positions and self.reference_library:
             try:
                 profile = self.reference_library.front_anchor_symbol(anchor.anchor_type.value)
                 profile_colors = profile.colors if len(profile.colors) == len(profile.polylines) else (7,) * len(profile.polylines)
+                profile_lineweights = profile.lineweights if len(profile.lineweights) == len(profile.polylines) else (25,) * len(profile.polylines)
                 for x, _y in positions:
                     fx = x * module.front_width_mm / module.board_face_width_mm
                     front_symbols.extend(_translate_symbol(profile.polylines, fx, module.front_height_mm / 2.0))
                     front_symbol_colors.extend(profile_colors)
+                    front_symbol_lineweights.extend(profile_lineweights)
             except KeyError as exc:
                 warnings.append(str(exc))
         elif module.structure_type == StructureType.STACKED and self.reference_library:
@@ -112,6 +115,7 @@ class DrawingGenerator:
         front_view = ViewDrawing(
             "front", "正面", front, front_dims, tuple(front_symbols), front_points,
             internal_lines=front_internal, anchor_symbol_colors=tuple(front_symbol_colors),
+            anchor_symbol_lineweights=tuple(front_symbol_lineweights),
             anchor_marker_style="cross" if anchor.anchor_type == AnchorType.QUICK_INSERT else "target",
         )
 
@@ -130,20 +134,24 @@ class DrawingGenerator:
             )
             side_symbols: list[Polyline] = []
             side_symbol_colors: list[int] = []
+            side_symbol_lineweights: list[int] = []
             side_points: list[tuple[float, float]] = []
             if positions and self.reference_library:
                 try:
                     side_profile = self.reference_library.side_anchor_symbol(anchor.anchor_type.value)
                     profile_colors = side_profile.colors if len(side_profile.colors) == len(side_profile.polylines) else (7,) * len(side_profile.polylines)
+                    profile_lineweights = side_profile.lineweights if len(side_profile.lineweights) == len(side_profile.polylines) else (25,) * len(side_profile.polylines)
                     for x, _y in positions:
                         sx = x * (module.side_length_mm or module.board_face_width_mm) / module.board_face_width_mm
                         side_symbols.extend(_translate_symbol(side_profile.polylines, sx, ((module.side_left_height_mm or 0) + (module.side_right_height_mm or 0)) / 4.0))
                         side_symbol_colors.extend(profile_colors)
+                        side_symbol_lineweights.extend(profile_lineweights)
                         side_points.append((sx, ((module.side_left_height_mm or 0) + (module.side_right_height_mm or 0)) / 4.0))
                 except KeyError as exc:
                     warnings.append(str(exc))
             side_view = ViewDrawing("side", "侧面", side, side_dims, tuple(side_symbols), tuple(side_points),
-                                    anchor_symbol_colors=tuple(side_symbol_colors))
+                                    anchor_symbol_colors=tuple(side_symbol_colors),
+                                    anchor_symbol_lineweights=tuple(side_symbol_lineweights))
 
         if module.board_face_template_id == "rectangular":
             board_outline = rectangle(module.board_face_width_mm, module.board_face_height_mm)
@@ -157,13 +165,16 @@ class DrawingGenerator:
         positions = _anchor_positions(anchor, module.board_face_width_mm, module.board_face_height_mm)
         symbol_lines: list[Polyline] = []
         symbol_colors: list[int] = []
+        symbol_lineweights: list[int] = []
         symbol_id = ANCHOR_SYMBOL_ID.get(anchor.anchor_type) if anchor.exists else None
         if positions and symbol_id and self.reference_library:
             symbol = self.reference_library.anchor_symbol(symbol_id)
             profile_colors = symbol.colors if len(symbol.colors) == len(symbol.polylines) else (5,) * len(symbol.polylines)
+            profile_lineweights = symbol.lineweights if len(symbol.lineweights) == len(symbol.polylines) else (13,) * len(symbol.polylines)
             for x, y in positions:
                 symbol_lines.extend(_translate_symbol(symbol.polylines, x, y))
                 symbol_colors.extend(profile_colors)
+                symbol_lineweights.extend(profile_lineweights)
         elif positions and anchor.anchor_type not in (AnchorType.NONE, AnchorType.CUSTOM, AnchorType.QUICK_INSERT):
             warnings.append(f"锚固件类型 {anchor.anchor_type.value} 的参考符号尚未加载")
         cutouts: list[Polyline] = []
@@ -213,6 +224,7 @@ class DrawingGenerator:
             "board-face", "夹板面", board_outline, tuple(board_dims),
             tuple(symbol_lines), (), board_note, tuple(cutouts),
             anchor_symbol_colors=tuple(symbol_colors),
+            anchor_symbol_lineweights=tuple(symbol_lineweights),
         )
         return ModuleDrawing(
             module.module_id, module.name or module.structure_type.value,
