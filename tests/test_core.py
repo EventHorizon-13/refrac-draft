@@ -79,7 +79,7 @@ def test_side_taper_generator_creates_three_views():
     drawing = DrawingGenerator().generate(project).pages[0].modules[0].drawing
     assert drawing.front_view.view_type == "front"
     assert drawing.side_view is not None
-    assert drawing.side_view.outline.points[2] == (300, 200)
+    assert drawing.side_view.outline.points == ((0.0, 0.0), (300.0, 50.0), (300.0, 250.0), (0.0, 300.0))
     assert drawing.board_view.view_type == "board-face"
 
 
