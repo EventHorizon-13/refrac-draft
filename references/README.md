@@ -4,7 +4,7 @@ This directory is the source-of-truth input for drawing-rule analysis and golden
 
 | File | Role | Repository status |
 |---|---|---|
-| `示例.dxf` | Main CAD reference: module views, board-face templates, anchor blocks, layers, title blocks | Not yet committed; upload the supplied reference bundle |
+| `示例.dxf` | Main CAD reference: module views, board-face templates, anchor blocks, layers, title blocks | Committed in repository; ready for local analysis |
 | `江阴铁包-11098-qf.pdf` | Four-page folded-module drawing set, B1–B13 | Not yet committed; upload the supplied reference bundle |
 | `上下盖_3100_2100_400_640_0930_q-02.pdf` | One-page stacked-module drawing set, S1–S4 | Not yet committed; upload the supplied reference bundle |
 | `B2_正敲示例.png` | 正敲: trapezoid on front face; two views | Present in repository |
@@ -13,10 +13,6 @@ This directory is the source-of-truth input for drawing-rule analysis and golden
 ## Derived source geometry
 
 - `derived/quick_insert_opening_candidate.json` is a vector contour candidate traced from the B10 board-face mark in the sample PDF. It is used provisionally for quick-insert board openings and is not yet a confirmed manufacturing standard.
-
-## Upload procedure
-
-Upload `RefracDraft-reference-materials.zip` to the repository root and extract it from the repository root. The archive contains the original three source files under `references/` and a SHA-256 checksum list. Preserve original bytes and filenames.
 
 ## Handling rules
 
