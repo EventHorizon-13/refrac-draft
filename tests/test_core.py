@@ -171,6 +171,11 @@ def test_anchor_position_dimension_flags_are_explicit():
         assert len(drawing.board_view.cutouts) == 5
     assert drawing.board_view.anchor_points == ()
     assert drawing.front_view.anchor_marker_style == "cross"
+    front_points = [point for line in drawing.front_view.anchor_symbols for point in line.points]
+    width = max(x for x, _ in front_points) - min(x for x, _ in front_points)
+    height = max(y for _, y in front_points) - min(y for _, y in front_points)
+    assert width == pytest.approx(18.35, abs=0.1)
+    assert height == pytest.approx(220.0, abs=0.2)
 
 
 def test_m_anchor_board_symbol_preserves_reference_colors_without_extra_center_marker():
@@ -193,4 +198,23 @@ def test_m_anchor_board_symbol_preserves_reference_colors_without_extra_center_m
     assert drawing.board_view.anchor_symbols
     assert 5 in drawing.board_view.anchor_symbol_colors
     assert 1 in drawing.board_view.anchor_symbol_colors
+
+
+
+def test_pdf_keeps_diameter_and_density_symbols(tmp_path):
+    module = ModuleParameters(
+        module_id="B1", front_width_mm=300, front_height_mm=300,
+        board_face_width_mm=300, board_face_height_mm=230,
+        material="1430材质", density_kg_m3=220,
+    )
+    anchor = AnchorParameters(
+        module_id="B1", anchor_type=AnchorType.M_SHAPE, material="310",
+        thread_spec="M10", diameter_mm=8, length_mm=200, count=1,
+        positions=[{"x_mm": 150, "y_mm": 194.5608498458106}],
+    )
+    drawing = DrawingGenerator().generate(Project(modules=[module], anchors=[anchor]))
+    path = export_pdf(drawing, tmp_path / "symbols.pdf")
+    text = fitz.open(path)[0].get_text()
+    assert "Ø8" in text
+    assert "kg/m³" in text
 

@@ -16,3 +16,8 @@
 - In the source M-shaped board-face block, the symbol center is 35.4391501542 mm below the board's top edge. For B1/B2/B4 on a 230 mm-high board face, the center Y coordinate is therefore 194.5608498458 mm.
 - The source M-shaped board-face symbol contains its own blue structural lines and red center/end marks. Preserve the source DXF ACI colors; do not draw an additional red/yellow marker at the symbol insertion center.
 - The front-view marker style is anchor-type-specific: the M-shaped anchor uses the target marker; the quick-insert front profile uses a red cross marker.
+
+
+## 10. Quick-insert front-profile scale
+
+- The source DXF block `快插锚固件-右视图` has a local envelope of approximately 25 × 102 units. The accepted B3/B10/B11/B12 PDF front profile measures approximately 18.35 × 220 mm. Apply independent X/Y scale factors (18.35/25 and 220/102) before placement; uniform scaling produces a visibly undersized symbol.

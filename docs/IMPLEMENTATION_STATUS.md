@@ -48,3 +48,7 @@
 - M-shaped and diamond board-face symbols preserve their source ACI colors; the duplicate insertion-point marker has been removed.
 - Quick-insert front view uses a red cross marker, matching the B3 sample, instead of the yellow/red target marker used for M-shaped anchors.
 - DXF export uses the view note as the board-face label rather than overlapping the module ID and note.
+
+
+- Quick-insert front profile is anisotropically scaled to the measured 18.35 × 220 mm envelope in the accepted B3/B10/B11/B12 source views.
+- PDF symbol font fallback uses a separate glyph font for diameter and superscript-three characters so `Ø8` and `kg/m³` do not render as missing-glyph boxes.

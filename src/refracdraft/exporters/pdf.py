@@ -16,6 +16,7 @@ from refracdraft.drawing.model import DrawingDocument, ModuleDrawing, ViewDrawin
 PAGE_W, PAGE_H = landscape(A4)
 MM = 72.0 / 25.4
 PDF_FONT_NAME: str | None = None
+SYMBOL_FONT_NAME: str | None = None
 
 
 def _xy(x_mm: float, y_mm: float) -> tuple[float, float]:
@@ -29,11 +30,54 @@ def _line(c: canvas.Canvas, x1: float, y1: float, x2: float, y2: float,
     c.line(*_xy(x1, y1), *_xy(x2, y2))
 
 
+def _ensure_symbol_font() -> None:
+    global SYMBOL_FONT_NAME
+    if SYMBOL_FONT_NAME:
+        return
+    candidates = [
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"),
+        Path(r"C:\\Windows\\Fonts\\arial.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
+    ]
+    for font_path in candidates:
+        if not font_path.exists():
+            continue
+        try:
+            pdfmetrics.registerFont(TTFont("RefracSymbols", str(font_path)))
+            SYMBOL_FONT_NAME = "RefracSymbols"
+            return
+        except Exception:
+            continue
+
+
 def _text(c: canvas.Canvas, text: str, x: float, y: float, size: float = 2.5,
           color=black, align: str = "left") -> None:
     c.setFillColor(color)
-    c.setFont(PDF_FONT_NAME or "STSong-Light", size * MM)
+    base_font = PDF_FONT_NAME or "STSong-Light"
+    font_size = size * MM
     px, py = _xy(x, y)
+    if any(char in text for char in ("Ø", "³")):
+        _ensure_symbol_font()
+    if SYMBOL_FONT_NAME and any(char in text for char in ("Ø", "³")):
+        runs: list[tuple[str, str]] = []
+        for char in text:
+            font = SYMBOL_FONT_NAME if char in ("Ø", "³") else base_font
+            if runs and runs[-1][0] == font:
+                runs[-1] = (font, runs[-1][1] + char)
+            else:
+                runs.append((font, char))
+        total_width = sum(pdfmetrics.stringWidth(run, font, font_size) for font, run in runs)
+        if align == "center":
+            px -= total_width / 2.0
+        elif align == "right":
+            px -= total_width
+        for font, run in runs:
+            c.setFont(font, font_size)
+            c.drawString(px, py, run)
+            px += pdfmetrics.stringWidth(run, font, font_size)
+        return
+    c.setFont(base_font, font_size)
     if align == "center":
         c.drawCentredString(px, py, text)
     elif align == "right":
