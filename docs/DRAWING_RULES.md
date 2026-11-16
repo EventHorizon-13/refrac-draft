@@ -59,3 +59,16 @@ Do not force all anchors to be uniformly distributed. Respect explicit dimension
 - DXF geometry, dimensions, text, blocks, and layers remain editable.
 - PDF is A4 landscape and paginated.
 - Both outputs derive from the same 2D drawing model.
+
+
+## 7. 示例文件是最终成图黄金样板
+
+示例文件不是仅供参考的灵感素材，而是用户认可的最终加工图样式和表达标准。生成的图纸必须尽可能忠实地复刻示例。
+
+- DXF：作为 CAD 几何、图块、图层、线型、文字/尺寸样式、图框和标题栏的主要依据。
+- PDF：作为最终视图组织、标注布局、文字层级、明细、页面构图、图框、标题栏和分页的主要依据。
+- B2 正敲、A1 侧敲补充图片：用于明确两类梯形模块的梯形所在面和视图数量。
+- 不得自行重新设计版式，不得随意删减标注、锚固件表达、夹板面异形、技术文字或明细。
+- 必须以原始样本参数建立黄金样板回归测试，生成后逐页、逐视图与源文件核对。
+- 输出必须是可编辑、可参数化生成的真实二维 DXF/PDF；不得把整页 PDF 图片贴进输出，也不得把整张 DXF 原样复制冒充生成。
+- 用户明确纠正的规则优先于源文件中的偶然错误或冲突；冲突必须记录。
