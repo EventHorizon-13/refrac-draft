@@ -1,0 +1,52 @@
+{
+  "metadata": {
+    "project_name": "模块详情图",
+    "project_unit": "",
+    "order_number": "",
+    "drawing_number": "",
+    "designer": "",
+    "checker": ""
+  },
+  "modules": [
+    {
+      "module_id": "B2",
+      "name": "折叠模块",
+      "structure_type": "折叠模块",
+      "geometry_type": "正敲",
+      "front_width_mm": 300,
+      "front_height_mm": 289,
+      "front_left_height_mm": 289,
+      "front_right_height_mm": 220,
+      "board_face_width_mm": 300,
+      "board_face_height_mm": 230,
+      "board_face_template_id": "rectangular",
+      "material": "1430材质",
+      "density_kg_m3": 220,
+      "production_quantity": 26
+    }
+  ],
+  "boards": [
+    {
+      "module_id": "B2",
+      "exists": true,
+      "material": "9厘夹板",
+      "thickness_mm": 9,
+      "opening_mode": "无开口"
+    }
+  ],
+  "anchors": [
+    {
+      "module_id": "B2",
+      "exists": true,
+      "anchor_type": "M型",
+      "material": "310",
+      "thread_spec": "M10",
+      "diameter_mm": 8,
+      "length_mm": 180,
+      "count": 1,
+      "layout_mode": "指定坐标",
+      "positions": [{"x_mm": 150, "y_mm": 180}],
+      "hose_spec": "32胶管"
+    }
+  ]
+}

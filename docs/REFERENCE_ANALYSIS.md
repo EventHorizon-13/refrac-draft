@@ -1,94 +1,78 @@
-# Initial Reference Analysis
+# Reference File Analysis — observed facts
 
-This is an initial index of findings from the reference materials. It is not a substitute for Codex re-opening and inspecting every original file after it is added to `references/`.
+The three supplied source files are the accepted output standard. This document records observations made by reopening the exact files in the repository. The originals are read-only inputs and must never be saved back by the application.
 
-## 1. DXF: `示例.dxf`
+## 1. `references/示例.dxf`
 
-Initial structural inspection of the supplied original found:
+### File and drawing structure
 
-- DXF version: AC1032 (AutoCAD 2018).
-- Modelspace entities: 236.
-- Block definitions: 733.
-- Modelspace INSERT entities: 136.
+- Format: AutoCAD 2018 DXF (`AC1032`), code page/encoding reported by ezdxf as `gbk`.
+- File size: 10,978,820 bytes.
+- Model space: 236 top-level entities: 136 `INSERT`, 56 `DIMENSION`, 19 `TEXT`, 11 `MTEXT`, 12 `LWPOLYLINE`, and 2 `HATCH`.
+- Block definitions: 733, including anonymous `*U...` blocks and `G$...` blocks.
+- Layouts: `Model` (236 entities), `梯形块` (2 viewports), and `模块-01` (2 viewports).
+- The model-space extents are approximately X=0..20209.19, Y=0..2948.92, Z=0..641.85. The model space is a multi-area reference drawing, not one simple module drawing.
+- The file includes A4/A3/A2/A1 frame blocks and a reusable `标题栏` block. `图框-A4` has a 297×210 drawing-unit boundary. `标题栏` has a raw block extent of approximately 1200.38×303.58 and is inserted in the model space with a scale near 0.102.
 
-Observed layer names include:
+### Layer and style observations
 
-- `0`
-- `Defpoints`
-- `9`
-- `1轮廓实线层`
-- `a标注`
-- `中心线层`
-- `center`
-- `STEELCASE`
-- `剖面线`
-- `00-陶瓷钉`
-- `不打印`
-- `尺寸线层`
+Observed layers include `0`, `Defpoints`, `9`, `1轮廓实线层`, `a标注`, `中心线层`, `center`, `STEELCASE`, `剖面线`, `00-陶瓷钉`, `不打印`, `尺寸线层`, and AutoCAD constraint/backup layers.
 
-The file contains named blocks related to M-shaped anchors, diamond anchors, side-insert anchors, quick-insert side view, no-anchor mark, normal module views, 正敲 views, 侧敲 views, multiple irregular board-face views, A4/A3/A2/A1 frames, and title blocks.
+Text styles include `工程字` and `大字体`, both referencing `gbenor.shx` with `gbcbig.shx` as big font. Dimension styles include `_5`, `_10`, `_20`, `_25`, `_40`, `_100`, `_1`, `ISO-25`, `GB_尺寸`, and `Standard`.
 
-Important candidate board-face block names found in the source include:
+The DXF contains AutoCAD dynamic-block data (`ACDB_BLOCKREPRESENTATION_DATA`) and associative-dimension data (`DIMASSOC`). ezdxf emits warnings that these proprietary objects are not fully preserved by its generic copy process. Therefore:
 
-- `动态模块-M形锚固件-夹板面`
-- `动态模块-菱形锚固件-夹板面`
-- `动态模块-无锚固件-夹板面`
-- `动态模块-旁插锚固件-夹板面`
-- `动态模块-旁插锚固件-异形1-夹板面`
-- `动态模块-旁插锚固件-异形2-夹板面`
-- `动态模块-旁插锚固件-异形3-夹板面`
-- `动态模块-旁插锚固件-异形4-夹板面`
-- `动态模块-异形2-夹板面`
-- `动态模块-异形3-夹板面`
-- `动态模块-异形4-夹板面`
-- `动态模块-异形5-夹板面`
-- `动态模块-异形7-夹板面`
-- `动态模块-无锚固件-异形5-夹板面`
-- `动态模块-焊接菱形锚固件2-夹板面`
+- Never open and save the original reference DXF as part of analysis or export.
+- Extract visible geometry and source style information read-only.
+- Treat dynamic block action/lookup behavior as a separate compatibility investigation. A named block's default visible geometry is not proof that all dynamic states have been captured.
 
-These names are only discovery hints. Codex must inspect each block's actual geometry, extents, base point, nested inserts, attributes, orientation, and dimensions before building the catalog.
+### Useful block families
 
-Potential anchor-related block names include `M型锚固件-左`, `快插锚固件-右视图`, `旁插锚固件1`, `旁插锚固件2`, `旁插锚固件3`, `旁插锚固件插针`, `无锚固件标志`, `M形锚固件本体`, `焊钉-菱形`, and bolt blocks.
+- Module/front-view families: `动态模块-M形锚固件-上`, `动态模块-无锚固件-上`, `动态模块-菱形锚固件-上`, `动态模块-侧敲-1`, `动态模块-侧敲-菱形-1`, `动态模块-M形锚固件-正敲-上`, `动态模块-菱形锚固件-正敲-上`, `动态模块-无锚固件-正敲-上`, `动态模块-旁插锚固件-上`, `动态模块-旁插锚固件-正敲-上`, and `动态模块-旁插-侧敲-1`.
+- Board-face family: 15 named blocks are catalogued in `BOARD_FACE_CATALOG.md`.
+- Anchor family: `M型锚固件-左`, `M形锚固件本体`, `快插锚固件-右视图`, `旁插锚固件1/2/3`, `旁插锚固件插针`, `旁插锚固件-侧面`, `焊钉-菱形`, and several bolt blocks.
+- Sheet blocks: `图框-A4`, `图框-A3`, `图框-A2`, `图框-A1`, `标题栏`.
 
-## 2. PDF: `江阴铁包-11098-qf.pdf`
+## 2. `references/江阴铁包-11098-qf.pdf`
 
-- Four pages.
-- Modules B1–B13.
-- Useful examples include trapezoidal/small-head modules, rectangular modules, single-anchor and two-anchor layouts, different anchor lengths, explicit anchor positioning dimensions, and repeated A4 landscape module panels.
-- B6 and B7 show two anchors and explicit segmented positioning dimensions. Their anchor positions must not be replaced with a generic equal-spacing rule.
-- B10–B13 provide additional examples of anchor positioning and different module sizes.
-- The module production quantity in the BOM is not the number of anchors in an individual module.
+- 4 pages, each 842×595 pt (A4 landscape).
+- The page content is vector-heavy: approximately 3,714–6,591 vector drawing operations per page, plus four embedded raster image resources per page.
+- The visible drawing sets contain modules B1–B13.
+- Pages 1 and 3 contain four module panels; page 2 contains three panels because B6/B7 are wider; page 4 contains the remaining two modules.
+- Each module panel uses a front view above, a board-face view below, and a multi-line manufacturing detail list beneath the views.
+- The title block sits at the lower-right of the page. A company/legal footer runs along the bottom edge.
+- The output uses distinct plotted colors: black for outlines/text, pure green for dimensions, blue/cyan for anchor linework, red for center/anchor marks, and occasional yellow fills. These are visible in the PDF vector strokes, not just screen colors.
+- Common details visible in the set include material 1430, density 220 kg/m³, 9厘夹板, 32胶管 for most modules, and anchor material/type/specification, anchor length, and production quantity.
+- B6 and B7 use two anchors with explicit segmented positioning dimensions. B6 shows 500 / 200 / 185 across an 885-wide board face; B7 shows 150 / 300 / 250 across a 700-wide board face. Do not replace these with generic equal spacing.
+- B10–B13 also show explicit anchor-position dimensions. Preserve the individual dimension chain rather than infer uniform spacing.
 
-## 3. PDF: `上下盖_3100_2100_400_640_0930_q-02.pdf`
+## 3. `references/上下盖_3100_2100_400_640_0930_q-02.pdf`
 
-- One page.
-- Modules S1–S4.
-- S1 and S2 have no anchor; S3 and S4 use 304 diamond anchors M8.
-- The board-face dimensions are not always the same as the module front dimensions.
-- The drawing contains a likely S2 view-label/BOM-label discrepancy: visually, one view appears to say S1 while the BOM says S2. Keep this as an unresolved source discrepancy; do not silently correct the original.
+- 1 page, 842×595 pt (A4 landscape), vector-heavy.
+- Visible module set S1–S4.
+- S1 and S2 have no anchor, with 300×150 and 370×150 board-face views respectively; both list 9厘夹板 and no glue hose.
+- S3 and S4 use 304 菱形锚固件 M8, length 230 mm, 220 kg/m³ density, 25胶管, and 9厘夹板. Their board-face outline is 410×200.
+- The front-view label in the second panel visually reads S1 while its detail list identifies S2. Record this as a source discrepancy; do not silently change the source or use it as an unquestioned golden value.
 
-## 4. Supplemental images
+## 4. Supplementary geometry images
 
-- `B2_正敲示例.png`: front face is trapezoidal; board-face view is the second view; two views total.
-- `A1_侧敲示例.png`: front face is rectangular; side face is trapezoidal; board-face view is the third view; three views total.
+- `B2_正敲示例.png`: 正敲 has the trapezoid on the **front face**. It has two views: front trapezoid and board face. Example front width is 300 mm with end heights 289 and 220 mm; board face is 300×230 mm.
+- `A1_侧敲示例.png`: 侧敲 has the trapezoid on the **side face**. It has three views: normal front, side trapezoid, and board face. Example front is 300×300 mm; side view is 300 mm long with end heights 300 and 200 mm; board face is 300×330 mm.
 
-## 5. Mandatory next analysis
+## 5. Source facts vs unresolved items
 
-After the binary files are committed to this repository, Codex must:
-1. Re-open all five source files.
-2. Generate preview sheets for the DXF's relevant named blocks.
-3. Build a board-face template catalog with actual thumbnails.
-4. Build an anchor template catalog with actual thumbnails.
-5. Record drawing rules with source page/block references.
-6. Separate confirmed source facts, geometric interpretations, and items needing user confirmation.
+### Confirmed by actual files
 
+- A4 landscape is the page standard in both PDFs.
+- The PDFs use multiple module panels per page, with variable module count depending on view width.
+- The PDFs have front/board-face views and detailed BOM-like text.
+- The reference DXF contains 15 named board-face blocks and reusable frame/title blocks.
+- Anchor placement is explicitly dimensioned in multiple modules; it is not universally uniform.
+- The DXF uses SHX big-font styles and contains AutoCAD dynamic block data.
 
-## 6. Golden-master status of the examples
+### Still requiring exact mapping or user confirmation
 
-The supplied examples are the accepted final drawing output standard. They are not loose style inspiration. Implementation must closely reproduce their actual drafting language and page composition.
-
-- The DXF is the primary CAD source for reusable vector geometry, blocks, layers, linetypes, text/dimension styles, frames, and title blocks.
-- The PDFs are the primary final-output source for page composition, view ordering, dimensions and annotation placement, module panels, BOM/detail presentation, title blocks, and pagination.
-- The B2 正敲 and A1 侧敲 images clarify the intended geometry and must be followed for those two types.
-- Use original sample dimensions and properties to build golden-master input datasets. Generate output and compare page-by-page and view-by-view against the supplied references.
-- A successful export alone is not acceptance. Fidelity of geometry, annotations, text, details, frames, title blocks, and layout is part of functional correctness.
+- The standard opening geometry for quick-insert anchors is not unambiguously identified in the currently catalogued visible board-face blocks. The DXF contains `快插锚固件-右视图`, but a right-side anchor view is not proof of the board opening shape. Do not invent a standard opening.
+- The full set of dynamic block visibility states and parameters must be inspected; ezdxf's generic reader does not preserve all proprietary dynamic-block metadata.
+- Some source PDF text is plotted as vector outlines and is not available as normal selectable text. OCR or visual review must be used for any ambiguous label.
+- The exact automatic panel-packing algorithm must be inferred from more sample jobs or confirmed by the user; do not hardcode the observed four-page grouping as a universal law.

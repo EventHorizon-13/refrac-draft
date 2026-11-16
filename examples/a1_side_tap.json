@@ -1,0 +1,26 @@
+{
+  "metadata": {"project_name": "模块详情图"},
+  "modules": [
+    {
+      "module_id": "A1",
+      "name": "模块",
+      "structure_type": "折叠模块",
+      "geometry_type": "侧敲",
+      "front_width_mm": 300,
+      "front_height_mm": 300,
+      "side_length_mm": 300,
+      "side_left_height_mm": 300,
+      "side_right_height_mm": 200,
+      "board_face_width_mm": 300,
+      "board_face_height_mm": 330,
+      "material": "",
+      "production_quantity": 1
+    }
+  ],
+  "boards": [
+    {"module_id": "A1", "exists": true, "material": "夹板"}
+  ],
+  "anchors": [
+    {"module_id": "A1", "exists": false, "anchor_type": "无", "count": 0}
+  ]
+}
