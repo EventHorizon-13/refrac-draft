@@ -81,15 +81,15 @@ class DrawingGenerator:
             left_h = module.front_left_height_mm or module.front_height_mm
             right_h = module.front_right_height_mm or module.front_height_mm
             front_dims = (
-                Dimension((0, left_h), (module.front_width_mm, right_h), f"{module.front_width_mm:g}", "horizontal", 50),
-                Dimension((0, 0), (0, left_h), f"{left_h:g}", "vertical", 50),
-                Dimension((module.front_width_mm, 0), (module.front_width_mm, right_h), f"{right_h:g}", "vertical", -50),
+                Dimension((0, left_h), (module.front_width_mm, right_h), f"{module.front_width_mm:g}", "horizontal", 32),
+                Dimension((0, 0), (0, left_h), f"{left_h:g}", "vertical", 40),
+                Dimension((module.front_width_mm, 0), (module.front_width_mm, right_h), f"{right_h:g}", "vertical", -40),
             )
         else:
             front_dims = (
                 Dimension((0, module.front_height_mm), (module.front_width_mm, module.front_height_mm),
-                          f"{module.front_width_mm:g}", "horizontal", 50),
-                Dimension((0, 0), (0, module.front_height_mm), f"{module.front_height_mm:g}", "vertical", 50),
+                          f"{module.front_width_mm:g}", "horizontal", 32),
+                Dimension((0, 0), (0, module.front_height_mm), f"{module.front_height_mm:g}", "vertical", 40),
             )
         front_symbols: list[Polyline] = []
         front_symbol_colors: list[int] = []
@@ -125,12 +125,12 @@ class DrawingGenerator:
             side_dims = (
                 Dimension((0, module.side_left_height_mm or 0),
                           (module.side_length_mm or 0, module.side_right_height_mm or 0),
-                          f"{module.side_length_mm:g}", "horizontal", 50),
+                          f"{module.side_length_mm:g}", "horizontal", 32),
                 Dimension((0, 0), (0, module.side_left_height_mm or 0),
-                          f"{module.side_left_height_mm:g}", "vertical", 50),
+                          f"{module.side_left_height_mm:g}", "vertical", 40),
                 Dimension((module.side_length_mm or 0, 0),
                           (module.side_length_mm or 0, module.side_right_height_mm or 0),
-                          f"{module.side_right_height_mm:g}", "vertical", -50),
+                          f"{module.side_right_height_mm:g}", "vertical", -40),
             )
             side_symbols: list[Polyline] = []
             side_symbol_colors: list[int] = []
@@ -198,8 +198,8 @@ class DrawingGenerator:
             warnings.append(f"尚未建立 {anchor.anchor_type.value} 锚固件的标准夹板开口模板。")
 
         board_dims = [
-            Dimension((0, 0), (module.board_face_width_mm, 0), f"{module.board_face_width_mm:g}", "horizontal", -50),
-            Dimension((0, 0), (0, module.board_face_height_mm), f"{module.board_face_height_mm:g}", "vertical", 50),
+            Dimension((0, 0), (module.board_face_width_mm, 0), f"{module.board_face_width_mm:g}", "horizontal", -68),
+            Dimension((0, 0), (0, module.board_face_height_mm), f"{module.board_face_height_mm:g}", "vertical", 40),
         ]
         if anchor.dimension_horizontal:
             xs = sorted(p[0] for p in positions)

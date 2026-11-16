@@ -18,11 +18,13 @@ LAYER_COLORS = {
 }
 
 
-def _add_polyline(msp, points, closed=True, layer="OUTLINE", color=None):
+def _add_polyline(msp, points, closed=True, layer="OUTLINE", color=None, lineweight=None):
     if len(points) >= 2:
         attrs = {"layer": layer}
         if color is not None:
             attrs["color"] = int(color)
+        if lineweight is not None:
+            attrs["lineweight"] = int(lineweight)
         msp.add_lwpolyline(points, close=closed, dxfattribs=attrs)
 
 
@@ -31,7 +33,7 @@ def _add_arrowhead(msp, x, y, ux, uy, color_layer="DIMENSIONS"):
     base_x, base_y = x - ux * length, y - uy * length
     px, py = -uy * half_width, ux * half_width
     msp.add_solid([(x, y), (base_x + px, base_y + py), (base_x - px, base_y - py)],
-                  dxfattribs={"layer": color_layer, "color": 4})
+                  dxfattribs={"layer": color_layer, "color": 4, "lineweight": 25})
 
 
 def _add_dimension(msp, x1, y1, x2, y2, label, horizontal=True, offset=6.0):
@@ -44,8 +46,8 @@ def _add_dimension(msp, x1, y1, x2, y2, label, horizontal=True, offset=6.0):
         direction = 1.0 if x2 >= x1 else -1.0
         _add_arrowhead(msp, x1, dim_y, -direction, 0)
         _add_arrowhead(msp, x2, dim_y, direction, 0)
-        msp.add_text(label, dxfattribs={"insert": ((x1 + x2) / 2.0, dim_y + 1.6), "height": 2.5,
-                                        "style": "工程字", "layer": color_layer, "halign": 1,
+        msp.add_text(label, dxfattribs={"insert": ((x1 + x2) / 2.0, dim_y + 1.6), "height": 2.7,
+                                        "style": "工程字", "layer": color_layer, "color": 3, "halign": 1,
                                         "align_point": ((x1 + x2) / 2.0, dim_y + 1.6)})
     else:
         dim_x = x1 - offset
@@ -55,8 +57,8 @@ def _add_dimension(msp, x1, y1, x2, y2, label, horizontal=True, offset=6.0):
         direction = 1.0 if y2 >= y1 else -1.0
         _add_arrowhead(msp, dim_x, y1, 0, -direction)
         _add_arrowhead(msp, dim_x, y2, 0, direction)
-        msp.add_text(label, dxfattribs={"insert": (dim_x - 2.0, (y1 + y2) / 2.0), "height": 2.5,
-                                        "rotation": 90, "style": "工程字", "layer": color_layer})
+        msp.add_text(label, dxfattribs={"insert": (dim_x - 2.0, (y1 + y2) / 2.0), "height": 2.7,
+                                        "rotation": 90, "style": "工程字", "layer": color_layer, "color": 3})
 
 
 def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: str, scale: float = 0.1):
@@ -81,11 +83,12 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
     for symbol_index, symbol in enumerate(view.anchor_symbols):
         pts = [(ox + x * scale, oy + y * scale) for x, y in symbol.points]
         aci = view.anchor_symbol_colors[symbol_index] if symbol_index < len(view.anchor_symbol_colors) else None
-        _add_polyline(msp, pts, symbol.closed, "ANCHORS", color=aci)
+        lineweight = view.anchor_symbol_lineweights[symbol_index] if symbol_index < len(view.anchor_symbol_lineweights) else 22
+        _add_polyline(msp, pts, symbol.closed, "ANCHORS", color=aci, lineweight=lineweight)
     for x, y in view.anchor_points:
         cx, cy = ox + x * scale, oy + y * scale
         if view.anchor_marker_style == "target":
-            msp.add_circle((cx, cy), 0.6, dxfattribs={"layer": "CENTER", "color": 1})
+            msp.add_circle((cx, cy), 0.75, dxfattribs={"layer": "CENTER", "color": 1})
             msp.add_line((cx - 1.5, cy), (cx + 1.5, cy), dxfattribs={"layer": "CENTER", "color": 1})
         else:
             msp.add_line((cx - 1.5, cy), (cx + 1.5, cy), dxfattribs={"layer": "CENTER", "color": 1})
@@ -136,24 +139,30 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
             drawing = placed.drawing
             px = placed.x_mm
             panel_w = placed.panel_width_mm
-            scale = 0.1
+            scale = 0.0992
             if drawing.side_view:
                 front_w = (drawing.front_view.outline.bounds[2] - drawing.front_view.outline.bounds[0]) * scale
                 side_w = (drawing.side_view.outline.bounds[2] - drawing.side_view.outline.bounds[0]) * scale
                 total = front_w + side_w + 18.0
                 x0 = px + max(4.0, (panel_w - total) / 2.0)
-                _add_view(msp, drawing.front_view, (x0, page_y + 146), drawing.module_id, scale)
-                _add_view(msp, drawing.side_view, (x0 + front_w + 18.0, page_y + 146), drawing.module_id, scale)
+                front_y = page_y + 150.0
+                _add_view(msp, drawing.front_view, (x0, front_y), drawing.module_id, scale)
+                _add_view(msp, drawing.side_view, (x0 + front_w + 18.0, front_y), drawing.module_id, scale)
             else:
                 fw = (drawing.front_view.outline.bounds[2] - drawing.front_view.outline.bounds[0]) * scale
-                x0 = px + (panel_w - fw) / 2.0
-                _add_view(msp, drawing.front_view, (x0, page_y + 146), drawing.module_id, scale)
-            bw = (drawing.board_view.outline.bounds[2] - drawing.board_view.outline.bounds[0]) * scale
-            bx = px + (panel_w - bw) / 2.0
-            _add_view(msp, drawing.board_view, (bx, page_y + 105), drawing.module_id, scale)
+                x_adjust = -2.43 if drawing.front_view.anchor_marker_style == "cross" else -5.57
+                x0 = px + (panel_w - fw) / 2.0 + x_adjust
+                center_y = 163.2655555556 if drawing.front_view.anchor_marker_style == "cross" else 161.2123888889
+                front_y = page_y + center_y - (drawing.front_view.outline.bounds[3] - drawing.front_view.outline.bounds[1]) * scale / 2.0
+                _add_view(msp, drawing.front_view, (x0, front_y), drawing.module_id, scale)
+            bx = x0
+            _add_view(msp, drawing.board_view, (bx, page_y + 106.17), drawing.module_id, scale)
+            detail_baselines = (82.90, 76.20, 69.55, 62.79, 56.36, 49.71, 44.15)
             for line_no, text in enumerate(drawing.details):
-                msp.add_text(text, dxfattribs={"insert": (px + 7.0, page_y + 83 - line_no * 5.2),
-                                              "height": 3.2, "style": "工程字", "layer": "TEXT"})
+                baseline = detail_baselines[line_no] if line_no < len(detail_baselines) else 44.15 - (line_no - 6) * 5.2
+                height = 5.67 if line_no < 6 else 4.2
+                msp.add_text(text, dxfattribs={"insert": (px + 9.7, page_y + baseline),
+                                              "height": height, "style": "工程字", "layer": "TEXT"})
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     doc.saveas(output_path)

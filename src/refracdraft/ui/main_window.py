@@ -117,7 +117,8 @@ class DrawingPreview(QGraphicsView):
         for symbol_index, symbol in enumerate(view.anchor_symbols):
             p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in symbol.points]
             aci = view.anchor_symbol_colors[symbol_index] if symbol_index < len(view.anchor_symbol_colors) else 5
-            pen = QPen(QColor(aci_colors.get(aci, "#111111")), 0.22)
+            lineweight = view.anchor_symbol_lineweights[symbol_index] if symbol_index < len(view.anchor_symbol_lineweights) else 22
+            pen = QPen(QColor(aci_colors.get(aci, "#111111")), lineweight / 100.0)
             for a, b in zip(p, p[1:] + ([p[0]] if symbol.closed else [])):
                 scene.addLine(a[0], a[1], b[0], b[1], pen)
         for x, y in view.anchor_points:
@@ -126,8 +127,8 @@ class DrawingPreview(QGraphicsView):
                 scene.addEllipse(cx - 0.6, cy - 0.6, 1.2, 1.2, QPen(QColor("#ff0000")), QBrush(QColor("#ffff00")))
                 scene.addLine(cx - 1.5, cy, cx + 1.5, cy, QPen(QColor("#ff0000"), 0.18))
             else:
-                scene.addLine(cx - 1.5, cy, cx + 1.5, cy, QPen(QColor("#ff0000"), 0.18))
-                scene.addLine(cx, cy - 1.5, cx, cy + 1.5, QPen(QColor("#ff0000"), 0.18))
+                scene.addLine(cx - 1.5, cy, cx + 1.5, cy, QPen(QColor("#ff0000"), 0.25))
+                scene.addLine(cx, cy - 1.5, cx, cy + 1.5, QPen(QColor("#ff0000"), 0.25))
         min_x, min_y, max_x, max_y = view.outline.bounds
         label = view.note or module_id
         label_y = (max_y - min_y) / 2
@@ -136,7 +137,7 @@ class DrawingPreview(QGraphicsView):
         self._add_text(scene, label, ox + (max_x - min_x) * scale / 2 - 3, oy + label_y, 4, "#111111")
 
     def _dim_line(self, scene, x1, y1, x2, y2, label, horizontal):
-        pen = QPen(QColor("#00ffff"), 0.18)
+        pen = QPen(QColor("#00ffff"), 0.25)
         scene.addLine(x1, 210 - y1, x2, 210 - y2, pen)
 
         def arrow(x, y, ux, uy):
@@ -153,12 +154,12 @@ class DrawingPreview(QGraphicsView):
             direction = 1.0 if x2 >= x1 else -1.0
             arrow(x1, y1, -direction, 0)
             arrow(x2, y2, direction, 0)
-            self._add_text(scene, label, (x1 + x2) / 2 - 2, y1 + 1.5, 2.5, "#00ffff")
+            self._add_text(scene, label, (x1 + x2) / 2 - 2, y1 + 1.5, 2.5, "#00ff00")
         else:
             direction = 1.0 if y2 >= y1 else -1.0
             arrow(x1, y1, 0, -direction)
             arrow(x2, y2, 0, direction)
-            self._add_text(scene, label, x1 - 2, (y1 + y2) / 2, 2.5, "#00ffff")
+            self._add_text(scene, label, x1 - 2, (y1 + y2) / 2, 2.5, "#00ff00")
 
 
 class MainWindow(QMainWindow):
