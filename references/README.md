@@ -25,3 +25,8 @@ This directory is the source-of-truth input for drawing-rule analysis and regres
 - PDFs must be inspected visually page by page if text extraction is incomplete.
 - Record source-derived facts, visual interpretations, and unresolved questions separately.
 - Use the DXF/PDF files as reference and regression inputs, not as generated output templates to copy wholesale.
+
+
+## Upload bundle
+
+A ZIP bundle is prepared locally as `RefracDraft-reference-materials.zip`. Upload it to the repository root (not inside `references/`), then extract it from the repository root. Its internal paths already begin with `references/`, so the five files will land in this directory. The ZIP also contains `references/SHA256SUMS.txt` for integrity checks.
