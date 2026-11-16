@@ -32,3 +32,16 @@ Expected paths:
 If any source file is missing, report it explicitly and ask for it. Do not claim to have analyzed a missing source.
 
 Do not modify original reference files. Record uncertain or conflicting information as unresolved rather than inventing a rule.
+
+
+## Golden-master drawing fidelity
+
+The supplied sample files are the **final drawing standard**, not loose inspiration. Generated drawings must closely reproduce their drafting conventions and page appearance. Do not redesign or modernize the drawing style.
+
+- Use the DXF as the primary source for CAD geometry, blocks, layers, linetypes, text/dimension styles, frames, and title blocks.
+- Use the PDFs as the primary source for final page composition, view arrangement, annotation placement, BOM/detail layout, frames, title blocks, and pagination.
+- Use the B2 正敲 and A1 侧敲 images to disambiguate the geometry and view count.
+- Recreate sample inputs as golden-master regression cases. Generate vector/editable DXF and PDF and compare them page by page and view by view with the samples.
+- Do not omit dimensions, anchor details, board-face irregularities, technical text, BOMs, or title-block fields for the sake of a simplified demo.
+- Do not rasterize a sample PDF into the output or copy a whole sample drawing unchanged as a fake parameterized result. Extract reusable geometry and drafting rules, then generate editable drawings that match the sample style.
+- When details are uncertain, record them as unresolved. Explicit user corrections take precedence over conflicting source details.
