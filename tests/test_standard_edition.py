@@ -302,3 +302,22 @@ def test_side_taper_front_has_small_head_contour_lines():
     assert ys == pytest.approx([50.0, 250.0])
     assert {point[0] for line in lines for point in line.points} == {0.0, 300.0}
 
+
+def test_m_shape_side_anchor_starts_at_side_outer_edge():
+    module = build_standard_module(
+        None,
+        StandardModuleValues("M2", 300, 300, 230, True, 289, 220, GeometryType.SIDE_TAPER),
+    )
+    board = build_standard_board(None, "M2", True)
+    anchor = build_standard_anchor(
+        None,
+        "M2",
+        300,
+        StandardAnchorValues(True, 150, 300, 1, AnchorType.M_SHAPE),
+    )
+    project = Project(modules=[module], boards=[board], anchors=[anchor])
+    document = DrawingGenerator(ReferenceLibrary("references/示例.dxf")).generate(project)
+    side_view = document.pages[0].modules[0].drawing.side_view
+    assert side_view is not None
+    assert side_view.anchor_points[0][0] == pytest.approx(68.19714059404214)
+

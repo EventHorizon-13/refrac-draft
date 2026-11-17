@@ -26,11 +26,6 @@ BOARD_ANCHOR_TOP_OFFSET_MM = {
     AnchorType.WELDED_DIAMOND: 70.0,
 }
 
-SIDE_ANCHOR_X_RATIO = {
-    AnchorType.M_SHAPE: 175.0 / 300.0,
-}
-
-
 def _anchor_x_positions(anchor: AnchorParameters, width: float) -> list[float]:
     if not anchor.exists or anchor.anchor_type == AnchorType.NONE or anchor.count == 0:
         return []
@@ -238,14 +233,17 @@ class DrawingGenerator:
                     profile_colors = side_profile.colors if len(side_profile.colors) == len(side_profile.polylines) else (7,) * len(side_profile.polylines)
                     profile_lineweights = side_profile.lineweights if len(side_profile.lineweights) == len(side_profile.polylines) else (25,) * len(side_profile.polylines)
                     side_width = module.side_length_mm or module.board_face_width_mm
-                    if anchor.anchor_type == AnchorType.DIAMOND:
-                        symbol_xs = [point[0] for line in side_profile.polylines for point in line.points]
-                        half_width = (max(symbol_xs) - min(symbol_xs)) / 2.0 if symbol_xs else 0.0
-                        sx = (anchor.embedment_depth_mm or 50.0) + half_width
-                        if sx + half_width > side_width:
-                            raise ValueError(f"{module.module_id}: 菱形锚固件嵌入深度超出侧面宽度")
-                    else:
-                        sx = side_width * SIDE_ANCHOR_X_RATIO.get(anchor.anchor_type, 0.5)
+                    symbol_xs = [point[0] for line in side_profile.polylines for point in line.points]
+                    min_x = min(symbol_xs) if symbol_xs else 0.0
+                    max_x = max(symbol_xs) if symbol_xs else 0.0
+                    left_edge = (
+                        anchor.embedment_depth_mm or 50.0
+                        if anchor.anchor_type == AnchorType.DIAMOND
+                        else 0.0
+                    )
+                    if left_edge + (max_x - min_x) > side_width:
+                        raise ValueError(f"{module.module_id}: 锚固件侧面符号超出侧面宽度")
+                    sx = left_edge - min_x
                     side_symbols.extend(_translate_symbol(side_profile.polylines, sx, side_overall_h / 2.0))
                     side_symbol_colors.extend(profile_colors)
                     side_symbol_lineweights.extend(profile_lineweights)
