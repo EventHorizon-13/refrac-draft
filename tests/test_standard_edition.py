@@ -1,7 +1,7 @@
 import pytest
 import ezdxf
 
-from refracdraft.drawing.generator import DrawingGenerator, _anchor_positions, _details
+from refracdraft.drawing.generator import DrawingGenerator, _anchor_positions, _balanced_page_groups, _details
 from refracdraft.drawing.layout import PANEL_INNER_MARGIN_MM
 from refracdraft.domain.models import (
     AnchorParameters,
@@ -121,6 +121,7 @@ def test_standard_anchor_uses_fixed_spacing_and_only_diamond_keeps_depth():
     assert diamond.count == 3
     assert diamond.embedment_depth_mm == 60
     assert diamond.length_mm == 230
+    assert diamond.diameter_mm is None
 
     m_shape = build_standard_anchor(
         diamond,
@@ -129,6 +130,7 @@ def test_standard_anchor_uses_fixed_spacing_and_only_diamond_keeps_depth():
         StandardAnchorValues(True, 80, 150, 3, AnchorType.M_SHAPE, 60),
     )
     assert m_shape.embedment_depth_mm is None
+    assert m_shape.diameter_mm == 8
 
 
 def test_standard_anchor_rejects_position_beyond_length():
@@ -233,6 +235,7 @@ def test_standard_details_include_new_manufacturing_fields():
         StandardModuleValues(
             "A1", 300, 300, 330, True, 300, 200, GeometryType.SIDE_TAPER,
             material="1350板材", production_quantity=84, board_material="12厘夹板",
+            density_kg_m3=220, source_note="现场复核",
         ),
     )
     board = build_standard_board(None, "A1", True, "12厘夹板")
@@ -241,17 +244,18 @@ def test_standard_details_include_new_manufacturing_fields():
         "A1",
         300,
         StandardAnchorValues(
-            True, 150, 300, 1, AnchorType.DIAMOND, 60,
+            True, 150, 300, 1, AnchorType.M_SHAPE,
             material="304", thread_spec="M8", pin_diameter_mm=8, hose_spec="25胶管",
         ),
     )
     text = "\n".join(_details(module, board, anchor))
     assert "1350板材" in text
-    assert "304菱形锚固件M8" in text
+    assert "304M型锚固件M8" in text
     assert "插针φ8" in text
-    assert "嵌入深度 60mm" in text
     assert "数量：84 Pcs" in text
+    assert "容重：220 kg/m³" in text
     assert "25胶管，12厘夹板" in text
+    assert "备注：现场复核" in text
 
 
 def test_standard_anchor_length_round_trip_and_validation():
@@ -387,7 +391,12 @@ def test_standard_anchor_positions_are_dimensioned_on_board_face():
     assert "80" in labels
     assert "150" in labels
     assert "120" in labels
-    assert "嵌入深度 50" in labels
+    depth_dimensions = [dimension for dimension in document.pages[0].modules[0].drawing.board_view.dimensions
+                        if dimension.label == "50"]
+    assert depth_dimensions
+    depth_dimension = depth_dimensions[0]
+    assert depth_dimension.start == (80, 230)
+    assert depth_dimension.end == (80, 180)
 
 
 def test_automatic_layout_keeps_panel_gaps_and_paginates():
@@ -402,9 +411,15 @@ def test_automatic_layout_keeps_panel_gaps_and_paginates():
     assert len(document.pages) > 1
     for page in document.pages:
         for placed in page.modules:
-            assert placed.content_x_mm == pytest.approx(placed.x_mm + PANEL_INNER_MARGIN_MM)
+            assert placed.content_x_mm >= placed.x_mm + PANEL_INNER_MARGIN_MM
+            assert placed.content_x_mm <= placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM
         for left, right in zip(page.modules, page.modules[1:]):
             assert left.x_mm + left.panel_width_mm <= right.x_mm
+
+
+def test_balanced_pages_do_not_leave_a_tiny_last_page():
+    groups = _balanced_page_groups([150, 120, 70])
+    assert groups == [(0, 1), (1, 3)]
 
 
 def test_dxf_uses_reference_dimension_style_and_big_font(tmp_path):
@@ -425,6 +440,18 @@ def test_dxf_uses_reference_dimension_style_and_big_font(tmp_path):
     assert {dimension.dxf.dimstyle for dimension in dimensions} == {"_10"}
     assert {entity.dxf.style for entity in exported.modelspace().query("TEXT MTEXT")} == {"大字体"}
     assert exported.dimstyles.get("_10").dxf.dimtxsty == "大字体"
+    assert exported.dimstyles.get("_10").dxf.dimscale == 20
+    frame_inserts = [entity for entity in exported.modelspace().query("INSERT") if entity.dxf.name == "图框-A4"]
+    assert frame_inserts
+    assert frame_inserts[0].dxf.xscale == pytest.approx(10.0)
+    title_inserts = [entity for entity in exported.modelspace().query("INSERT") if entity.dxf.name == "标题栏"]
+    assert title_inserts
+    assert title_inserts[0].dxf.xscale == pytest.approx(1.02)
+    detail_heights = {
+        entity.dxf.height for entity in exported.modelspace().query("TEXT") if entity.dxf.height > 50
+    }
+    assert len(detail_heights) == 1
+    assert next(iter(detail_heights)) == pytest.approx(56.7)
     for style_name in ("工程字", "大字体"):
         style = exported.styles.get(style_name)
         assert style.dxf.font.lower() == "gbenor.shx"

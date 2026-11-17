@@ -44,7 +44,12 @@ def main() -> None:
     args.outdir.mkdir(parents=True, exist_ok=True)
     stem = args.input.stem
     dxf_path = export_dxf(drawing, args.outdir / f"{stem}.dxf", args.reference_dxf)
-    pdf_path = export_pdf(drawing, args.outdir / f"{stem}.pdf", args.reference_pdf)
+    pdf_path = export_pdf(
+        drawing,
+        args.outdir / f"{stem}.pdf",
+        args.reference_pdf,
+        reference_dxf=args.reference_dxf,
+    )
     print(f"DXF: {dxf_path}\nPDF: {pdf_path}")
     for warning in drawing.warnings:
         print(f"WARNING: {warning}")

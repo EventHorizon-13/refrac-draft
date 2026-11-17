@@ -7,11 +7,10 @@ from ezdxf.addons.importer import Importer
 
 from refracdraft.drawing.layout import (
     BOARD_VIEW_BOTTOM_MM,
+    DETAIL_TEXT_SIZE_MM,
     SIDE_VIEW_GAP_MM,
     TOP_VIEW_BOTTOM_MM,
-    VIEW_SCALE,
     detail_baseline,
-    outline_width,
 )
 from refracdraft.drawing.model import DrawingDocument, ViewDrawing
 
@@ -27,18 +26,23 @@ LAYER_COLORS = {
 
 TEXT_STYLE = "大字体"
 DIMENSION_STYLE = "_10"
+MODEL_SCALE = 10.0
+DETAIL_TEXT_HEIGHT = DETAIL_TEXT_SIZE_MM * MODEL_SCALE
+VALUE_TEXT_HEIGHT = 40.0
 DIMENSION_OVERRIDE = {
-    "dimscale": 1.0,
+    "dimtxsty": TEXT_STYLE,
+    "dimclrd": 4,
+    "dimclre": 4,
+    "dimclrt": 3,
+}
+DIMENSION_FALLBACK = {
+    "dimscale": 20.0,
     "dimtxt": 1.5,
     "dimasz": 0.8,
     "dimexo": 1.0,
     "dimexe": 1.0,
     "dimgap": 1.0,
     "dimtad": 1,
-    "dimtxsty": TEXT_STYLE,
-    "dimclrd": 4,
-    "dimclre": 4,
-    "dimclrt": 3,
 }
 
 
@@ -53,7 +57,7 @@ def _ensure_text_styles(doc) -> None:
 
 
 def _ensure_dimension_style(doc, source=None) -> None:
-    attributes = dict(DIMENSION_OVERRIDE)
+    attributes = {**DIMENSION_FALLBACK, **DIMENSION_OVERRIDE}
     if source is not None:
         try:
             source_style = source.dimstyles.get(DIMENSION_STYLE)
@@ -159,21 +163,24 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
         lineweight = view.anchor_symbol_lineweights[symbol_index] if symbol_index < len(view.anchor_symbol_lineweights) else 22
         linetype = view.anchor_symbol_linetypes[symbol_index] if symbol_index < len(view.anchor_symbol_linetypes) else None
         _add_polyline(msp, pts, symbol.closed, "ANCHORS", color=aci, lineweight=lineweight,
-                      linetype=linetype, linetype_scale=0.1)
+                      linetype=linetype, linetype_scale=1.0)
     for x, y in view.anchor_points:
         cx, cy = ox + x * scale, oy + y * scale
         if view.anchor_marker_style == "target":
-            msp.add_circle((cx, cy), 0.75, dxfattribs={"layer": "CENTER", "color": 1})
-            msp.add_line((cx - 1.5, cy), (cx + 1.5, cy), dxfattribs={"layer": "CENTER", "color": 1})
+            msp.add_circle((cx, cy), 0.75 * MODEL_SCALE, dxfattribs={"layer": "CENTER", "color": 1})
+            msp.add_line((cx - 1.5 * MODEL_SCALE, cy), (cx + 1.5 * MODEL_SCALE, cy),
+                         dxfattribs={"layer": "CENTER", "color": 1})
         else:
-            msp.add_line((cx - 1.5, cy), (cx + 1.5, cy), dxfattribs={"layer": "CENTER", "color": 1})
-            msp.add_line((cx, cy - 1.5), (cx, cy + 1.5), dxfattribs={"layer": "CENTER", "color": 1})
+            msp.add_line((cx - 1.5 * MODEL_SCALE, cy), (cx + 1.5 * MODEL_SCALE, cy),
+                         dxfattribs={"layer": "CENTER", "color": 1})
+            msp.add_line((cx, cy - 1.5 * MODEL_SCALE), (cx, cy + 1.5 * MODEL_SCALE),
+                         dxfattribs={"layer": "CENTER", "color": 1})
     label = view.note or module_id
     label_y = height / 2.0
     if view.view_type != "board-face" and (view.anchor_symbols or view.anchor_points):
-        label_y = (view.outline.points[0][1] + view.outline.points[1][1]) / 2.0 + 5.0
+        label_y = (view.outline.points[0][1] + view.outline.points[1][1]) / 2.0 + 5.0 * MODEL_SCALE
     label_point = (ox + width * scale / 2.0, oy + label_y * scale)
-    msp.add_text(label, dxfattribs={"insert": label_point, "height": 4.0, "style": TEXT_STYLE,
+    msp.add_text(label, dxfattribs={"insert": label_point, "height": VALUE_TEXT_HEIGHT, "style": TEXT_STYLE,
                                     "layer": "TEXT", "halign": 1, "align_point": label_point})
 
 
@@ -202,31 +209,49 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
 
     msp = doc.modelspace()
     for page in document.pages:
-        page_y = -(page.page_number - 1) * 230.0
+        page_y = -(page.page_number - 1) * 230.0 * MODEL_SCALE
         if "图框-A4" in doc.blocks:
-            msp.add_blockref("图框-A4", (0, page_y), dxfattribs={"layer": "FRAME"})
+            msp.add_blockref(
+                "图框-A4",
+                (0, page_y),
+                dxfattribs={"layer": "FRAME", "xscale": MODEL_SCALE, "yscale": MODEL_SCALE, "zscale": MODEL_SCALE},
+            )
         else:
-            _add_polyline(msp, [(0, page_y), (297, page_y), (297, page_y + 210), (0, page_y + 210)], True, "FRAME")
+            _add_polyline(
+                msp,
+                [(0, page_y), (297 * MODEL_SCALE, page_y),
+                 (297 * MODEL_SCALE, page_y + 210 * MODEL_SCALE), (0, page_y + 210 * MODEL_SCALE)],
+                True,
+                "FRAME",
+            )
         if "标题栏" in doc.blocks:
-            title = msp.add_blockref("标题栏", (168.7, page_y + 6.0), dxfattribs={"xscale": 0.102, "yscale": 0.102, "zscale": 0.102})
+            title = msp.add_blockref(
+                "标题栏",
+                (168.7 * MODEL_SCALE, page_y + 6.0 * MODEL_SCALE),
+                dxfattribs={"xscale": 1.02, "yscale": 1.02, "zscale": 1.02},
+            )
             title.add_auto_attribs({"图名": document.project_name, "图号": "", "批准": "", "审定": "",
                                     "项目经理": "", "校核": "", "设计": "", "制图": "",
                                     "订单编号": "", "项目单位": "", "图纸": "A4"})
         for placed in page.modules[1:]:
-            msp.add_line((placed.x_mm, page_y + 7), (placed.x_mm, page_y + 203), dxfattribs={"layer": "FRAME"})
+            msp.add_line(
+                (placed.x_mm * MODEL_SCALE, page_y + 7 * MODEL_SCALE),
+                (placed.x_mm * MODEL_SCALE, page_y + 203 * MODEL_SCALE),
+                dxfattribs={"layer": "FRAME"},
+            )
 
         for placed in page.modules:
             drawing = placed.drawing
-            px = placed.content_x_mm
-            scale = VIEW_SCALE
+            px = placed.content_x_mm * MODEL_SCALE
+            scale = 1.0
             if drawing.side_view:
-                front_w = outline_width(drawing.front_view)
-                front_y = page_y + TOP_VIEW_BOTTOM_MM
+                front_w = drawing.front_view.outline.bounds[2] - drawing.front_view.outline.bounds[0]
+                front_y = page_y + TOP_VIEW_BOTTOM_MM * MODEL_SCALE
                 _add_view(msp, drawing.front_view, (px, front_y), drawing.module_id, scale)
                 _add_view(
                     msp,
                     drawing.side_view,
-                    (px + front_w + SIDE_VIEW_GAP_MM, front_y),
+                    (px + front_w + SIDE_VIEW_GAP_MM * MODEL_SCALE, front_y),
                     drawing.module_id,
                     scale,
                 )
@@ -234,22 +259,21 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
                 _add_view(
                     msp,
                     drawing.front_view,
-                    (px, page_y + TOP_VIEW_BOTTOM_MM),
+                    (px, page_y + TOP_VIEW_BOTTOM_MM * MODEL_SCALE),
                     drawing.module_id,
                     scale,
                 )
             _add_view(
                 msp,
                 drawing.board_view,
-                (px, page_y + BOARD_VIEW_BOTTOM_MM),
+                (px, page_y + BOARD_VIEW_BOTTOM_MM * MODEL_SCALE),
                 drawing.module_id,
                 scale,
             )
             for line_no, text in enumerate(drawing.details):
                 baseline = detail_baseline(line_no)
-                height = 5.67 if line_no < 6 else 4.2
-                msp.add_text(text, dxfattribs={"insert": (px, page_y + baseline),
-                                              "height": height, "style": TEXT_STYLE, "layer": "TEXT"})
+                msp.add_text(text, dxfattribs={"insert": (px, page_y + baseline * MODEL_SCALE),
+                                              "height": DETAIL_TEXT_HEIGHT, "style": TEXT_STYLE, "layer": "TEXT"})
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     doc.saveas(output_path)

@@ -13,7 +13,7 @@
 - A4 landscape, automatic pagination.
 - Editable DXF and vector PDF export from one drawing model.
 - Source-DXF board-face template extraction and reuse of anchor linework.
-- Original A4 frame/title-block block import for DXF; original sample PDF title block/footer reused as vector content for PDF.
+- Original A4 frame/title-block block import for DXF; PDF is rendered from that same generated DXF, with a bundled CJK plot font.
 
 ## Run from source
 
@@ -71,9 +71,9 @@ The examples are the output standard. Do not modernize, simplify, or redesign th
 - Dynamic-block visibility/action metadata is proprietary; the current extractor uses visible block geometry and does not claim to recover every AutoCAD dynamic state.
 - Quick-insert standard board-opening geometry remains unresolved.
 - Page grouping currently follows the observed sample pattern (4 standard-width modules, 3 when an oversized/three-view group requires it); the general packing rules need more sample jobs.
-- The initial UI provides editable parameter tables, Excel/JSON import, generate-on-click preview, and export actions. Spreadsheet-grade fill-handle/undo/redo refinements are planned after geometry and output validation.
+- The initial UI provides editable parameter tables, Excel/JSON import, generate-on-click preview, and export actions. The Standard editor adds a fill handle and multi-cell paste; undo/redo remains planned.
 
 ## Standard edition branch
 
-The `feat/standard-edition` branch builds a separate Windows x64 portable app, `RefracDraft-Standard.exe`. Its parameter area uses one compact row per module: length, expansion length, thickness, optional taper (big/small head plus 正敲/侧敲), and optional anchor settings. Anchor fields appear only after the anchor checkbox is enabled, and diamond embedment depth appears only for diamond anchors. Numeric fields are editable preset drop-downs so custom values remain available. Board-face size is derived from length × thickness. Existing irregular inputs are rejected with a module-specific error instead of being silently replaced. The full edition remains on `feat/phase-1-core-engine`. See [Windows Standard guide](docs/WINDOWS_STANDARD.md).
+The `feat/standard-edition` branch builds a separate Windows x64 portable app, `RefracDraft-Standard.exe`. Its parameter area is a spreadsheet-style table with one module per row: length, expansion length, thickness, optional taper (big/small head plus 正敲/侧敲), and optional anchor settings. Anchor fields appear only after the anchor checkbox is enabled, and diamond embedment depth appears only for diamond anchors. Numeric fields are editable preset drop-downs so custom values remain available. A selection fill handle and Excel/WPS multi-cell paste are supported. Board-face size is derived from length × thickness. Existing irregular inputs are rejected with a module-specific error instead of being silently replaced. The full edition remains on `feat/phase-1-core-engine`. See [Windows Standard guide](docs/WINDOWS_STANDARD.md).
 

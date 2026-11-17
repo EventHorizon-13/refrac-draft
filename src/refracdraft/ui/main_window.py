@@ -398,7 +398,12 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            export_pdf(self.drawing_document, path, reference_pdf=self.reference_pdf)
+            export_pdf(
+                self.drawing_document,
+                path,
+                reference_pdf=self.reference_pdf,
+                reference_dxf=self.reference_dxf,
+            )
             self.statusBar().showMessage(f"PDF 已导出：{path}")
         except Exception as exc:
             QMessageBox.critical(self, "PDF 导出失败", str(exc))

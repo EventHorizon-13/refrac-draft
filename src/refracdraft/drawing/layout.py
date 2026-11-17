@@ -10,8 +10,9 @@ BOARD_VIEW_BOTTOM_MM = 106.17
 PAGE_LEFT_MM = 7.0
 PAGE_CONTENT_WIDTH_MM = 283.0
 PANEL_INNER_MARGIN_MM = 8.0
-PANEL_GAP_MM = 4.0
+PANEL_GAP_MM = 6.0
 PANEL_MIN_WIDTH_MM = 58.0
+DETAIL_TEXT_SIZE_MM = 5.67
 DETAIL_BASELINES_MM = (82.90, 76.20, 69.55, 62.79, 56.36, 49.71, 44.15)
 
 
@@ -34,21 +35,20 @@ def _detail_text_width(text: str, size_mm: float, horizontal_scale: float) -> fl
 
 
 def details_width(drawing: ModuleDrawing) -> float:
-    widths = []
-    for index, line in enumerate(drawing.details):
-        if index < 6:
-            widths.append(_detail_text_width(line, 5.67, 0.67))
-        else:
-            widths.append(_detail_text_width(line, 4.2, 0.97))
+    widths = [_detail_text_width(line, DETAIL_TEXT_SIZE_MM, 0.67) for line in drawing.details]
     return max(widths, default=0.0)
 
 
-def module_required_width(drawing: ModuleDrawing) -> float:
-    content_width = max(
+def module_content_width(drawing: ModuleDrawing) -> float:
+    return max(
         top_row_width(drawing),
         outline_width(drawing.board_view),
         details_width(drawing),
     )
+
+
+def module_required_width(drawing: ModuleDrawing) -> float:
+    content_width = module_content_width(drawing)
     return max(PANEL_MIN_WIDTH_MM, content_width + PANEL_INNER_MARGIN_MM * 2.0)
 
 

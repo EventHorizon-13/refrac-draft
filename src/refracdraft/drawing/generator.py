@@ -15,6 +15,7 @@ from refracdraft.drawing.layout import (
     PAGE_LEFT_MM,
     PANEL_GAP_MM,
     PANEL_INNER_MARGIN_MM,
+    module_content_width,
     module_required_width,
 )
 from refracdraft.geometry.primitives import Polyline, equal_anchor_positions, module_front_outline, module_side_outline, parametric_outline, point_in_outline, rectangle, scale_template
@@ -112,6 +113,8 @@ def _details(module, board, anchor) -> tuple[str, ...]:
     hose = anchor.hose_spec if anchor.exists else "无胶管"
     board_text = board.material if board.exists else "无夹板"
     lines.append(f"{hose or '未填写胶管'}，{board_text}")
+    if module.source_note:
+        lines.append(f"备注：{module.source_note}")
     return tuple(lines)
 
 
@@ -358,11 +361,18 @@ class DrawingGenerator:
                                                 f"{offset:g}", "vertical", -50))
                     seen_offsets.add(offset)
         if anchor.anchor_type == AnchorType.DIAMOND and anchor.embedment_depth_mm and positions:
-            embed_x, embed_y = positions[0]
+            embed_x = positions[0][0]
             depth = anchor.embedment_depth_mm
-            embed_end_y = embed_y + depth if embed_y + depth <= module.board_face_height_mm else embed_y - depth
+            if depth > module.board_face_height_mm:
+                raise ValueError(f"{module.module_id}: 菱形锚固件嵌入深度不能大于夹板面厚度")
             board_dims.append(
-                Dimension((embed_x, embed_y), (embed_x, embed_end_y), f"嵌入深度 {depth:g}", "vertical", 80)
+                Dimension(
+                    (embed_x, module.board_face_height_mm),
+                    (embed_x, module.board_face_height_mm - depth),
+                    f"{depth:g}",
+                    "vertical",
+                    80,
+                )
             )
         board_note = "无夹板" if not board.exists else ""
         # The source board-face blocks already contain their own center marks and end marks.
@@ -381,43 +391,69 @@ class DrawingGenerator:
 
     def generate(self, project: Project) -> DrawingDocument:
         drawings = [self.build_module(project, module) for module in project.modules]
+        required_widths = [module_required_width(drawing) for drawing in drawings]
         pages: list[SheetPage] = []
-        groups: list[list[ModuleDrawing]] = []
-        current: list[ModuleDrawing] = []
-        used_width = 0.0
-        for drawing in drawings:
-            required = module_required_width(drawing)
-            candidate_width = used_width + (PANEL_GAP_MM if current else 0.0) + required
-            if current and candidate_width > PAGE_CONTENT_WIDTH_MM:
-                groups.append(current)
-                current = [drawing]
-                used_width = required
-            else:
-                current.append(drawing)
-                used_width = candidate_width
-        if current:
-            groups.append(current)
+        groups = _balanced_page_groups(required_widths)
 
-        for page_number, group in enumerate(groups, start=1):
-            required_widths = [module_required_width(drawing) for drawing in group]
+        for page_number, (start, end) in enumerate(groups, start=1):
+            group = drawings[start:end]
+            group_widths = required_widths[start:end]
             gaps = PANEL_GAP_MM * max(0, len(group) - 1)
-            extra_width = max(0.0, PAGE_CONTENT_WIDTH_MM - gaps - sum(required_widths))
+            extra_width = max(0.0, PAGE_CONTENT_WIDTH_MM - gaps - sum(group_widths))
             extra_each = extra_width / len(group) if group else 0.0
             placed: list[PlacedModule] = []
             panel_x = PAGE_LEFT_MM
-            for panel_index, (drawing, required) in enumerate(zip(group, required_widths)):
+            for panel_index, (drawing, required) in enumerate(zip(group, group_widths)):
                 panel_width = required + extra_each
+                content_x = panel_x + max(
+                    PANEL_INNER_MARGIN_MM,
+                    (panel_width - module_content_width(drawing)) / 2.0,
+                )
                 placed.append(
                     PlacedModule(
                         drawing=drawing,
                         x_mm=panel_x,
                         panel_width_mm=panel_width,
                         panel_index=panel_index,
-                        content_x_mm=panel_x + PANEL_INNER_MARGIN_MM,
+                        content_x_mm=content_x,
                     )
                 )
                 panel_x += panel_width + PANEL_GAP_MM
             pages.append(SheetPage(page_number, tuple(placed), len(group)))
         warnings = tuple(w for drawing in drawings for w in drawing.warnings)
         return DrawingDocument(project.metadata.project_name, tuple(pages), warnings)
+
+
+def _balanced_page_groups(required_widths: list[float]) -> list[tuple[int, int]]:
+    """Partition modules into the fewest pages, then balance the used width per page."""
+    count = len(required_widths)
+    if count == 0:
+        return []
+    # State: page count, highest page fill ratio, squared unused capacity, ranges.
+    best: list[tuple[int, float, float, tuple[tuple[int, int], ...]] | None] = [None] * (count + 1)
+    best[0] = (0, 0.0, 0.0, ())
+    prefix = [0.0]
+    for width in required_widths:
+        prefix.append(prefix[-1] + width)
+    for end in range(1, count + 1):
+        for start in range(end):
+            previous = best[start]
+            if previous is None:
+                continue
+            items = end - start
+            used = prefix[end] - prefix[start] + PANEL_GAP_MM * max(0, items - 1)
+            if used > PAGE_CONTENT_WIDTH_MM + 1e-6:
+                continue
+            fill = used / PAGE_CONTENT_WIDTH_MM
+            candidate = (
+                previous[0] + 1,
+                max(previous[1], fill),
+                previous[2] + (1.0 - fill) ** 2,
+                previous[3] + ((start, end),),
+            )
+            if best[end] is None or candidate[:3] < best[end][:3]:
+                best[end] = candidate
+    if best[count] is None:
+        raise ValueError("模块宽度超出单页可用宽度")
+    return list(best[count][3])
 

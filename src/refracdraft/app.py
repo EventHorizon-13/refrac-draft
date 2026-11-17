@@ -26,7 +26,12 @@ def _smoke_test(window) -> None:
     drawing = DrawingGenerator(ReferenceLibrary(window.reference_dxf)).generate(project)
     with TemporaryDirectory(prefix="refracdraft-smoke-") as temp_dir:
         dxf_path = export_dxf(drawing, Path(temp_dir) / "smoke.dxf", window.reference_dxf)
-        pdf_path = export_pdf(drawing, Path(temp_dir) / "smoke.pdf", window.reference_pdf)
+        pdf_path = export_pdf(
+            drawing,
+            Path(temp_dir) / "smoke.pdf",
+            window.reference_pdf,
+            reference_dxf=window.reference_dxf,
+        )
         if not list(ezdxf.readfile(dxf_path).modelspace()):
             raise ValueError("DXF 无可编辑实体")
         with fitz.open(pdf_path) as pdf:

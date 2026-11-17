@@ -11,9 +11,9 @@
 - Sample-derived quick-insert board-face opening candidate is loaded from `references/derived/quick_insert_opening_candidate.json` and placed per anchor position.
 - Generate-on-click drawing model and basic page packing.
 - DXF export with millimetre units, editable vector geometry, SHX text style references, and imported A4 frame/title-block definitions from the reference DXF.
-- PDF export as vector linework; title-block and footer strips are reused from the accepted sample PDF as vector PDF content.
+- PDF export as vector linework rendered directly from the generated DXF; the frame, title block, dimensions and text all stay on the same source path as the DXF export.
 - Chinese-header Excel importer with three worksheets.
-- Optional PySide6 desktop shell with three editable parameter tables, JSON/Excel import, generated preview, and DXF/PDF export actions.
+- Optional PySide6 desktop shell with editable parameter tables, JSON/Excel import, generated preview, DXF/PDF export actions, and a Standard-edition fill handle plus multi-cell paste.
 - Example parameter files for B2 正敲, A1 侧敲, and B1–B4 sample panels.
 
 ## Verified locally
@@ -31,7 +31,7 @@
 - Several anchor profile mappings and all B1–B13 / S1–S4 parameters still require page-by-page validation against the supplied samples.
 - The current layout algorithm is an initial approximation, not a universal packing rule.
 - PDF font/line-weight tuning and exact annotation spacing still need golden-master comparison.
-- Undo/redo, fill-handle spreadsheet interactions, row duplication, and advanced batch editing are not yet implemented.
+- Undo/redo and row-level duplication shortcuts are not yet implemented; the Standard editor now has fill-handle and multi-cell paste interactions.
 
 ## Next phase
 

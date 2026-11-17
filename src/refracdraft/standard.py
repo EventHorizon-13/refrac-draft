@@ -28,6 +28,8 @@ class StandardModuleValues:
     material: str = ""
     production_quantity: int = 1
     board_material: str = "9厘夹板"
+    density_kg_m3: float | None = None
+    source_note: str = ""
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,8 @@ def build_standard_module(
     data.update(
         module_id=module_id,
         material=values.material.strip(),
+        density_kg_m3=values.density_kg_m3,
+        source_note=values.source_note.strip(),
         production_quantity=max(1, int(values.production_quantity)),
         front_width_mm=length,
         expansion_length_mm=expansion,
@@ -159,11 +163,12 @@ def build_standard_anchor(
     values: StandardAnchorValues,
 ) -> AnchorParameters:
     data = base.model_dump(mode="python") if base else {}
+    pin_diameter = None if values.anchor_type == AnchorType.DIAMOND else values.pin_diameter_mm
     data.update(
         module_id=module_id,
         material=values.material.strip(),
         thread_spec=values.thread_spec.strip(),
-        diameter_mm=values.pin_diameter_mm,
+        diameter_mm=pin_diameter,
         length_mm=None,
         hose_spec=values.hose_spec.strip(),
         dimension_horizontal=True,
@@ -237,6 +242,8 @@ def standard_module_values(
         material=module.material,
         production_quantity=module.production_quantity,
         board_material=board.material,
+        density_kg_m3=module.density_kg_m3,
+        source_note=module.source_note,
     )
 
 
