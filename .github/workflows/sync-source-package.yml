@@ -22,22 +22,53 @@ jobs:
           fetch-depth: 0
           token: ${{ github.token }}
 
-      - name: Restore and verify source tree
+      - name: Restore and verify source files
         shell: bash
         run: |
           set -euo pipefail
           cat .release-chunks/chunk-*.txt | tr -d '\n' | base64 -d > /tmp/source.tar.xz
           tar -xJf /tmp/source.tar.xz
-          git rm -r .release-chunks .github/workflows/sync-source-package.yml
-          git add -A
-          actual="$(git write-tree)"
-          expected="cd621d08fac7fb5e89bcf10f05c454062b8fb087"
+          git checkout HEAD^ -- \
+            .github/workflows/ci.yml \
+            .github/workflows/windows-portable.yml \
+            .github/workflows/windows-standard.yml
+          index=/tmp/refrac-source-index
+          rm -f "$index"
+          for path in \
+            README.md \
+            assets/fonts/LICENSE-SourceHanSans.txt \
+            assets/fonts/README.md \
+            docs/DRAWING_RULES.md \
+            docs/IMPLEMENTATION_STATUS.md \
+            docs/WINDOWS_STANDARD.md \
+            pyproject.toml \
+            src/refracdraft/app.py \
+            src/refracdraft/cli.py \
+            src/refracdraft/drawing/generator.py \
+            src/refracdraft/drawing/layout.py \
+            src/refracdraft/exporters/dxf.py \
+            src/refracdraft/exporters/pdf.py \
+            src/refracdraft/standard.py \
+            src/refracdraft/standard_app.py \
+            src/refracdraft/ui/main_window.py \
+            src/refracdraft/ui/standard_window.py \
+            tests/test_standard_edition.py; do
+            sha="$(git hash-object "$path")"
+            GIT_INDEX_FILE="$index" git update-index --add --cacheinfo "100644,$sha,$path"
+          done
+          actual="$(GIT_INDEX_FILE="$index" git write-tree)"
+          expected="19eb9c02e5afb949749ec41205ca4f7d3f89614d"
           test "$actual" = "$expected"
 
-      - name: Commit verified source
+      - name: Commit source without workflow changes
         shell: bash
         run: |
           set -euo pipefail
+          git add -A
+          if git diff --cached --name-only | grep -q '^\.github/workflows/'; then
+            echo "Workflow files must be updated by the connector, not the Actions token."
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "feat: table editor and DXF-based PDF export"
