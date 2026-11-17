@@ -18,6 +18,12 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
+      - name: Prepare PDF CJK font
+        run: |
+          mkdir -p assets/fonts
+          curl -L --fail --retry 3 \
+            https://raw.githubusercontent.com/adobe-fonts/source-han-sans/release/OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf \
+            -o assets/fonts/SourceHanSansSC-Regular.otf
       - run: python -m pytest -q
       - name: Generate B1-B4 reference preview
         run: |

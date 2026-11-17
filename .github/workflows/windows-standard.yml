@@ -27,11 +27,19 @@ jobs:
           cache: pip
       - name: Install build dependencies
         run: python -m pip install -e ".[ui]" "pyinstaller==6.22.3"
+      - name: Prepare PDF CJK font
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "assets/fonts" | Out-Null
+          Invoke-WebRequest `
+            -Uri "https://raw.githubusercontent.com/adobe-fonts/source-han-sans/release/OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf" `
+            -OutFile "assets/fonts/SourceHanSansSC-Regular.otf"
       - name: Build one-folder application
         run: >
           python -m PyInstaller --noconfirm --clean --onedir --windowed
           --name RefracDraft-Standard --paths src
           --add-data "references:references"
+          --add-data "assets:assets"
           --add-data "examples/b2_positive_tap.json:examples"
           --collect-data reportlab
           --collect-submodules ezdxf
@@ -53,9 +61,13 @@ jobs:
             throw "Packaged application exited with code $($process.ExitCode)."
           }
       - name: Add portable instructions
+        if: always()
         shell: pwsh
         run: |
           Copy-Item "docs/WINDOWS_STANDARD.md" "dist/RefracDraft-Standard/README.md"
+          if (Test-Path "RefracDraft-Standard-ui.png") {
+            Copy-Item "RefracDraft-Standard-ui.png" "dist/RefracDraft-Standard/UI-PREVIEW.png"
+          }
           python -m pip freeze | Out-File "dist/RefracDraft-Standard/BUILD-DEPENDENCIES.txt" -Encoding utf8
       - uses: actions/upload-artifact@v4
         with:
