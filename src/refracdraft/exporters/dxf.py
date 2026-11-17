@@ -18,14 +18,46 @@ LAYER_COLORS = {
 }
 
 
-def _add_polyline(msp, points, closed=True, layer="OUTLINE", color=None, lineweight=None):
+def _resolve_linetype(doc, linetype: str | None) -> str | None:
+    if not linetype:
+        return None
+    name = linetype.upper()
+    if name in {"BYLAYER", "BYBLOCK", "CONTINUOUS"}:
+        return None
+    if name in doc.linetypes:
+        return name
+    if "CENTER" in name or "中心" in name:
+        return "CENTER2"
+    if "DASH" in name or "虚线" in name:
+        return "DASHED"
+    return None
+
+
+def _add_polyline(msp, points, closed=True, layer="OUTLINE", color=None, lineweight=None,
+                  linetype=None, linetype_scale=None):
     if len(points) >= 2:
         attrs = {"layer": layer}
         if color is not None:
             attrs["color"] = int(color)
         if lineweight is not None:
             attrs["lineweight"] = int(lineweight)
+        resolved_linetype = _resolve_linetype(msp.doc, linetype)
+        if resolved_linetype:
+            attrs["linetype"] = resolved_linetype
+            if linetype_scale is not None:
+                attrs["ltscale"] = float(linetype_scale)
         msp.add_lwpolyline(points, close=closed, dxfattribs=attrs)
+
+
+def _ensure_anchor_linetypes(doc) -> None:
+    patterns = {
+        "CENTER2": [28.575, 19.05, -3.175, 3.175, -3.175],
+        "CENTER": [50.8, 31.75, -6.35, 6.35, -6.35],
+        "DASHED": [6.35, 3.175, -3.175],
+    }
+    for name, pattern in patterns.items():
+        if name not in doc.linetypes:
+            doc.linetypes.add(name, pattern=pattern, description="RefracDraft reference center line")
 
 
 def _add_arrowhead(msp, x, y, ux, uy, color_layer="DIMENSIONS"):
@@ -84,7 +116,9 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
         pts = [(ox + x * scale, oy + y * scale) for x, y in symbol.points]
         aci = view.anchor_symbol_colors[symbol_index] if symbol_index < len(view.anchor_symbol_colors) else None
         lineweight = view.anchor_symbol_lineweights[symbol_index] if symbol_index < len(view.anchor_symbol_lineweights) else 22
-        _add_polyline(msp, pts, symbol.closed, "ANCHORS", color=aci, lineweight=lineweight)
+        linetype = view.anchor_symbol_linetypes[symbol_index] if symbol_index < len(view.anchor_symbol_linetypes) else None
+        _add_polyline(msp, pts, symbol.closed, "ANCHORS", color=aci, lineweight=lineweight,
+                      linetype=linetype, linetype_scale=0.1)
     for x, y in view.anchor_points:
         cx, cy = ox + x * scale, oy + y * scale
         if view.anchor_marker_style == "target":
@@ -112,6 +146,7 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
     for name, color in LAYER_COLORS.items():
         if name not in doc.layers:
             doc.layers.new(name, dxfattribs={"color": color})
+    _ensure_anchor_linetypes(doc)
 
     # Import the original A4 frame and title block definitions without modifying the source.
     if reference_dxf and Path(reference_dxf).exists():

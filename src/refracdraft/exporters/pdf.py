@@ -197,8 +197,15 @@ def _draw_view(c: canvas.Canvas, view: ViewDrawing, origin: tuple[float, float],
     for symbol_index, symbol in enumerate(view.anchor_symbols):
         aci = view.anchor_symbol_colors[symbol_index] if symbol_index < len(view.anchor_symbol_colors) else 5
         lineweight = view.anchor_symbol_lineweights[symbol_index] if symbol_index < len(view.anchor_symbol_lineweights) else 22
+        linetype = view.anchor_symbol_linetypes[symbol_index] if symbol_index < len(view.anchor_symbol_linetypes) else "CONTINUOUS"
         c.setStrokeColor(aci_colors.get(aci, black))
         c.setLineWidth((lineweight / 100.0) * MM)
+        if any(token in linetype.upper() for token in ("CENTER", "DASH", "HIDDEN")):
+            # Scale the source CENTER2 pattern (19.05 + 3.175 + 3.175 + 3.175)
+            # from drawing millimetres to the 1:10 paper view.
+            c.setDash([5.36, 0.89, 0.89, 0.89])
+        else:
+            c.setDash()
         if len(symbol.points) < 2:
             continue
         path = c.beginPath()
@@ -208,6 +215,7 @@ def _draw_view(c: canvas.Canvas, view: ViewDrawing, origin: tuple[float, float],
         if symbol.closed:
             path.close()
         c.drawPath(path, stroke=1, fill=0)
+    c.setDash()
     for x, y in view.anchor_points:
         cx, cy = ox + x * scale, oy + y * scale
         c.setStrokeColor(red)

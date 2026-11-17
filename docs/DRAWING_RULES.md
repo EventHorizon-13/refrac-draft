@@ -3,8 +3,8 @@
 
 - M-shaped front profile: `*U168` from `动态模块-M形锚固件-上`.
 - Diamond front profile: `*U163` from `动态模块-菱形锚固件-上`.
-- M-shaped side profile: `*U330` from `动态模块-侧敲-1`.
-- Diamond side profile: `*U445` from `动态模块-侧敲-菱形-1`.
+- M-shaped expansion-face side profile: `*U324` from `动态模块-M形锚固件-膨胀面`.
+- Diamond expansion-face side profile: `*U476` from `动态模块-菱形锚固件-膨胀面1`, scaled by `0.2291667` and mirrored horizontally for the accepted side-view direction.
 - Stacked no-anchor front marks: `*U824` nested in `动态模块-无锚固件-上`.
 - Quick-insert profile: `快插锚固件-右视图` (provisional match for B3/B10/B11/B12).
 - Quick-insert board-face opening: candidate traced from the B10 PDF mark, stored in `references/derived/quick_insert_opening_candidate.json`. The generator draws it automatically for quick-insert anchors when a physical board exists, but flags it as unconfirmed because the PDF does not explicitly identify the mark as a machined opening.
@@ -33,6 +33,7 @@
 
 ## 12. 锚固件与无锚固件膨胀面标记
 
-- 侧视图的锚固件是一个代表性符号，不按锚固数量重复绘制。M型符号的左侧竖边与侧面视图左外缘对齐；菱形按源块应用 0.916667 比例和 180° 旋转，并以「嵌入深度」为侧面外缘到符号左边缘的距离定位。
+- 侧视图的锚固件是一个代表性符号，不按锚固数量重复绘制。M型使用总尺寸约 138.494 × 240 的 `*U324` 膨胀面轮廓，左侧竖边与侧面视图左外缘对齐；菱形使用缩放到约 18.333 × 220 的 `*U476` 膨胀面轮廓，并以「嵌入深度」为侧面外缘到符号左边缘的距离定位。
+- 侧视锚固件块已包含自身中心线与结构线，不得再叠加红色靶标或黄/红主视图案。
 - 侧敲主视图必须绘制两条横贯模块宽度的小头轮廓线，位置按小头高度在总高度中居中确定。无锚固件时，再叠加四根渐短的膨胀面标记。
 - 无锚固件模块的正面和侧面都需要四根渐短的膨胀面标记。正面沿用 `*U824` 的比例；侧面按同一纵向比例生成，并沿梯形顶边斜率倾斜。

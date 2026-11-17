@@ -44,6 +44,7 @@ class SymbolGeometry:
     polylines: tuple[Polyline, ...]
     colors: tuple[int, ...] = ()
     lineweights: tuple[int, ...] = ()
+    linetypes: tuple[str, ...] = ()
 
 
 class ReferenceLibrary:
@@ -79,6 +80,18 @@ class ReferenceLibrary:
             except Exception:
                 lineweight = -1
         return 25 if lineweight < 0 else lineweight
+
+    def _entity_linetype(self, entity) -> str:
+        linetype = str(entity.dxf.get("linetype", "BYLAYER") or "BYLAYER").upper()
+        if linetype in {"BYBLOCK", ""}:
+            return "CONTINUOUS"
+        if linetype == "BYLAYER":
+            layer_name = entity.dxf.get("layer", "0")
+            try:
+                linetype = str(self.doc.layers.get(layer_name).dxf.get("linetype", "CONTINUOUS"))
+            except Exception:
+                linetype = "CONTINUOUS"
+        return linetype.upper() or "CONTINUOUS"
 
     def board_outline(self, template_id: str) -> Polyline:
         block_name = BOARD_FACE_BLOCKS.get(template_id, template_id)
@@ -117,6 +130,7 @@ class ReferenceLibrary:
         polylines: list[Polyline] = []
         colors: list[int] = []
         lineweights: list[int] = []
+        linetypes: list[str] = []
         for entity in symbol_entities:
             try:
                 path = make_path(entity)
@@ -128,6 +142,7 @@ class ReferenceLibrary:
                     polylines.append(Polyline(tuple(pts), closed=closed))
                     colors.append(self._entity_aci_color(entity))
                     lineweights.append(self._entity_lineweight(entity))
+                    linetypes.append(self._entity_linetype(entity))
             except (TypeError, AttributeError, ValueError):
                 continue
         if not polylines:
@@ -136,7 +151,7 @@ class ReferenceLibrary:
         ys = [p[1] for line in polylines for p in line.points]
         cx, cy = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
         normalized = tuple(line.transformed(tx=-cx, ty=-cy) for line in polylines)
-        return SymbolGeometry(normalized, tuple(colors), tuple(lineweights))
+        return SymbolGeometry(normalized, tuple(colors), tuple(lineweights), tuple(linetypes))
 
 
     def symbol_from_block(self, block_name: str) -> SymbolGeometry:
@@ -147,6 +162,7 @@ class ReferenceLibrary:
         polylines: list[Polyline] = []
         colors: list[int] = []
         lineweights: list[int] = []
+        linetypes: list[str] = []
         for entity in entities:
             try:
                 path = make_path(entity)
@@ -158,6 +174,7 @@ class ReferenceLibrary:
                     polylines.append(Polyline(tuple(pts), closed=closed))
                     colors.append(self._entity_aci_color(entity))
                     lineweights.append(self._entity_lineweight(entity))
+                    linetypes.append(self._entity_linetype(entity))
             except (TypeError, AttributeError, ValueError):
                 continue
         if not polylines:
@@ -166,8 +183,7 @@ class ReferenceLibrary:
         ys = [p[1] for line in polylines for p in line.points]
         cx, cy = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
         return SymbolGeometry(tuple(line.transformed(tx=-cx, ty=-cy) for line in polylines),
-                              tuple(colors), tuple(lineweights))
-
+                              tuple(colors), tuple(lineweights), tuple(linetypes))
 
     def stacked_front_lines(self, width_mm: float, height_mm: float) -> tuple[Polyline, ...]:
         """Extract the four internal layer marks from the source no-anchor top-view block.
@@ -238,23 +254,35 @@ class ReferenceLibrary:
                 tuple(line.transformed(sx=sx, sy=sy) for line in symbol.polylines),
                 symbol.colors,
                 symbol.lineweights,
+                symbol.linetypes,
             )
         return symbol
 
     def side_anchor_symbol(self, anchor_type: str) -> SymbolGeometry:
-        blocks = {"M型": "*U330", "菱形": "*U445"}
-        if anchor_type not in blocks:
-            raise KeyError(f"尚未确认 {anchor_type} 的侧面锚固件图块")
-        symbol = self.symbol_from_block(blocks[anchor_type])
-        if anchor_type != "菱形":
-            return symbol
-        # The source side block inserts *U445 with scale 0.916667 and rotation 180.
-        scale = 0.916667
-        rotated = tuple(
-            Polyline(tuple((-x * scale, -y * scale) for x, y in line.points), line.closed)
-            for line in symbol.polylines
-        )
-        return SymbolGeometry(rotated, symbol.colors, symbol.lineweights)
+        if anchor_type == "M型":
+            # 动态模块-M形锚固件-膨胀面 uses *U324. The raw block is already in the
+            # vertical expansion-face orientation shown in the accepted drawing.
+            return self.symbol_from_block("*U324")
+        if anchor_type == "菱形":
+            # 动态模块-菱形锚固件-膨胀面1 uses *U476 at scale .2291667. Its local
+            # narrow-x/long-y orientation is already the required side profile.
+            source = self.symbol_from_block("*U476")
+            scale = 0.2291666666666666
+            # The expansion-face view looks from the opposite side, so the side profile
+            # is mirrored horizontally before placement. Only the two narrow central
+            # axis lines stay dashed; the manufactured outer profile and end caps are solid.
+            polylines = tuple(line.transformed(sx=-scale, sy=scale) for line in source.polylines)
+            linetypes = []
+            for line, linetype in zip(polylines, source.linetypes):
+                xs = [point[0] for point in line.points]
+                is_center_axis = (
+                    len(line.points) == 2
+                    and max(xs) - min(xs) < 0.05
+                    and -0.6 <= min(xs) <= 1.5
+                )
+                linetypes.append(linetype if is_center_axis else "CONTINUOUS")
+            return SymbolGeometry(polylines, source.colors, source.lineweights, tuple(linetypes))
+        raise KeyError(f"尚未确认 {anchor_type} 的膨胀面锚固件图块")
 
 
     def standard_opening(self, anchor_type: str) -> tuple[Polyline, ...]:

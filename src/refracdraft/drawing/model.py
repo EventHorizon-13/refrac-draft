@@ -29,6 +29,8 @@ class ViewDrawing:
     anchor_symbol_colors: tuple[int, ...] = ()
     # DXF lineweight in hundredths of a millimetre for each anchor polyline.
     anchor_symbol_lineweights: tuple[int, ...] = ()
+    # Source-DXF linetype for each corresponding anchor polyline.
+    anchor_symbol_linetypes: tuple[str, ...] = ()
     anchor_marker_style: str = "target"
 
 

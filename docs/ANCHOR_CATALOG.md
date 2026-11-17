@@ -36,8 +36,8 @@ The board-face blocks contain nested anonymous inserts that can be recursively d
 
 | Anchor type | Front-view source geometry | Side-view source geometry | Status |
 |---|---|---|---|
-| M-shaped | `*U168` nested in `动态模块-M形锚固件-上` (about 136×220 source units) | `*U330` nested in `动态模块-侧敲-1` (about 136×240) | Used by the initial generator |
-| Diamond | `*U163` nested in `动态模块-菱形锚固件-上` (about 19.26×220) | `*U445` nested in `动态模块-侧敲-菱形-1` (about 21×240) | Used by the initial generator |
+| M-shaped | `*U168` nested in `动态模块-M形锚固件-上` (about 136×220 source units) | `*U324` nested in `动态模块-M形锚固件-膨胀面` (about 138.494×240) | Used for the expansion-face side view |
+| Diamond | `*U163` nested in `动态模块-菱形锚固件-上` (about 19.26×220) | `*U476` nested in `动态模块-菱形锚固件-膨胀面1`, scale `0.2291667` (about 18.333×220) | Used for the expansion-face side view |
 | Quick insert | `快插锚固件-右视图` | Candidate right-side profile block | Front profile used provisionally; PDF BOM classification still needs confirmation |
 
 ## Quick-insert board-face opening candidate

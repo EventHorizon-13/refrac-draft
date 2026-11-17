@@ -39,7 +39,7 @@ def module(module_id="M1", geometry_type=GeometryType.NORMAL, **extra):
 
 
 @pytest.mark.parametrize("geometry_type", list(GeometryType))
-def test_standard_edition_accepts_three_existing_geometry_types(geometry_type):
+def test_standard_edition_accept_three_existing_geometry_types(geometry_type):
     ensure_standard_project(Project(modules=[module(geometry_type=geometry_type)]))
 
 
@@ -54,7 +54,7 @@ def test_standard_edition_rejects_irregular_geometry_with_module_id(extra):
 
 
 def test_welded_diamond_type_survives_unified_input_normalization():
-    assert _normalize_row({"anchor_type": "焊接菱形"}, "anchors")["anchor_type"] == "焊接菱形"
+    assert _normalize_row({"anchor_type": "焊鎥菱形"}, "anchors")["anchor_type"] == "焊接菱形"
 
 
 def test_standard_normal_row_maps_length_expansion_and_thickness():
@@ -80,7 +80,7 @@ def test_standard_normal_row_maps_length_expansion_and_thickness():
 )
 def test_standard_taper_rows_map_big_small_and_type(taper_type, expected_side):
     values = StandardModuleValues(
-        "T1", 300, 280, 230, True, big_head_mm=289, small_head_mm=220, taper_type=taper_type
+        "T1_uW100, 300, 280, 230, True, big_head_mm=289, small_head_mm=220, taper_type=taper_type
     )
     built = build_standard_module(None, values)
 
@@ -101,7 +101,7 @@ def test_standard_taper_rejects_inverted_heads():
     values = StandardModuleValues(
         "T2", 300, 300, 230, True, big_head_mm=200, small_head_mm=220
     )
-    with pytest.raises(ValueError, match="大头必须大于小头"):
+    with pytest.raises(ValueError, match="大头必顥大于小头"):
         build_standard_module(None, values)
 
 
@@ -112,7 +112,7 @@ def test_standard_anchor_uses_fixed_spacing_and_only_diamond_keeps_depth():
         500,
         StandardAnchorValues(True, 80, 150, 3, AnchorType.DIAMOND, 60),
     )
-    assert diamond.layout_mode == LayoutMode.FIXED_SPACING
+    assert diamond.layout_mode == LayoutMode.FIXED_SACING
     assert diamond.edge_offset_mm == 80
     assert diamond.spacing_mm == 150
     assert diamond.count == 3
@@ -227,7 +227,7 @@ def test_standard_details_include_new_manufacturing_fields():
         None,
         StandardModuleValues(
             "A1", 300, 300, 330, True, 300, 200, GeometryType.SIDE_TAPER,
-            material="1350板材", production_quantity=84, board_material="12厘夹板",
+            material="1350材杒", production_quantity=84, board_material="12厘夹板能",
         ),
     )
     board = build_standard_board(None, "A1", True, "12厘夹板")
@@ -246,7 +246,7 @@ def test_standard_details_include_new_manufacturing_fields():
     assert "插针φ8" in text
     assert "嵌入深度 60mm" in text
     assert "数量：84 Pcs" in text
-    assert "25胶管，12厘夹板" in text
+    assert "25胶管，12厘夹板能" in text
 
 
 def test_no_anchor_views_include_expansion_face_marks():
@@ -263,7 +263,7 @@ def test_no_anchor_views_include_expansion_face_marks():
     assert len(drawing.side_view.internal_lines) == 4
 
 
-def test_diamond_side_anchor_uses_source_position_scale_and_rotation():
+def test_diamond_side_anchor_uses_expansion_face_profile():
     module = build_standard_module(
         None,
         StandardModuleValues("A1", 300, 300, 330, True, 300, 200, GeometryType.SIDE_TAPER),
@@ -279,7 +279,16 @@ def test_diamond_side_anchor_uses_source_position_scale_and_rotation():
     document = DrawingGenerator(ReferenceLibrary("references/示例.dxf")).generate(project)
     side_view = document.pages[0].modules[0].drawing.side_view
     assert side_view is not None
-    assert side_view.anchor_points[0][0] == pytest.approx(50 + 21 * 0.916667 / 2)
+    symbol_points = [point for line in side_view.anchor_symbols for point in line.points]
+    symbol_min_x = min(point[0] for point in symbol_points)
+    symbol_min_y = min(point[1] for point in symbol_points)
+    symbol_max_y = max(point[1] for point in symbol_points)
+    assert symbol_min_x == pytest.approx(50.0)
+    assert symbol_max_y - symbol_min_y == pytest.approx(220.0)
+    assert side_view.anchor_points == ()
+    assert set(side_view.anchor_symbol_colors) == {7}
+    assert "CONTINUOUS" in side_view.anchor_symbol_linetypes
+    assert "CENTER2" in side_view.anchor_symbol_linetypes
 
 
 def test_side_taper_front_has_small_head_contour_lines():
@@ -303,7 +312,7 @@ def test_side_taper_front_has_small_head_contour_lines():
     assert {point[0] for line in lines for point in line.points} == {0.0, 300.0}
 
 
-def test_m_shape_side_anchor_starts_at_side_outer_edge():
+def test_m_shape_side_anchor_uses_expansion_face_profile():
     module = build_standard_module(
         None,
         StandardModuleValues("M2", 300, 300, 230, True, 289, 220, GeometryType.SIDE_TAPER),
@@ -319,5 +328,12 @@ def test_m_shape_side_anchor_starts_at_side_outer_edge():
     document = DrawingGenerator(ReferenceLibrary("references/示例.dxf")).generate(project)
     side_view = document.pages[0].modules[0].drawing.side_view
     assert side_view is not None
-    assert side_view.anchor_points[0][0] == pytest.approx(68.19714059404214)
+    symbol_points = [point for line in side_view.anchor_symbols for point in line.points]
+    symbol_min_x = min(point[0] for point in symbol_points)
+    symbol_max_x = max(point[0] for point in symbol_points)
+    assert symbol_min_x == pytest.approx(0.0)
+    assert symbol_max_x - symbol_min_x == pytest.approx(138.4935864220024)
+    assert side_view.anchor_points == ()
+    assert set(side_view.anchor_symbol_colors) == {5}
+    assert "CENTER2" in side_view.anchor_symbol_linetypes
 

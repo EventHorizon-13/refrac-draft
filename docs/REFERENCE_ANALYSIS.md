@@ -82,7 +82,8 @@ The DXF contains AutoCAD dynamic-block data (`ACDB_BLOCKREPRESENTATION_DATA`) an
 - `动态模块-无锚固件-上` contains the 300×300 front-view outline and nested `*U824`. The `*U824` insert produces four internal horizontal marks. These are reused for the S1/S2 no-anchor stacked-module front view, scaled to the module front dimensions.
 - `动态模块-M形锚固件-上` contains nested `*U168`, used as the M-shaped front profile.
 - `动态模块-菱形锚固件-上` contains nested `*U163`, used as the diamond front profile.
-- `动态模块-侧敲-1` contains nested `*U330`, used as the M-shaped side-view profile.
-- `动态模块-侧敲-菱形-1` contains nested `*U445`, used as the diamond side-view profile.
+- `动态模块-M形锚固件-膨胀面` contains nested `*U324`, used as the M-shaped expansion-face side profile.
+- `动态模块-菱形锚固件-膨胀面1` contains nested `*U476` at scale `0.2291667`, used as the diamond expansion-face side profile.
+- The earlier `*U330` / `*U445` from the side-taper blocks are not the correct side-anchor profiles; they include extra plan/center geometry and are not used for the side view.
 - `快插锚固件-右视图` is used as a provisional quick-insert front profile because it visually matches the thin profile in B3/B10/B11/B12. The PDF BOM only states `310锚固件M10`, so this classification remains an inference.
 - The B10 board-face mark on PDF page 3 was traced into `references/derived/quick_insert_opening_candidate.json` (outer contour + four slot contours, about 22.578×16.933 mm at 1:10). It is used as a provisional quick-insert opening candidate, not a confirmed manufacturing rule.
