@@ -23,8 +23,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .ci/standard-layout-fix.part-* > /tmp/standard-layout-fix.b64
-          base64 -d /tmp/standard-layout-fix.b64 > /tmp/standard-layout-fix.tar.zst
+          cat .ci/standard-layout-fix.part-* > /tmp/standard-layout-fix.tar.zst
           tar --zstd -xf /tmp/standard-layout-fix.tar.zst -C .
           git rm -f .ci/standard-layout-fix.part-* .github/workflows/standard-layout-fix.yml
           git add docs/DRAWING_RULES.md docs/WINDOWS_STANDARD.md \
@@ -62,8 +61,12 @@ jobs:
         shell: pwsh
         run: |
           $parts = Get-ChildItem .ci/standard-layout-fix.part-* | Sort-Object Name
-          $b64 = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
-          [IO.File]::WriteAllBytes("payload.tar.zst", [Convert]::FromBase64String($b64))
+          $stream = [IO.File]::Open("payload.tar.zst", [IO.FileMode]::Create)
+          foreach ($part in $parts) {
+            $bytes = [IO.File]::ReadAllBytes($part.FullName)
+            $stream.Write($bytes, 0, $bytes.Length)
+          }
+          $stream.Dispose()
           tar --zstd -xf payload.tar.zst
 
       - uses: actions/setup-python@v5
