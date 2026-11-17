@@ -37,7 +37,7 @@ jobs:
               f"PDF pages: {len(pdf)}\\nPDF vector paths: {[len(p.get_drawings()) for p in pdf]}\\nDXF modelspace entities: {len(dxf.modelspace())}\\n",
               encoding="utf-8",
           )
-          assert len(pdf) == 1
+          assert len(pdf) == 2
           assert len(dxf.modelspace()) > 100
           PY
       - uses: actions/upload-artifact@v4

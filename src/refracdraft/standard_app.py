@@ -7,6 +7,7 @@ def main() -> None:
     from pathlib import Path
 
     from PySide6.QtCore import Qt
+    from PySide6.QtGui import QFont, QFontDatabase
     from PySide6.QtWidgets import QApplication
 
     from refracdraft.app import _smoke_test
@@ -21,6 +22,12 @@ def main() -> None:
         trace.write_text("start\n", encoding="utf-8")
     app = QApplication([sys.argv[0]] if smoke else sys.argv)
     app.setApplicationName("RefracDraft Standard")
+    app_font_path = resource_path("assets/fonts/SourceHanSansSC-Regular.otf")
+    if app_font_path.is_file():
+        font_id = QFontDatabase.addApplicationFont(str(app_font_path))
+        families = QFontDatabase.applicationFontFamilies(font_id)
+        if families:
+            app.setFont(QFont(families[0], 9))
     window = StandardWindow()
     if smoke:
         trace.write_text("window created\n", encoding="utf-8")
@@ -32,6 +39,7 @@ def main() -> None:
             trace.write_text("sample loaded\n", encoding="utf-8")
             window.project = sample
             window._populate_tables()
+            window.generate()
             window.resize(1500, 900)
             window.show()
             app.processEvents()
