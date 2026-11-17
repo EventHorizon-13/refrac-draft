@@ -1,0 +1,116 @@
+name: Publish standard layout fix
+
+on:
+  push:
+    branches:
+      - feat/standard-edition
+
+permissions:
+  contents: write
+
+jobs:
+  test_and_publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/standard-edition
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Apply verified source payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .ci/standard-layout-fix.part-* > /tmp/standard-layout-fix.b64
+          base64 -d /tmp/standard-layout-fix.b64 > /tmp/standard-layout-fix.tar.zst
+          tar --zstd -xf /tmp/standard-layout-fix.tar.zst -C .
+          git rm -f .ci/standard-layout-fix.part-* .github/workflows/standard-layout-fix.yml
+          git add docs/DRAWING_RULES.md docs/WINDOWS_STANDARD.md \
+            src/refracdraft/drawing/generator.py src/refracdraft/drawing/layout.py \
+            src/refracdraft/drawing/model.py src/refracdraft/exporters/dxf.py \
+            src/refracdraft/exporters/pdf.py src/refracdraft/reference/library.py \
+            src/refracdraft/standard.py src/refracdraft/ui/main_window.py \
+            src/refracdraft/ui/standard_window.py tests/test_standard_edition.py
+          test "$(git write-tree)" = "fb4b374dc33cfff70fad7d7e8e9dc06dbbfd5dc3"
+
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Run full Python test suite
+        run: python -m pytest -q
+
+      - name: Commit and publish verified tree
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: refine standard drawing layout and annotations"
+          git push origin HEAD:feat/standard-edition
+
+  build_windows:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/standard-edition
+          fetch-depth: 1
+
+      - name: Apply verified source payload
+        shell: pwsh
+        run: |
+          $parts = Get-ChildItem .ci/standard-layout-fix.part-* | Sort-Object Name
+          $b64 = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes("payload.tar.zst", [Convert]::FromBase64String($b64))
+          tar --zstd -xf payload.tar.zst
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: x64
+          cache: pip
+
+      - name: Install build dependencies
+        run: python -m pip install -e ".[ui]" "pyinstaller==6.22.3"
+
+      - name: Build one-folder application
+        run: >
+          python -m PyInstaller --noconfirm --clean --onedir --windowed
+          --name RefracDraft-Standard --paths src
+          --add-data "references:references"
+          --add-data "examples/b2_positive_tap.json:examples"
+          --collect-data reportlab
+          --collect-submodules ezdxf
+          src/refracdraft/standard_app.py
+
+      - name: Exercise bundled references and vector exporters
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $exe = Join-Path $PWD "dist/RefracDraft-Standard/RefracDraft-Standard.exe"
+          $process = Start-Process -FilePath $exe -ArgumentList "--smoke-test" -Wait -PassThru
+          if (Test-Path "RefracDraft-Standard-smoke-error.txt") {
+            Get-Content "RefracDraft-Standard-smoke-error.txt"
+            throw "Packaged application smoke test failed."
+          }
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path "RefracDraft-Standard-smoke-trace.txt") {
+              Get-Content "RefracDraft-Standard-smoke-trace.txt"
+            }
+            throw "Packaged application exited with code $($process.ExitCode)."
+          }
+
+      - name: Add portable instructions
+        shell: pwsh
+        run: |
+          Copy-Item "docs/WINDOWS_STANDARD.md" "dist/RefracDraft-Standard/README.md"
+          python -m pip freeze | Out-File "dist/RefracDraft-Standard/BUILD-DEPENDENCIES.txt" -Encoding utf8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RefracDraft-Standard-Windows-x64-portable-layout-fix
+          path: dist/RefracDraft-Standard/
+          if-no-files-found: error
+          retention-days: 30
