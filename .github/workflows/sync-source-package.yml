@@ -1,0 +1,44 @@
+name: Sync verified source payload
+
+on:
+  push:
+    branches:
+      - feat/standard-edition
+    paths:
+      - .release-chunks/**
+      - .github/workflows/sync-source-package.yml
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/standard-edition
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Restore and verify source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .release-chunks/chunk-*.txt | tr -d '\n' | base64 -d > /tmp/source.tar.xz
+          tar -xJf /tmp/source.tar.xz
+          git rm -r .release-chunks .github/workflows/sync-source-package.yml
+          git add -A
+          actual="$(git write-tree)"
+          expected="cd621d08fac7fb5e89bcf10f05c454062b8fb087"
+          test "$actual" = "$expected"
+
+      - name: Commit verified source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat: table editor and DXF-based PDF export"
+          git push origin HEAD:feat/standard-edition
