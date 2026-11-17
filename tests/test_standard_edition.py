@@ -39,7 +39,7 @@ def module(module_id="M1", geometry_type=GeometryType.NORMAL, **extra):
 
 
 @pytest.mark.parametrize("geometry_type", list(GeometryType))
-def test_standard_edition_accept_three_existing_geometry_types(geometry_type):
+def test_standard_edition_accepts_three_existing_geometry_types(geometry_type):
     ensure_standard_project(Project(modules=[module(geometry_type=geometry_type)]))
 
 
@@ -54,7 +54,7 @@ def test_standard_edition_rejects_irregular_geometry_with_module_id(extra):
 
 
 def test_welded_diamond_type_survives_unified_input_normalization():
-    assert _normalize_row({"anchor_type": "焊鎥菱形"}, "anchors")["anchor_type"] == "焊接菱形"
+    assert _normalize_row({"anchor_type": "焊接菱形"}, "anchors")["anchor_type"] == "焊接菱形"
 
 
 def test_standard_normal_row_maps_length_expansion_and_thickness():
@@ -80,7 +80,7 @@ def test_standard_normal_row_maps_length_expansion_and_thickness():
 )
 def test_standard_taper_rows_map_big_small_and_type(taper_type, expected_side):
     values = StandardModuleValues(
-        "T1_uW100, 300, 280, 230, True, big_head_mm=289, small_head_mm=220, taper_type=taper_type
+        "T1", 300, 280, 230, True, big_head_mm=289, small_head_mm=220, taper_type=taper_type
     )
     built = build_standard_module(None, values)
 
@@ -101,7 +101,7 @@ def test_standard_taper_rejects_inverted_heads():
     values = StandardModuleValues(
         "T2", 300, 300, 230, True, big_head_mm=200, small_head_mm=220
     )
-    with pytest.raises(ValueError, match="大头必顥大于小头"):
+    with pytest.raises(ValueError, match="大头必须大于小头"):
         build_standard_module(None, values)
 
 
@@ -112,7 +112,7 @@ def test_standard_anchor_uses_fixed_spacing_and_only_diamond_keeps_depth():
         500,
         StandardAnchorValues(True, 80, 150, 3, AnchorType.DIAMOND, 60),
     )
-    assert diamond.layout_mode == LayoutMode.FIXED_SACING
+    assert diamond.layout_mode == LayoutMode.FIXED_SPACING
     assert diamond.edge_offset_mm == 80
     assert diamond.spacing_mm == 150
     assert diamond.count == 3
@@ -227,7 +227,7 @@ def test_standard_details_include_new_manufacturing_fields():
         None,
         StandardModuleValues(
             "A1", 300, 300, 330, True, 300, 200, GeometryType.SIDE_TAPER,
-            material="1350材杒", production_quantity=84, board_material="12厘夹板能",
+            material="1350板材", production_quantity=84, board_material="12厘夹板",
         ),
     )
     board = build_standard_board(None, "A1", True, "12厘夹板")
@@ -246,7 +246,7 @@ def test_standard_details_include_new_manufacturing_fields():
     assert "插针φ8" in text
     assert "嵌入深度 60mm" in text
     assert "数量：84 Pcs" in text
-    assert "25胶管，12厘夹板能" in text
+    assert "25胶管，12厘夹板" in text
 
 
 def test_no_anchor_views_include_expansion_face_marks():

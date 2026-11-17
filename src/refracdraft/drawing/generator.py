@@ -272,14 +272,14 @@ class DrawingGenerator:
 
         if module.board_face_outline:
             board_outline = parametric_outline(module.board_face_width_mm, module.board_face_height_mm,
-                                                module.board_face_outline)
+                                               module.board_face_outline)
         elif module.board_face_template_id == "rectangular":
             board_outline = rectangle(module.board_face_width_mm, module.board_face_height_mm)
         elif self.reference_library:
             source_outline = self.reference_library.board_outline(module.board_face_template_id)
             board_outline = scale_template(source_outline.points, module.board_face_width_mm, module.board_face_height_mm)
         else:
-            warnings.append(f"未加载参老 DXF;，夹板面模板 {module.board_face_template_id} 暂以矩形代替")
+            warnings.append(f"未加载参考 DXF，夹板面模板 {module.board_face_template_id} 暂以矩形代替")
             board_outline = rectangle(module.board_face_width_mm, module.board_face_height_mm)
 
         positions = _anchor_positions(
@@ -290,7 +290,7 @@ class DrawingGenerator:
         )
         for x, y in positions:
             if not point_in_outline(board_outline, (x, y)):
-                raise ValueError(f"{module.module_id}: 锚固件坐栅 ({x:g}, {y:g}) 位于夹板面轮廓之外")
+                raise ValueError(f"{module.module_id}: 锚固件坐标 ({x:g}, {y:g}) 位于夹板面轮廓之外")
         symbol_lines: list[Polyline] = []
         symbol_colors: list[int] = []
         symbol_lineweights: list[int] = []
@@ -347,7 +347,7 @@ class DrawingGenerator:
             for x, y in positions:
                 offset = round(module.board_face_height_mm - y, 3)
                 if 0 < offset < module.board_face_height_mm and offset not in seen_offsets:
-                    board_dims.append(Dimension(x, y), (x, module.board_face_height_mm),
+                    board_dims.append(Dimension((x, y), (x, module.board_face_height_mm),
                                                 f"{offset:g}", "vertical", -50))
                     seen_offsets.add(offset)
         board_note = "无夹板" if not board.exists else ""
@@ -395,3 +395,4 @@ class DrawingGenerator:
             page_number += 1
         warnings = tuple(w for drawing in drawings for w in drawing.warnings)
         return DrawingDocument(project.metadata.project_name, tuple(pages), warnings)
+

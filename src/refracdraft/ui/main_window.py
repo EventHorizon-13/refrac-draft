@@ -33,7 +33,7 @@ ANCHOR_COLUMNS = [
     "dimension_horizontal", "dimension_vertical", "source_note",
 ]
 MODULE_LABELS = ["模块编号", "模块名称", "结构类型", "几何类型", "正面宽度(mm)", "正面高度(mm)", "膨胀长度(mm)",
-                 "正面左高(mm)", "正面右高(mm)", #侧面长度(mm)", "侧面左高(mm)", "侧面右高(mm)",
+                 "正面左高(mm)", "正面右高(mm)", "侧面长度(mm)", "侧面左高(mm)", "侧面右高(mm)",
                  "夹板面宽(mm)", "夹板面高(mm)", "夹板面类型", "模块材质", "容重(kg/m³)", "生产数量", "备注"]
 BOARD_LABELS = ["模块编号", "有无夹板", "夹板材质", "夹板厚度(mm)", "开口模式", "自定义开口坐标(JSON)", "备注"]
 ANCHOR_LABELS = ["模块编号", "有无锚固件", "锚固件类型", "锚固件材质", "螺纹规格", "直径(mm)",
@@ -203,15 +203,15 @@ class MainWindow(QMainWindow):
         ):
             table = QTableWidget(0, len(columns))
             table.setHorizontalHeaderLabels(labels)
-            table.horizontalHeader().setStretchLastSection()
+            table.horizontalHeader().setStretchLastSection(True)
             table.setAlternatingRowColors(True)
             self.tables[key] = table
             tab = QWidget()
             tab_layout = QVBoxLayout(tab)
             tab_layout.addWidget(table)
             row_actions = QHBoxLayout()
-            add = QPushButton("添加行。")
-            remove = QPushButton("删除选中芝）")
+            add = QPushButton("添加行")
+            remove = QPushButton("删除选中行")
             add.clicked.connect(lambda _=False, t=table, k=key: self._add_row(t, k))
             remove.clicked.connect(lambda _=False, t=table: self._remove_row(t))
             row_actions.addWidget(add)
@@ -238,7 +238,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(right)
         splitter.setSizes([760, 740])
         self.setCentralWidget(splitter)
-        self.statusBar().showMessage("参数修改后点击「生成预览」更新图纸；不会自动实主重绘。")
+        self.statusBar().showMessage("参数修改后点击「生成预览」更新图纸；不会自动实时重绘。")
 
     def _add_empty_rows(self):
         self._add_row(self.tables["modules"], "modules", {
@@ -246,9 +246,9 @@ class MainWindow(QMainWindow):
             "board_face_width_mm": "300", "board_face_height_mm": "230", "board_face_template_id": "rectangular",
             "production_quantity": "1",
         })
-        self._add_row(self.tables["boards"], "boards", {"module_id": "M1", "exists": "是", "material": "9厘夹板能"})
+        self._add_row(self.tables["boards"], "boards", {"module_id": "M1", "exists": "是", "material": "9厘夹板"})
         self._add_row(self.tables["anchors"], "anchors", {
-            "module_id": "M1", "exists": "否", "anchor_type": "无", "count": "0", "layout_mode": "均丆",
+            "module_id": "M1", "exists": "否", "anchor_type": "无", "count": "0", "layout_mode": "均布",
         })
 
     def _add_row(self, table, key, values=None):
@@ -311,7 +311,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "打开失败", str(exc))
 
     def import_excel(self):
-        path, _ = QFileDialog.getOpenFileName(self, "导入 Excel", "", "Excel 工作簼 (*.xlsx *.xlsm)")
+        path, _ = QFileDialog.getOpenFileName(self, "导入 Excel", "", "Excel 工作簿 (*.xlsx *.xlsm)")
         if not path:
             return
         try:
@@ -349,7 +349,7 @@ class MainWindow(QMainWindow):
             self.page_spin.setValue(1)
             self.preview.show_page(self.drawing_document, 0)
             warnings = "\n".join(self.drawing_document.warnings)
-            self.statusBar().showMessage("图纅已生成 " + (f"；警告：{warnings}" if warnings else ""))
+            self.statusBar().showMessage("图纸已生成" + (f"；警告：{warnings}" if warnings else ""))
         except Exception as exc:
             QMessageBox.critical(self, "生成失败", str(exc))
 

@@ -114,7 +114,7 @@ def test_excel_import_supports_chinese_headers(tmp_path):
     board.append(["B2", "有", "9厘夹板", 9])
     anchor = wb.create_sheet("锚固件参数")
     anchor.append(["模块编号", "是否有锚固件", "锚固件类型", "锚固件材质", "螺纹规格", "直径", "锚固件长度", "锚固件数量", "布置方式", "锚固件坐标", "胶管规格"])
-    anchor.append(["B2", "有", "M型", "310", "M10", 8, 180, 1, "指定坐标", '[{"xmm":150,"y_mm":180}]', "32胶管"])
+    anchor.append(["B2", "有", "M型", "310", "M10", 8, 180, 1, "指定坐标", '[{"x_mm":150,"y_mm":180}]', "32胶管"])
     wb.save(path)
     project = import_project_xlsx(path)
     assert project.modules[0].geometry_type == GeometryType.FRONT_TAPER
@@ -169,7 +169,7 @@ def test_anchor_position_dimension_flags_are_explicit():
         board_face_width_mm=300, board_face_height_mm=230,
     )
     anchor = AnchorParameters(module_id="B3", anchor_type=AnchorType.QUICK_INSERT, count=1,
-                              positions=[{"xmm":150,"y_mm":180}], dimension_vertical=True)
+                              positions=[{"x_mm":150,"y_mm":180}], dimension_vertical=True)
     drawing = DrawingGenerator(ReferenceLibrary(REF_DXF) if REF_DXF.exists() else None).generate(Project(modules=[module],anchors=[anchor])).pages[0].modules[0].drawing
     labels = [d.label for d in drawing.board_view.dimensions]
     assert "50" in labels
