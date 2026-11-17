@@ -1,0 +1,49 @@
+name: Repair connector-corrupted source files
+
+on:
+  push:
+    branches:
+      - feat/standard-edition
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.ref == 'refs/heads/feat/standard-edition'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/standard-edition
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Extract verified source payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .ci/fix-source-files.tar.zst
+          tar --zstd -xf .ci/fix-source-files.tar.zst -C .
+
+      - name: Verify source blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object src/refracdraft/drawing/generator.py)" = "b736e34f60b519259bdb90142e576f712d0a2271"
+          test "$(git hash-object src/refracdraft/ui/main_window.py)" = "6befd8a37c023ca2897364b65f70e9fbd274cbe3"
+          test "$(git hash-object tests/test_core.py)" = "085c1a7fbc6c2191addc1b65514cff08c9893b22"
+          test "$(git hash-object tests/test_standard_edition.py)" = "8d9528071f2928d1561d7d958e96949eab425ddf"
+
+      - name: Commit repaired files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/refracdraft/drawing/generator.py src/refracdraft/ui/main_window.py tests/test_core.py tests/test_standard_edition.py
+          git rm .ci/fix-source-files.tar.zst .github/workflows/repair-remote.yml
+          git commit -m "fix: restore connector-corrupted source files"
+          git push origin HEAD:feat/standard-edition
