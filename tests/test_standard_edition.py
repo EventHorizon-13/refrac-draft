@@ -259,7 +259,7 @@ def test_no_anchor_views_include_expansion_face_marks():
     project = Project(modules=[module], boards=[board], anchors=[anchor])
     document = DrawingGenerator(ReferenceLibrary("references/示例.dxf")).generate(project)
     drawing = document.pages[0].modules[0].drawing
-    assert len(drawing.front_view.internal_lines) == 4
+    assert len(drawing.front_view.internal_lines) == 6
     assert len(drawing.side_view.internal_lines) == 4
 
 
@@ -279,5 +279,26 @@ def test_diamond_side_anchor_uses_source_position_scale_and_rotation():
     document = DrawingGenerator(ReferenceLibrary("references/示例.dxf")).generate(project)
     side_view = document.pages[0].modules[0].drawing.side_view
     assert side_view is not None
-    assert side_view.anchor_points[0][0] == pytest.approx(330 * 139.3939 / 300)
+    assert side_view.anchor_points[0][0] == pytest.approx(50 + 21 * 0.916667 / 2)
+
+
+def test_side_taper_front_has_small_head_contour_lines():
+    module = build_standard_module(
+        None,
+        StandardModuleValues("A1", 300, 300, 330, True, 300, 200, GeometryType.SIDE_TAPER),
+    )
+    board = build_standard_board(None, "A1", True)
+    anchor = build_standard_anchor(
+        None,
+        "A1",
+        300,
+        StandardAnchorValues(True, 150, 300, 1, AnchorType.DIAMOND, 50),
+    )
+    project = Project(modules=[module], boards=[board], anchors=[anchor])
+    document = DrawingGenerator(ReferenceLibrary("references/示例.dxf")).generate(project)
+    lines = document.pages[0].modules[0].drawing.front_view.internal_lines
+    assert len(lines) == 2
+    ys = sorted({point[1] for line in lines for point in line.points})
+    assert ys == pytest.approx([50.0, 250.0])
+    assert {point[0] for line in lines for point in line.points} == {0.0, 300.0}
 

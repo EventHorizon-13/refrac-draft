@@ -28,7 +28,6 @@ BOARD_ANCHOR_TOP_OFFSET_MM = {
 
 SIDE_ANCHOR_X_RATIO = {
     AnchorType.M_SHAPE: 175.0 / 300.0,
-    AnchorType.DIAMOND: 139.3939 / 300.0,
 }
 
 
@@ -68,6 +67,17 @@ def _anchor_positions(
 
 def _translate_symbol(symbol: tuple[Polyline, ...], x: float, y: float) -> tuple[Polyline, ...]:
     return tuple(line.transformed(tx=x, ty=y) for line in symbol)
+
+
+def _small_head_contour_lines(width: float, overall_height: float, small_height: float) -> tuple[Polyline, ...]:
+    if small_height <= 0 or small_height >= overall_height:
+        return ()
+    bottom = (overall_height - small_height) / 2.0
+    top = (overall_height + small_height) / 2.0
+    return (
+        Polyline(((0.0, bottom), (width, bottom)), closed=False),
+        Polyline(((0.0, top), (width, top)), closed=False),
+    )
 
 
 def _details(module, board, anchor) -> tuple[str, ...]:
@@ -155,7 +165,15 @@ class DrawingGenerator:
         front_symbols: list[Polyline] = []
         front_symbol_colors: list[int] = []
         front_symbol_lineweights: list[int] = []
-        front_internal: tuple[Polyline, ...] = ()
+        front_internal_lines: list[Polyline] = []
+        if module.geometry_type == GeometryType.SIDE_TAPER:
+            small_head = min(
+                module.side_left_height_mm or module.front_height_mm,
+                module.side_right_height_mm or module.front_height_mm,
+            )
+            front_internal_lines.extend(
+                _small_head_contour_lines(module.front_width_mm, module.front_height_mm, small_head)
+            )
         positions = _anchor_positions(anchor, module.board_face_width_mm, module.board_face_height_mm)
         if module.front_outline:
             for x, _y in positions:
@@ -175,8 +193,11 @@ class DrawingGenerator:
                     front_symbol_lineweights.extend(profile_lineweights)
             except KeyError as exc:
                 warnings.append(str(exc))
-        elif not positions and self.reference_library:
-            front_internal = self.reference_library.stacked_front_lines(module.front_width_mm, module.front_height_mm)
+        if not positions and self.reference_library:
+            front_internal_lines.extend(
+                self.reference_library.stacked_front_lines(module.front_width_mm, module.front_height_mm)
+            )
+        front_internal = tuple(front_internal_lines)
         front_points = tuple((x * module.front_width_mm / module.board_face_width_mm,
                               module.front_height_mm / 2.0) for x, _y in positions) if positions else ()
         front_view = ViewDrawing(
@@ -217,7 +238,14 @@ class DrawingGenerator:
                     profile_colors = side_profile.colors if len(side_profile.colors) == len(side_profile.polylines) else (7,) * len(side_profile.polylines)
                     profile_lineweights = side_profile.lineweights if len(side_profile.lineweights) == len(side_profile.polylines) else (25,) * len(side_profile.polylines)
                     side_width = module.side_length_mm or module.board_face_width_mm
-                    sx = side_width * SIDE_ANCHOR_X_RATIO.get(anchor.anchor_type, 0.5)
+                    if anchor.anchor_type == AnchorType.DIAMOND:
+                        symbol_xs = [point[0] for line in side_profile.polylines for point in line.points]
+                        half_width = (max(symbol_xs) - min(symbol_xs)) / 2.0 if symbol_xs else 0.0
+                        sx = (anchor.embedment_depth_mm or 50.0) + half_width
+                        if sx + half_width > side_width:
+                            raise ValueError(f"{module.module_id}: 菱形锚固件嵌入深度超出侧面宽度")
+                    else:
+                        sx = side_width * SIDE_ANCHOR_X_RATIO.get(anchor.anchor_type, 0.5)
                     side_symbols.extend(_translate_symbol(side_profile.polylines, sx, side_overall_h / 2.0))
                     side_symbol_colors.extend(profile_colors)
                     side_symbol_lineweights.extend(profile_lineweights)
