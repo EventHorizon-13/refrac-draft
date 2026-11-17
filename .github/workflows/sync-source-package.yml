@@ -53,7 +53,7 @@ jobs:
             src/refracdraft/ui/main_window.py \
             src/refracdraft/ui/standard_window.py \
             tests/test_standard_edition.py; do
-            sha="$(git hash-object "$path")"
+            sha="$(git hash-object -w "$path")"
             GIT_INDEX_FILE="$index" git update-index --add --cacheinfo "100644,$sha,$path"
           done
           actual="$(GIT_INDEX_FILE="$index" git write-tree)"
