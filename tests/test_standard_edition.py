@@ -1,6 +1,8 @@
 import pytest
+import ezdxf
 
 from refracdraft.drawing.generator import DrawingGenerator, _anchor_positions, _details
+from refracdraft.drawing.layout import PANEL_INNER_MARGIN_MM
 from refracdraft.domain.models import (
     AnchorParameters,
     AnchorType,
@@ -12,6 +14,7 @@ from refracdraft.domain.models import (
 )
 from refracdraft.importers.excel import _normalize_row
 from refracdraft.reference.library import ReferenceLibrary
+from refracdraft.exporters.dxf import export_dxf
 from refracdraft.standard import (
     StandardAnchorValues,
     StandardModuleValues,
@@ -85,7 +88,7 @@ def test_standard_taper_rows_map_big_small_and_type(taper_type, expected_side):
     built = build_standard_module(None, values)
 
     assert built.geometry_type == taper_type
-    assert built.expansion_length_mm == 280
+    assert built.expansion_length_mm == 289
     assert built.board_face_width_mm == 300
     assert built.board_face_height_mm == 230
     assert built.side_length_mm == expected_side
@@ -117,6 +120,7 @@ def test_standard_anchor_uses_fixed_spacing_and_only_diamond_keeps_depth():
     assert diamond.spacing_mm == 150
     assert diamond.count == 3
     assert diamond.embedment_depth_mm == 60
+    assert diamond.length_mm == 230
 
     m_shape = build_standard_anchor(
         diamond,
@@ -155,13 +159,14 @@ def test_standard_values_read_back_from_models():
     module_values = standard_module_values(module_model, board_model)
     anchor_values = standard_anchor_values(anchor_model)
     assert module_values.length_mm == 300
-    assert module_values.expansion_length_mm == 300
+    assert module_values.expansion_length_mm == 289
     assert module_values.thickness_mm == 230
     assert module_values.big_head_mm == 289
     assert module_values.small_head_mm == 220
     assert anchor_values.position_mm == 150
     assert anchor_values.count == 1
     assert anchor_values.embedment_depth_mm == 50
+    assert anchor_values.length_mm == 230
 
 
 def test_standard_excel_aliases_accept_dynamic_block_terms():
@@ -249,6 +254,25 @@ def test_standard_details_include_new_manufacturing_fields():
     assert "25胶管，12厘夹板" in text
 
 
+def test_standard_anchor_length_round_trip_and_validation():
+    anchor = build_standard_anchor(
+        None,
+        "L1",
+        300,
+        StandardAnchorValues(True, 150, 300, 1, AnchorType.M_SHAPE, length_mm=275),
+    )
+    assert anchor.length_mm == 275
+    assert standard_anchor_values(anchor).length_mm == 275
+
+    with pytest.raises(ValueError, match="锚固件长度"):
+        build_standard_anchor(
+            None,
+            "L2",
+            300,
+            StandardAnchorValues(True, 150, 300, 1, AnchorType.M_SHAPE, length_mm=0),
+        )
+
+
 def test_no_anchor_views_include_expansion_face_marks():
     module = build_standard_module(
         None,
@@ -325,7 +349,8 @@ def test_m_shape_side_anchor_uses_expansion_face_profile():
         StandardAnchorValues(True, 150, 300, 1, AnchorType.M_SHAPE),
     )
     project = Project(modules=[module], boards=[board], anchors=[anchor])
-    document = DrawingGenerator(ReferenceLibrary("references/示例.dxf")).generate(project)
+    library = ReferenceLibrary("references/示例.dxf")
+    document = DrawingGenerator(library).generate(project)
     side_view = document.pages[0].modules[0].drawing.side_view
     assert side_view is not None
     symbol_points = [point for line in side_view.anchor_symbols for point in line.points]
@@ -336,4 +361,72 @@ def test_m_shape_side_anchor_uses_expansion_face_profile():
     assert side_view.anchor_points == ()
     assert set(side_view.anchor_symbol_colors) == {5}
     assert "CENTER2" in side_view.anchor_symbol_linetypes
+
+    source = library.symbol_from_block("*U324")
+    expected = tuple(line.transformed(sx=-1.0) for line in source.polylines)
+    actual = library.side_anchor_symbol("M型").polylines
+    assert len(actual) == len(expected)
+    for actual_line, expected_line in zip(actual, expected):
+        actual_coords = tuple(value for point in actual_line.points for value in point)
+        expected_coords = tuple(value for point in expected_line.points for value in point)
+        assert actual_coords == pytest.approx(expected_coords)
+
+
+def test_standard_anchor_positions_are_dimensioned_on_board_face():
+    module = build_standard_module(None, StandardModuleValues("D2", 500, 300, 230))
+    board = build_standard_board(None, "D2", True)
+    anchor = build_standard_anchor(
+        None,
+        "D2",
+        500,
+        StandardAnchorValues(True, 80, 150, 3, AnchorType.DIAMOND, 50),
+    )
+    project = Project(modules=[module], boards=[board], anchors=[anchor])
+    document = DrawingGenerator(ReferenceLibrary("references/示例.dxf")).generate(project)
+    labels = [dimension.label for dimension in document.pages[0].modules[0].drawing.board_view.dimensions]
+    assert "80" in labels
+    assert "150" in labels
+    assert "120" in labels
+    assert "嵌入深度 50" in labels
+
+
+def test_automatic_layout_keeps_panel_gaps_and_paginates():
+    modules = [
+        build_standard_module(None, StandardModuleValues(f"W{i}", 600, 300, 230))
+        for i in range(1, 7)
+    ]
+    boards = [build_standard_board(None, item.module_id, True) for item in modules]
+    anchors = [build_standard_anchor(None, item.module_id, 600, StandardAnchorValues(False)) for item in modules]
+    document = DrawingGenerator().generate(Project(modules=modules, boards=boards, anchors=anchors))
+
+    assert len(document.pages) > 1
+    for page in document.pages:
+        for placed in page.modules:
+            assert placed.content_x_mm == pytest.approx(placed.x_mm + PANEL_INNER_MARGIN_MM)
+        for left, right in zip(page.modules, page.modules[1:]):
+            assert left.x_mm + left.panel_width_mm <= right.x_mm
+
+
+def test_dxf_uses_reference_dimension_style_and_big_font(tmp_path):
+    module = build_standard_module(None, StandardModuleValues("S1", 300, 300, 230))
+    board = build_standard_board(None, "S1", True)
+    anchor = build_standard_anchor(
+        None,
+        "S1",
+        300,
+        StandardAnchorValues(True, 150, 300, 1, AnchorType.DIAMOND, 50),
+    )
+    document = DrawingGenerator().generate(Project(modules=[module], boards=[board], anchors=[anchor]))
+    output = export_dxf(document, tmp_path / "standard.dxf", "references/示例.dxf")
+    exported = ezdxf.readfile(output)
+
+    dimensions = [entity for entity in exported.modelspace() if entity.dxftype() == "DIMENSION"]
+    assert dimensions
+    assert {dimension.dxf.dimstyle for dimension in dimensions} == {"_10"}
+    assert {entity.dxf.style for entity in exported.modelspace().query("TEXT MTEXT")} == {"大字体"}
+    assert exported.dimstyles.get("_10").dxf.dimtxsty == "大字体"
+    for style_name in ("工程字", "大字体"):
+        style = exported.styles.get(style_name)
+        assert style.dxf.font.lower() == "gbenor.shx"
+        assert style.dxf.bigfont.lower() == "gbcbig.shx"
 

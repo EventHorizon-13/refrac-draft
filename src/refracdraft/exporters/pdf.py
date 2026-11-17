@@ -11,6 +11,14 @@ from reportlab.pdfgen import canvas
 import fitz
 import os
 
+from refracdraft.drawing.layout import (
+    BOARD_VIEW_BOTTOM_MM,
+    SIDE_VIEW_GAP_MM,
+    TOP_VIEW_BOTTOM_MM,
+    VIEW_SCALE,
+    detail_baseline,
+    outline_width,
+)
 from refracdraft.drawing.model import DrawingDocument, ModuleDrawing, ViewDrawing
 
 PAGE_W, PAGE_H = landscape(A4)
@@ -105,7 +113,7 @@ def _text(c: canvas.Canvas, text: str, x: float, y: float, size: float = 2.5,
 
 
 def _arrowhead(c: canvas.Canvas, x: float, y: float, ux: float, uy: float, color=cyan) -> None:
-    length, half_width = 1.6, 0.25
+    length, half_width = 0.8, 0.12
     base_x, base_y = x - ux * length, y - uy * length
     px, py = -uy * half_width, ux * half_width
     path = c.beginPath()
@@ -235,14 +243,13 @@ def _draw_view(c: canvas.Canvas, view: ViewDrawing, origin: tuple[float, float],
     _text(c, label, ox + width * scale / 2.0, oy + label_y * scale - 1.0, 4.0, black, "center")
 
 
-def _draw_page_frame(c: canvas.Canvas, column_count: int) -> None:
+def _draw_page_frame(c: canvas.Canvas, page) -> None:
     c.setStrokeColor(black)
     c.setLineWidth(0.24 * MM)
     c.rect(*_xy(7, 7), 283 * MM, 196 * MM, stroke=1, fill=0)
     # In the source PDFs, panel dividers stop at the top of the title block/footer band.
-    for i in range(1, column_count):
-        x = 7 + i * (283.0 / column_count)
-        _line(c, x, 37, x, 203, black, 0.24)
+    for placed in page.modules[1:]:
+        _line(c, placed.x_mm, 37, placed.x_mm, 203, black, 0.24)
 
 
 def _overlay_reference_titleblock(output_path: Path, reference_pdf: str | Path | None) -> None:
@@ -312,38 +319,44 @@ def export_pdf(document: DrawingDocument, output_path: str | Path,
     c.setTitle(document.project_name)
 
     for page in document.pages:
-        _draw_page_frame(c, page.column_count)
+        _draw_page_frame(c, page)
         for placed in page.modules:
             drawing = placed.drawing
-            px, panel_w = placed.x_mm, placed.panel_width_mm
-            scale = 0.0992
+            px = placed.content_x_mm
+            scale = VIEW_SCALE
             if drawing.side_view:
-                front_w = (drawing.front_view.outline.bounds[2] - drawing.front_view.outline.bounds[0]) * scale
-                side_w = (drawing.side_view.outline.bounds[2] - drawing.side_view.outline.bounds[0]) * scale
-                gap = 18.0
-                total = front_w + side_w + gap
-                x0 = px + max(3.0, (panel_w - total) / 2.0)
-                front_y = 150.0
-                _draw_view(c, drawing.front_view, (x0, front_y), drawing.module_id, scale)
-                _draw_view(c, drawing.side_view, (x0 + front_w + gap, front_y), drawing.module_id, scale)
+                front_w = outline_width(drawing.front_view)
+                front_y = TOP_VIEW_BOTTOM_MM
+                _draw_view(c, drawing.front_view, (px, front_y), drawing.module_id, scale)
+                _draw_view(
+                    c,
+                    drawing.side_view,
+                    (px + front_w + SIDE_VIEW_GAP_MM, front_y),
+                    drawing.module_id,
+                    scale,
+                )
             else:
-                front_w = (drawing.front_view.outline.bounds[2] - drawing.front_view.outline.bounds[0]) * scale
-                x_adjust = -2.43 if drawing.front_view.anchor_marker_style == "cross" else -5.57
-                x0 = px + (panel_w - front_w) / 2.0 + x_adjust
-                center_y = 163.2655555556 if drawing.front_view.anchor_marker_style == "cross" else 161.2123888889
-                front_y = center_y - (drawing.front_view.outline.bounds[3] - drawing.front_view.outline.bounds[1]) * scale / 2.0
-                _draw_view(c, drawing.front_view, (x0, front_y), drawing.module_id, scale)
-            board_w = (drawing.board_view.outline.bounds[2] - drawing.board_view.outline.bounds[0]) * scale
-            board_x = x0
-            board_y = 106.66 if drawing.front_view.anchor_marker_style == "cross" else 106.17
-            _draw_view(c, drawing.board_view, (board_x, board_y), drawing.module_id, scale, board_label=True)
-            detail_baselines = (82.90, 76.20, 69.55, 62.79, 56.36, 49.71, 44.15)
+                _draw_view(
+                    c,
+                    drawing.front_view,
+                    (px, TOP_VIEW_BOTTOM_MM),
+                    drawing.module_id,
+                    scale,
+                )
+            _draw_view(
+                c,
+                drawing.board_view,
+                (px, BOARD_VIEW_BOTTOM_MM),
+                drawing.module_id,
+                scale,
+                board_label=True,
+            )
             for line_no, line in enumerate(drawing.details):
-                baseline = detail_baselines[line_no] if line_no < len(detail_baselines) else 44.15 - (line_no - 6) * 5.2
+                baseline = detail_baseline(line_no)
                 if line_no < 6:
-                    _text(c, line, px + 9.7, baseline, 5.67, black, horizontal_scale=0.67)
+                    _text(c, line, px, baseline, 5.67, black, horizontal_scale=0.67)
                 else:
-                    _text(c, line, px + 9.7, baseline, 4.2, black, horizontal_scale=0.97)
+                    _text(c, line, px, baseline, 4.2, black, horizontal_scale=0.97)
         c.showPage()
     c.save()
     _overlay_reference_titleblock(output_path, reference_pdf)

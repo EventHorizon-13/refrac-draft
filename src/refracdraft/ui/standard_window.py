@@ -60,6 +60,7 @@ SPACING_PRESETS = (
     "400", "500",
 )
 EMBEDMENT_PRESETS = ("25", "30", "40", "50", "60", "70", "80", "100", "120")
+ANCHOR_LENGTH_PRESETS = ("180", "200", "220", "230", "250", "280", "300", "330", "350", "400")
 MODULE_MATERIALS = ("1260材质", "1350板材", "1430材质", "1260", "1350", "1430")
 BOARD_TYPES = ("5厘夹板", "9厘夹板", "12厘夹板", "15厘夹板", "18厘夹板")
 ANCHOR_MATERIALS = ("201", "304", "309", "310")
@@ -204,6 +205,7 @@ class ModuleRowWidget(QFrame):
         for label, anchor_type in ANCHOR_TYPES:
             self.anchor_type_combo.addItem(label, anchor_type)
         self.anchor_type_combo.setFixedWidth(92)
+        self.anchor_length_combo = _number_combo(ANCHOR_LENGTH_PRESETS, "230")
         self.embedment_combo = _number_combo(EMBEDMENT_PRESETS, "50")
         self.anchor_material_combo = _text_combo(ANCHOR_MATERIALS, "310", 76)
         self.thread_combo = _text_combo(THREAD_SPECS, "M10", 70)
@@ -242,6 +244,7 @@ class ModuleRowWidget(QFrame):
         anchor_layout.addWidget(_field("间距 (mm)", self.spacing_combo))
         anchor_layout.addWidget(_field("锚固数量", self.count_spin, 74))
         anchor_layout.addWidget(_field("锚固件类型", self.anchor_type_combo, 100))
+        anchor_layout.addWidget(_field("锚固件长度 (mm)", self.anchor_length_combo, 104))
         anchor_layout.addWidget(_field("锚固件材质", self.anchor_material_combo, 82))
         anchor_layout.addWidget(_field("螺栓 M", self.thread_combo))
         anchor_layout.addWidget(_field("插针 φ (mm)", self.pin_diameter_combo))
@@ -291,6 +294,7 @@ class ModuleRowWidget(QFrame):
         self.anchor_type_combo.setCurrentIndex(max(0, anchor_index))
         if anchor_values.embedment_depth_mm is not None:
             self.embedment_combo.setCurrentText(f"{anchor_values.embedment_depth_mm:g}")
+        self.anchor_length_combo.setCurrentText(f"{anchor_values.length_mm or 230.0:g}")
         self.anchor_material_combo.setCurrentText(anchor_values.material)
         self.thread_combo.setCurrentText(anchor_values.thread_spec)
         if anchor_values.pin_diameter_mm is not None:
@@ -303,12 +307,12 @@ class ModuleRowWidget(QFrame):
             self.length_combo,
             self.expansion_combo,
             self.thickness_combo,
-            self.big_combo,
             self.small_combo,
             self.material_combo,
             self.position_combo,
             self.spacing_combo,
             self.embedment_combo,
+            self.anchor_length_combo,
             self.board_type_combo,
             self.anchor_material_combo,
             self.thread_combo,
@@ -316,6 +320,7 @@ class ModuleRowWidget(QFrame):
             self.hose_combo,
         ):
             combo.currentTextChanged.connect(self._emit_changed)
+        self.big_combo.currentTextChanged.connect(self._big_head_changed)
         self.taper_check.toggled.connect(self._taper_changed)
         self.anchor_check.toggled.connect(self._anchor_changed)
         self.taper_type_combo.currentIndexChanged.connect(self._emit_changed)
@@ -332,6 +337,11 @@ class ModuleRowWidget(QFrame):
         self._update_visibility()
         self._emit_changed()
 
+    def _big_head_changed(self, _text: str) -> None:
+        if self.taper_check.isChecked():
+            self._sync_expansion_length()
+        self._emit_changed()
+
     def _board_changed(self, _checked: bool) -> None:
         self._update_visibility()
         self._emit_changed()
@@ -346,11 +356,20 @@ class ModuleRowWidget(QFrame):
 
     def _update_visibility(self) -> None:
         self.taper_fields.setVisible(self.taper_check.isChecked())
+        self._sync_expansion_length()
         self.board_type_field.setVisible(self.board_check.isChecked())
         anchor_visible = self.anchor_check.isChecked()
         self.anchor_fields.setVisible(anchor_visible)
         is_diamond = self.anchor_type_combo.currentData() == AnchorType.DIAMOND
         self.embedment_field.setVisible(anchor_visible and is_diamond)
+
+    def _sync_expansion_length(self) -> None:
+        taper_enabled = self.taper_check.isChecked()
+        if taper_enabled:
+            self.expansion_combo.blockSignals(True)
+            self.expansion_combo.setCurrentText(self.big_combo.currentText().strip())
+            self.expansion_combo.blockSignals(False)
+        self.expansion_combo.setEnabled(not taper_enabled)
 
     def set_active(self, active: bool) -> None:
         self.setProperty("active", active)
@@ -416,6 +435,7 @@ class ModuleRowWidget(QFrame):
             thread_spec=self.thread_combo.currentText().strip(),
             pin_diameter_mm=pin_diameter,
             hose_spec=self.hose_combo.currentText().strip(),
+            length_mm=_number(self.anchor_length_combo.currentText(), "锚固件长度", module_id),
         )
 
     def collect(self) -> tuple[ModuleParameters, BoardParameters, AnchorParameters]:

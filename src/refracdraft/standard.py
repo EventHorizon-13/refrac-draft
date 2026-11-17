@@ -42,6 +42,7 @@ class StandardAnchorValues:
     thread_spec: str = "M10"
     pin_diameter_mm: float | None = 8.0
     hose_spec: str = "32胶管"
+    length_mm: float | None = 230.0
 
 
 def _positive(value: float | None, label: str, module_id: str) -> float:
@@ -104,9 +105,12 @@ def build_standard_module(
         small = _positive(values.small_head_mm, "小头", module_id)
         if big <= small:
             raise ValueError(f"{module_id}: 大头必须大于小头")
+        # A tapered standard module has one expansion length: it always follows the big head.
+        expansion = big
         if values.taper_type == GeometryType.FRONT_TAPER:
             data.update(
                 geometry_type=GeometryType.FRONT_TAPER,
+                expansion_length_mm=expansion,
                 front_height_mm=big,
                 front_left_height_mm=big,
                 front_right_height_mm=small,
@@ -117,6 +121,7 @@ def build_standard_module(
         elif values.taper_type == GeometryType.SIDE_TAPER:
             data.update(
                 geometry_type=GeometryType.SIDE_TAPER,
+                expansion_length_mm=expansion,
                 front_height_mm=expansion,
                 front_left_height_mm=None,
                 front_right_height_mm=None,
@@ -159,8 +164,9 @@ def build_standard_anchor(
         material=values.material.strip(),
         thread_spec=values.thread_spec.strip(),
         diameter_mm=values.pin_diameter_mm,
+        length_mm=None,
         hose_spec=values.hose_spec.strip(),
-        dimension_horizontal=False,
+        dimension_horizontal=True,
         dimension_vertical=False,
     )
     if not values.enabled:
@@ -171,6 +177,7 @@ def build_standard_anchor(
             layout_mode=LayoutMode.FIXED_SPACING,
             positions=[],
             embedment_depth_mm=None,
+            length_mm=None,
         )
         return AnchorParameters.model_validate(data)
 
@@ -178,6 +185,7 @@ def build_standard_anchor(
         raise ValueError(f"{module_id}: 已勾选锚固件，必须选择锚固件类型")
     position = _positive(values.position_mm, "锚固件位置", module_id)
     spacing = _positive(values.spacing_mm, "锚固件间距", module_id)
+    length = _positive(230.0 if values.length_mm is None else values.length_mm, "锚固件长度", module_id)
     count = int(values.count)
     if count < 1:
         raise ValueError(f"{module_id}: 锚固件数量至少为 1")
@@ -196,6 +204,7 @@ def build_standard_anchor(
         edge_offset_mm=position,
         spacing_mm=spacing,
         embedment_depth_mm=embedment,
+        length_mm=length,
     )
     return AnchorParameters.model_validate(data)
 
@@ -218,7 +227,7 @@ def standard_module_values(
     return StandardModuleValues(
         module_id=module.module_id,
         length_mm=module.front_width_mm,
-        expansion_length_mm=module.expansion_length_mm or module.front_height_mm,
+        expansion_length_mm=(big if taper else module.expansion_length_mm or module.front_height_mm),
         thickness_mm=module.board_face_height_mm,
         taper_enabled=taper,
         big_head_mm=big,
@@ -254,6 +263,7 @@ def standard_anchor_values(anchor: AnchorParameters) -> StandardAnchorValues:
         thread_spec=anchor.thread_spec,
         pin_diameter_mm=anchor.diameter_mm if anchor.diameter_mm is not None else 8.0,
         hose_spec=anchor.hose_spec or _default_hose_spec(anchor.thread_spec),
+        length_mm=anchor.length_mm or 230.0,
     )
 
 

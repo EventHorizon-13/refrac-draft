@@ -10,6 +10,13 @@ from refracdraft.domain.models import (
     Project,
 )
 from refracdraft.drawing.model import Dimension, DrawingDocument, ModuleDrawing, SheetPage, PlacedModule, ViewDrawing
+from refracdraft.drawing.layout import (
+    PAGE_CONTENT_WIDTH_MM,
+    PAGE_LEFT_MM,
+    PANEL_GAP_MM,
+    PANEL_INNER_MARGIN_MM,
+    module_required_width,
+)
 from refracdraft.geometry.primitives import Polyline, equal_anchor_positions, module_front_outline, module_side_outline, parametric_outline, point_in_outline, rectangle, scale_template
 from refracdraft.reference.library import ReferenceLibrary
 
@@ -350,6 +357,13 @@ class DrawingGenerator:
                     board_dims.append(Dimension((x, y), (x, module.board_face_height_mm),
                                                 f"{offset:g}", "vertical", -50))
                     seen_offsets.add(offset)
+        if anchor.anchor_type == AnchorType.DIAMOND and anchor.embedment_depth_mm and positions:
+            embed_x, embed_y = positions[0]
+            depth = anchor.embedment_depth_mm
+            embed_end_y = embed_y + depth if embed_y + depth <= module.board_face_height_mm else embed_y - depth
+            board_dims.append(
+                Dimension((embed_x, embed_y), (embed_x, embed_end_y), f"嵌入深度 {depth:g}", "vertical", 80)
+            )
         board_note = "无夹板" if not board.exists else ""
         # The source board-face blocks already contain their own center marks and end marks.
         # Do not add a second marker at the insertion point (which sits on the board edge).
@@ -368,31 +382,42 @@ class DrawingGenerator:
     def generate(self, project: Project) -> DrawingDocument:
         drawings = [self.build_module(project, module) for module in project.modules]
         pages: list[SheetPage] = []
-        index = 0
-        page_number = 1
-        available_width = 297.0 - 14.0
-        while index < len(drawings):
-            remaining = drawings[index:]
-            candidate4 = remaining[:4]
-            widths = [d.front_view.outline.bounds[2] - d.front_view.outline.bounds[0] for d in candidate4]
-            # This packing rule mirrors the supplied four-page example: 4 standard-width
-            # modules, 3 when an oversized module (e.g. B6/B7) enters the next group.
-            has_side_view = any(d.side_view is not None for d in candidate4)
-            if len(candidate4) == 4 and max(widths, default=0) <= 650 and not has_side_view:
-                count = 4
-            elif len(remaining) >= 3:
-                count = 3
+        groups: list[list[ModuleDrawing]] = []
+        current: list[ModuleDrawing] = []
+        used_width = 0.0
+        for drawing in drawings:
+            required = module_required_width(drawing)
+            candidate_width = used_width + (PANEL_GAP_MM if current else 0.0) + required
+            if current and candidate_width > PAGE_CONTENT_WIDTH_MM:
+                groups.append(current)
+                current = [drawing]
+                used_width = required
             else:
-                count = len(remaining)
-            group = drawings[index:index + count]
-            panel_width = available_width / count
-            placed = tuple(
-                PlacedModule(drawing=d, x_mm=7.0 + i * panel_width, panel_width_mm=panel_width, panel_index=i)
-                for i, d in enumerate(group)
-            )
-            pages.append(SheetPage(page_number, placed, count))
-            index += count
-            page_number += 1
+                current.append(drawing)
+                used_width = candidate_width
+        if current:
+            groups.append(current)
+
+        for page_number, group in enumerate(groups, start=1):
+            required_widths = [module_required_width(drawing) for drawing in group]
+            gaps = PANEL_GAP_MM * max(0, len(group) - 1)
+            extra_width = max(0.0, PAGE_CONTENT_WIDTH_MM - gaps - sum(required_widths))
+            extra_each = extra_width / len(group) if group else 0.0
+            placed: list[PlacedModule] = []
+            panel_x = PAGE_LEFT_MM
+            for panel_index, (drawing, required) in enumerate(zip(group, required_widths)):
+                panel_width = required + extra_each
+                placed.append(
+                    PlacedModule(
+                        drawing=drawing,
+                        x_mm=panel_x,
+                        panel_width_mm=panel_width,
+                        panel_index=panel_index,
+                        content_x_mm=panel_x + PANEL_INNER_MARGIN_MM,
+                    )
+                )
+                panel_x += panel_width + PANEL_GAP_MM
+            pages.append(SheetPage(page_number, tuple(placed), len(group)))
         warnings = tuple(w for drawing in drawings for w in drawing.warnings)
         return DrawingDocument(project.metadata.project_name, tuple(pages), warnings)
 

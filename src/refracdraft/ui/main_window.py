@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QColor, QBrush, QPen, QPainter
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QAction, QColor, QBrush, QPen, QPainter, QPalette
 from PySide6.QtWidgets import (
     QFileDialog, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QMainWindow,
     QMessageBox, QPushButton, QSpinBox, QSplitter, QTabWidget, QTableWidget,
@@ -13,6 +13,14 @@ from PySide6.QtWidgets import (
 
 from refracdraft.domain.models import Project
 from refracdraft.drawing.generator import DrawingGenerator
+from refracdraft.drawing.layout import (
+    BOARD_VIEW_BOTTOM_MM,
+    SIDE_VIEW_GAP_MM,
+    TOP_VIEW_BOTTOM_MM,
+    VIEW_SCALE,
+    detail_baseline,
+    outline_width,
+)
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import export_pdf
 from refracdraft.importers.excel import import_project_xlsx
@@ -46,8 +54,16 @@ class DrawingPreview(QGraphicsView):
         super().__init__(parent)
         self.setScene(QGraphicsScene(self))
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setBackgroundBrush(QBrush(QColor("#f2f3f5")))
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self._apply_theme_background()
+
+    def _apply_theme_background(self) -> None:
+        self.setBackgroundBrush(self.palette().brush(QPalette.ColorRole.Window))
+
+    def changeEvent(self, event) -> None:
+        if event.type() == QEvent.Type.PaletteChange:
+            self._apply_theme_background()
+        super().changeEvent(event)
 
     def show_page(self, document, page_index: int = 0):
         scene = self.scene()
@@ -56,32 +72,34 @@ class DrawingPreview(QGraphicsView):
             return
         page = document.pages[max(0, min(page_index, len(document.pages) - 1))]
         scene.setSceneRect(0, 0, 297, 210)
+        scene.addRect(0, 0, 297, 210, QPen(Qt.PenStyle.NoPen), QBrush(QColor("#ffffff")))
         scene.addRect(7, 7, 283, 196, QPen(QColor("#111111"), 0.25), QBrush(Qt.BrushStyle.NoBrush))
-        for i in range(1, page.column_count):
-            x = 7 + i * 283 / page.column_count
-            scene.addLine(x, 7, x, 173, QPen(QColor("#222222"), 0.2))
+        for placed in page.modules[1:]:
+            scene.addLine(placed.x_mm, 7, placed.x_mm, 173, QPen(QColor("#222222"), 0.2))
         scene.addRect(168.5, 172, 121.5, 31, QPen(QColor("#111111"), 0.2), QBrush(Qt.BrushStyle.NoBrush))
-        self._add_text(scene, "标题栏（PDF 使用示例原版矢量标题栏）", 171, 184, 2.4, "#555555")
         for placed in page.modules:
-            drawing, px, panel_w = placed.drawing, placed.x_mm, placed.panel_width_mm
-            scale = 0.1
+            drawing, px = placed.drawing, placed.content_x_mm
             if drawing.side_view:
-                fw = (drawing.front_view.outline.bounds[2] - drawing.front_view.outline.bounds[0]) * scale
-                sw = (drawing.side_view.outline.bounds[2] - drawing.side_view.outline.bounds[0]) * scale
-                gap = 18
-                total = fw + sw + gap
-                x0 = px + max(3, (panel_w - total) / 2)
-                self._draw_view(scene, drawing.front_view, (x0, 150), drawing.module_id, scale)
-                self._draw_view(scene, drawing.side_view, (x0 + fw + gap, 150), drawing.module_id, scale)
+                fw = outline_width(drawing.front_view)
+                self._draw_view(scene, drawing.front_view, (px, TOP_VIEW_BOTTOM_MM), drawing.module_id, VIEW_SCALE)
+                self._draw_view(
+                    scene,
+                    drawing.side_view,
+                    (px + fw + SIDE_VIEW_GAP_MM, TOP_VIEW_BOTTOM_MM),
+                    drawing.module_id,
+                    VIEW_SCALE,
+                )
             else:
-                fw = (drawing.front_view.outline.bounds[2] - drawing.front_view.outline.bounds[0]) * scale
-                x0 = px + (panel_w - fw) / 2
-                self._draw_view(scene, drawing.front_view, (x0, 148), drawing.module_id, scale)
-            bw = (drawing.board_view.outline.bounds[2] - drawing.board_view.outline.bounds[0]) * scale
-            bx = px + (panel_w - bw) / 2
-            self._draw_view(scene, drawing.board_view, (bx, 105), drawing.module_id, scale)
+                self._draw_view(scene, drawing.front_view, (px, TOP_VIEW_BOTTOM_MM), drawing.module_id, VIEW_SCALE)
+            self._draw_view(
+                scene,
+                drawing.board_view,
+                (px, BOARD_VIEW_BOTTOM_MM),
+                drawing.module_id,
+                VIEW_SCALE,
+            )
             for i, line in enumerate(drawing.details):
-                self._add_text(scene, line, px + 5, 88 - i * 6.1, 3.0, "#111111")
+                self._add_text(scene, line, px, detail_baseline(i), 3.0, "#111111")
         self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def _add_text(self, scene, text, x, y, size, color):

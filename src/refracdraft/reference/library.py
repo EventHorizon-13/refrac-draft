@@ -261,8 +261,15 @@ class ReferenceLibrary:
     def side_anchor_symbol(self, anchor_type: str) -> SymbolGeometry:
         if anchor_type == "M型":
             # 动态模块-M形锚固件-膨胀面 uses *U324. The raw block is already in the
-            # vertical expansion-face orientation shown in the accepted drawing.
-            return self.symbol_from_block("*U324")
+            # vertical expansion-face orientation, but the manufactured profile faces the
+            # opposite direction from the accepted side view.
+            source = self.symbol_from_block("*U324")
+            return SymbolGeometry(
+                tuple(line.transformed(sx=-1.0) for line in source.polylines),
+                source.colors,
+                source.lineweights,
+                source.linetypes,
+            )
         if anchor_type == "菱形":
             # 动态模块-菱形锚固件-膨胀面1 uses *U476 at scale .2291667. Its local
             # narrow-x/long-y orientation is already the required side profile.
