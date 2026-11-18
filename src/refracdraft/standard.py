@@ -11,6 +11,7 @@ from refracdraft.domain.models import (
     LayoutMode,
     ModuleParameters,
     Project,
+    StructureType,
 )
 
 
@@ -30,6 +31,7 @@ class StandardModuleValues:
     board_material: str = "9厘夹板"
     density_kg_m3: float | None = None
     source_note: str = ""
+    structure_type: StructureType = StructureType.FOLDED
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,7 @@ def build_standard_module(
         density_kg_m3=values.density_kg_m3,
         source_note=values.source_note.strip(),
         production_quantity=max(1, int(values.production_quantity)),
+        structure_type=values.structure_type,
         front_width_mm=length,
         expansion_length_mm=expansion,
         board_face_width_mm=length,
@@ -244,6 +247,7 @@ def standard_module_values(
         board_material=board.material,
         density_kg_m3=module.density_kg_m3,
         source_note=module.source_note,
+        structure_type=module.structure_type,
     )
 
 

@@ -9,6 +9,8 @@ on:
       - src/**
       - pyproject.toml
       - docs/WINDOWS_STANDARD.md
+      - assets/pdf-exporter/**
+      - examples/standard_example_6_modules.xlsx
   workflow_dispatch:
 
 permissions:
@@ -34,6 +36,22 @@ jobs:
           Invoke-WebRequest `
             -Uri "https://raw.githubusercontent.com/adobe-fonts/source-han-sans/release/OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf" `
             -OutFile "assets/fonts/SourceHanSansSC-Regular.otf"
+      - name: Prepare SHX PDF renderer runtime
+        shell: pwsh
+        run: |
+          $zip = "roller-seal-pdf-runtime.zip"
+          Invoke-WebRequest `
+            -Uri "https://github.com/EventHorizon-13/solidcraft-roller-seal/releases/download/v2.4.11/StandardRollerSeal-windows-amd64.zip" `
+            -OutFile $zip
+          Expand-Archive $zip -DestinationPath "roller-seal-runtime" -Force
+          $exporter = Get-ChildItem -Path "roller-seal-runtime" -Directory -Recurse |
+            Where-Object { $_.Name -eq "PdfExporter" } |
+            Select-Object -First 1
+          if (-not $exporter) { throw "Roller Seal PDF exporter was not found in the pinned Windows package." }
+          New-Item -ItemType Directory -Force "assets/pdf-exporter" | Out-Null
+          Copy-Item (Join-Path $exporter.FullName "*") "assets/pdf-exporter" -Recurse -Force
+          if (-not (Test-Path "assets/pdf-exporter/node.exe")) { throw "PdfExporter/node.exe is missing." }
+          if (-not (Test-Path "assets/pdf-exporter/pdf-exporter.bundle.mjs")) { throw "pdf-exporter.bundle.mjs is missing." }
       - name: Build one-folder application
         run: >
           python -m PyInstaller --noconfirm --clean --onedir --windowed
@@ -41,6 +59,7 @@ jobs:
           --add-data "references:references"
           --add-data "assets:assets"
           --add-data "examples/b2_positive_tap.json:examples"
+          --add-data "examples/standard_example_6_modules.xlsx:examples"
           --collect-data reportlab
           --collect-submodules ezdxf
           src/refracdraft/standard_app.py

@@ -10,9 +10,9 @@ def create_template(path: Path) -> None:
     wb = Workbook()
     modules = wb.active
     modules.title = "模块参数"
-    modules.append(["模块编号", "模块名称", "结构类型", "几何类型", "长度", "膨胀长度", "正面高度", "正面左高", "正面右高",
+    modules.append(["模块编号", "模块名称", "折叠方式", "几何类型", "长度", "膨胀长度", "正面高度", "正面左高", "正面右高",
                     "侧面长度", "侧面左高", "侧面右高", "夹板面宽度", "夹板面高度", "夹板面类型", "材质", "容重", "数量"])
-    modules.append(["B2", "折叠模块", "折叠模块", "正敲", 300, 300, 289, 289, 220, None, None, None,
+    modules.append(["B2", "折叠模块", "折叠", "正敲", 300, 300, 289, 289, 220, None, None, None,
                     300, 230, "rectangular", "1430材质", 220, 26])
     boards = wb.create_sheet("夹板参数")
     boards.append(["模块编号", "是否有夹板", "夹板材质", "夹板厚度", "开口模式", "自定义开口坐标"])

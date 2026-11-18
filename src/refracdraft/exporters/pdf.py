@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 from tempfile import TemporaryDirectory
+from typing import Callable
 
 import ezdxf
 import pymupdf
+from ezdxf import bbox as ezdxf_bbox
 from ezdxf.addons.drawing import Frontend, RenderContext, layout
 from ezdxf.addons.drawing.config import BackgroundPolicy, ColorPolicy, Configuration
 from ezdxf.addons.drawing.pymupdf import PyMuPdfBackend
@@ -41,6 +47,69 @@ PDF_FONT_PREFERRED_STEMS = (
     "simhei",
     "simsun",
 )
+
+
+@dataclass(frozen=True)
+class ShxFontInfo:
+    name: str
+    path: Path
+    is_bigfont: bool
+
+
+def _is_bigfont_shx(path: Path) -> bool:
+    try:
+        header = path.read_bytes()[:128].lower()
+    except OSError:
+        return False
+    return b"bigfont" in header
+
+
+def list_shx_fonts(directory: str | Path | None) -> list[ShxFontInfo]:
+    if not directory:
+        return []
+    root = Path(directory).expanduser()
+    if not root.is_dir():
+        return []
+    found: dict[str, ShxFontInfo] = {}
+    try:
+        paths = root.rglob("*")
+        for path in paths:
+            if not path.is_file() or path.suffix.lower() != ".shx":
+                continue
+            name = path.name
+            key = name.lower()
+            info = ShxFontInfo(name, path, _is_bigfont_shx(path))
+            previous = found.get(key)
+            if previous is None or len(path.parts) < len(previous.path.parts):
+                found[key] = info
+    except OSError:
+        return []
+    return sorted(found.values(), key=lambda info: info.name.lower())
+
+
+def _resolve_shx_fonts(
+    directory: str | Path | None,
+    font_name: str | None,
+    bigfont_name: str | None,
+) -> tuple[ShxFontInfo | None, ShxFontInfo | None]:
+    infos = list_shx_fonts(directory)
+    if not infos:
+        return None, None
+    by_name = {info.name.lower(): info for info in infos}
+    main = by_name.get((font_name or "").lower())
+    if main is None:
+        main = by_name.get("gbenor.shx")
+    if main is None:
+        main = next((info for info in infos if not info.is_bigfont), infos[0])
+
+    if bigfont_name is not None and not bigfont_name.strip():
+        return main, None
+    bigfont = by_name.get((bigfont_name or "").lower()) if bigfont_name else None
+    if bigfont is None and bigfont_name is None:
+        bigfont = by_name.get("gbcbig.shx")
+    if bigfont is None and bigfont_name is None:
+        bigfont = next((info for info in infos if info.is_bigfont), None)
+    return main, bigfont
 
 
 def _font_score(path: Path) -> tuple[int, str]:
@@ -95,6 +164,138 @@ def _reference_dxf_path(reference_dxf: str | Path | None) -> Path | None:
             return path
     bundled = resource_path("references/示例.dxf")
     return bundled if bundled.is_file() else None
+
+
+def _pdf_exporter_paths() -> tuple[Path, Path, Path] | None:
+    candidates: list[Path] = []
+    override = os.environ.get("REFRACDRAFT_PDF_EXPORTER_DIR", "").strip()
+    if override:
+        candidates.append(Path(override).expanduser().resolve())
+    candidates.append(resource_path("assets/pdf-exporter").resolve())
+    for directory in candidates:
+        if not directory.is_dir():
+            continue
+        script = directory / "pdf-exporter.bundle.mjs"
+        if not script.is_file():
+            continue
+        node = directory / ("node.exe" if os.name == "nt" else "node")
+        if not node.is_file():
+            executable = shutil.which("node")
+            if not executable:
+                continue
+            node = Path(executable)
+        return node, script, directory
+    return None
+
+
+def _apply_shx_text_style(doc, has_bigfont: bool) -> None:
+    for style in doc.styles:
+        style.dxf.font = "gbenor.shx"
+        style.dxf.bigfont = "gbcbig.shx" if has_bigfont else ""
+
+
+def _single_page_dxf(
+    source_dxf: Path,
+    page_index: int,
+    target: Path,
+    has_bigfont: bool,
+) -> Path:
+    doc = ezdxf.readfile(source_dxf)
+    page_y = -page_index * PAGE_STRIDE_MM * MODEL_SCALE
+    page_top = page_y + PAGE_HEIGHT_MM * MODEL_SCALE
+    msp = doc.modelspace()
+    for entity in list(msp):
+        try:
+            extents = ezdxf_bbox.extents([entity])
+        except Exception:
+            continue
+        if extents.extmax.y < page_y - 1.0 or extents.extmin.y > page_top + 1.0:
+            msp.delete_entity(entity)
+    if page_y:
+        for entity in list(msp):
+            entity.translate(0.0, -page_y, 0.0)
+    _apply_shx_text_style(doc, has_bigfont)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    doc.saveas(target)
+    return target
+
+
+def _export_pdf_with_shx(
+    document: DrawingDocument,
+    output_path: Path,
+    source_dxf: Path,
+    temp_dir: Path,
+    exporter: tuple[Path, Path, Path],
+    main_font: ShxFontInfo,
+    bigfont: ShxFontInfo | None,
+    built_in_font: Path | None,
+    progress: Callable[[str], None],
+) -> Path:
+    node, script, exporter_dir = exporter
+    staged_fonts = temp_dir / "fonts"
+    staged_fonts.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(main_font.path, staged_fonts / "gbenor.shx")
+    if bigfont is not None:
+        shutil.copyfile(bigfont.path, staged_fonts / "gbcbig.shx")
+
+    merged = pymupdf.open()
+    page_count = max(1, len(document.pages))
+    for page_index in range(page_count):
+        progress(f"正在渲染 PDF {page_index + 1}/{page_count}…")
+        page_dxf = _single_page_dxf(
+            source_dxf,
+            page_index,
+            temp_dir / f"page-{page_index + 1}.dxf",
+            bigfont is not None,
+        )
+        page_pdf = temp_dir / f"page-{page_index + 1}.pdf"
+        manifest_path = temp_dir / f"page-{page_index + 1}.json"
+        manifest = {
+            "inputs": [str(page_dxf)],
+            "output": str(page_pdf),
+            "fontDirectory": str(staged_fonts),
+            "builtInFont": str(built_in_font) if built_in_font else "",
+            "fitBox": {
+                "min": {"x": 0.0, "y": 0.0},
+                "max": {
+                    "x": PAGE_WIDTH_MM * MODEL_SCALE,
+                    "y": PAGE_HEIGHT_MM * MODEL_SCALE,
+                },
+            },
+        }
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+        result = subprocess.run(
+            [str(node), str(script), "--manifest", str(manifest_path)],
+            cwd=exporter_dir,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=creationflags,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            raise RuntimeError(f"PDF 渲染器执行失败：{detail or '未知错误'}")
+        if not page_pdf.is_file() or page_pdf.stat().st_size < 8:
+            raise RuntimeError("PDF 渲染器没有生成有效文件")
+        with pymupdf.open(page_pdf) as one_page:
+            merged.insert_pdf(one_page)
+
+    merged.set_metadata(
+        {
+            "title": document.project_name,
+            "author": "RefracDraft",
+            "creator": "RefracDraft SHX renderer",
+            "producer": "MLightCAD / PDF",
+        }
+    )
+    temporary_pdf = temp_dir / "rendered-shx.pdf"
+    merged.save(str(temporary_pdf), garbage=4, deflate=True)
+    merged.close()
+    temporary_pdf.replace(output_path)
+    return output_path
 
 
 def _configure_cjk_fonts(context: RenderContext, font_path: Path | None) -> None:
@@ -190,6 +391,9 @@ def export_pdf(
     dxf_path: str | Path | None = None,
     font_directory: str | Path | None = None,
     font_path: str | Path | None = None,
+    shx_font: str | Path | None = None,
+    shx_bigfont: str | Path | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> Path:
     """Render a PDF from the same DXF that is exported to the customer.
 
@@ -198,6 +402,7 @@ def export_pdf(
     PDF; the frame and title block come from the generated DXF block references.
     """
     del reference_pdf
+    report = progress or (lambda _text: None)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     external_font_directory = (
@@ -205,17 +410,41 @@ def export_pdf(
     )
     selected_font_path = _find_pdf_font(external_font_directory, font_path)
     source_dxf = Path(dxf_path) if dxf_path is not None else None
+    bigfont_argument = None if shx_bigfont is None else str(shx_bigfont)
+    main_shx, bigfont_shx = _resolve_shx_fonts(
+        external_font_directory,
+        str(shx_font) if shx_font else None,
+        bigfont_argument,
+    )
+    exporter = _pdf_exporter_paths()
+    if main_shx is not None and exporter is None:
+        raise RuntimeError("PDF SHX 渲染器未随程序打包，请完整解压便携版后重试。")
 
     with TemporaryDirectory(prefix="refracdraft-pdf-", dir=output_path.parent) as temp_dir:
         if source_dxf is None:
+            report("正在生成与 PDF 同源的 DXF…")
             source_dxf = Path(temp_dir) / "drawing.dxf"
             export_dxf(document, source_dxf, _reference_dxf_path(reference_dxf))
         elif not source_dxf.is_file():
             raise FileNotFoundError(f"DXF 文件不存在: {source_dxf}")
 
+        if main_shx is not None and exporter is not None:
+            return _export_pdf_with_shx(
+                document,
+                output_path,
+                source_dxf,
+                Path(temp_dir),
+                exporter,
+                main_shx,
+                bigfont_shx,
+                selected_font_path,
+                report,
+            )
+
         dxf = ezdxf.readfile(source_dxf)
         merged = pymupdf.open()
         for page_index in range(len(document.pages)):
+            report(f"正在渲染 PDF {page_index + 1}/{len(document.pages)}…")
             page_bytes = _render_page(
                 dxf,
                 page_index,

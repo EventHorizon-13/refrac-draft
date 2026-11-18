@@ -7,6 +7,7 @@ from ezdxf.addons.importer import Importer
 
 from refracdraft.drawing.layout import (
     BOARD_VIEW_BOTTOM_MM,
+    DETAIL_LINE_SPACING,
     DETAIL_TEXT_SIZE_MM,
     SIDE_VIEW_GAP_MM,
     TOP_VIEW_BOTTOM_MM,
@@ -270,10 +271,22 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
                 drawing.module_id,
                 scale,
             )
-            for line_no, text in enumerate(drawing.details):
-                baseline = detail_baseline(line_no)
-                msp.add_text(text, dxfattribs={"insert": (px, page_y + baseline * MODEL_SCALE),
-                                              "height": DETAIL_TEXT_HEIGHT, "style": TEXT_STYLE, "layer": "TEXT"})
+            if drawing.details:
+                top = (
+                    detail_baseline(0) + DETAIL_TEXT_SIZE_MM * 1.34
+                ) * MODEL_SCALE
+                msp.add_mtext(
+                    r"\P".join(drawing.details),
+                    dxfattribs={
+                        "insert": (px, page_y + top),
+                        "char_height": DETAIL_TEXT_HEIGHT,
+                        "style": TEXT_STYLE,
+                        "layer": "TEXT",
+                        "attachment_point": 1,
+                        "line_spacing_style": 2,
+                        "line_spacing_factor": DETAIL_LINE_SPACING,
+                    },
+                )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     doc.saveas(output_path)

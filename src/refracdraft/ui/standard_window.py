@@ -27,7 +27,9 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QSizePolicy,
     QSpinBox,
@@ -36,7 +38,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QStyle,
-    QStyleOptionViewItem,
+    QStyleOptionButton,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -49,9 +51,12 @@ from refracdraft.domain.models import (
     GeometryType,
     ModuleParameters,
     Project,
+    StructureType,
 )
+from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.exporters.dxf import export_dxf
-from refracdraft.exporters.pdf import export_pdf
+from refracdraft.exporters.pdf import export_pdf, list_shx_fonts
+from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.standard import (
     StandardAnchorValues,
     StandardModuleValues,
@@ -107,6 +112,15 @@ ANCHOR_TYPES = (
 ANCHOR_TYPE_BY_LABEL = dict(ANCHOR_TYPES)
 ANCHOR_LABEL_BY_TYPE = {value: label for label, value in ANCHOR_TYPES}
 
+STRUCTURE_TYPES = (
+    ("折叠", StructureType.FOLDED),
+    ("半折叠", StructureType.HALF_FOLDED),
+    ("层叠", StructureType.STACKED),
+    ("自定义", StructureType.CUSTOM),
+)
+STRUCTURE_TYPE_BY_LABEL = dict(STRUCTURE_TYPES)
+STRUCTURE_LABEL_BY_TYPE = {value: label for label, value in STRUCTURE_TYPES}
+
 
 @dataclass(frozen=True)
 class ColumnSpec:
@@ -125,38 +139,46 @@ class TableState:
 
 
 COLUMN_SPECS = (
-    ColumnSpec("module_id", "编号", width=78, group="base"),
-    ColumnSpec("length_mm", "长度", "number", (), 70, "base"),
-    ColumnSpec("expansion_length_mm", "膨胀长度", "number", (), 84, "base"),
-    ColumnSpec("thickness_mm", "厚度", "number", (), 70, "base"),
-    ColumnSpec("material", "模块材质", "combo", MODULE_MATERIALS, 88, "base"),
-    ColumnSpec("density_kg_m3", "容重", "number", (), 72, "base"),
-    ColumnSpec("production_quantity", "数量", "integer", (), 70, "base"),
-    ColumnSpec("taper_enabled", "大小头", "check", width=66, group="taper"),
-    ColumnSpec("big_head_mm", "大头", "number", (), 70, "taper"),
-    ColumnSpec("small_head_mm", "小头", "number", (), 70, "taper"),
-    ColumnSpec("taper_type", "类型", "enum", ("正敲", "侧敲"), 78, "taper"),
-    ColumnSpec("board_exists", "夹板", "check", width=60, group="board"),
-    ColumnSpec("board_material", "夹板型号", "combo", BOARD_TYPES, 88, "board"),
-    ColumnSpec("anchor_enabled", "锚固件", "check", width=66, group="anchor"),
-    ColumnSpec("anchor_position_mm", "位置", "number", (), 72, "anchor"),
-    ColumnSpec("anchor_spacing_mm", "间距", "number", (), 72, "anchor"),
-    ColumnSpec("anchor_count", "锚固数量", "integer", (), 94, "anchor"),
+    ColumnSpec("module_id", "编号", width=62, group="base"),
+    ColumnSpec("length_mm", "长度", "number", (), 56, "base"),
+    ColumnSpec("expansion_length_mm", "膨胀长度", "number", (), 64, "base"),
+    ColumnSpec("thickness_mm", "厚度", "number", (), 56, "base"),
+    ColumnSpec(
+        "structure_type",
+        "折叠方式",
+        "combo",
+        tuple(label for label, _ in STRUCTURE_TYPES),
+        74,
+        "base",
+    ),
+    ColumnSpec("material", "模块材质", "combo", MODULE_MATERIALS, 72, "base"),
+    ColumnSpec("density_kg_m3", "容重", "number", (), 52, "base"),
+    ColumnSpec("production_quantity", "数量", "integer", (), 50, "base"),
+    ColumnSpec("taper_enabled", "大小头", "check", width=50, group="taper"),
+    ColumnSpec("big_head_mm", "大头", "number", (), 54, "taper"),
+    ColumnSpec("small_head_mm", "小头", "number", (), 54, "taper"),
+    ColumnSpec("taper_type", "类型", "enum", ("正敲", "侧敲"), 58, "taper"),
+    ColumnSpec("board_exists", "夹板", "check", width=50, group="board"),
+    ColumnSpec("board_material", "夹板型号", "combo", BOARD_TYPES, 64, "board"),
+    ColumnSpec("anchor_enabled", "锚固件", "check", width=56, group="anchor"),
+    ColumnSpec("anchor_position_mm", "位置", "number", (), 54, "anchor"),
+    ColumnSpec("anchor_spacing_mm", "间距", "number", (), 54, "anchor"),
+    ColumnSpec("anchor_count", "锚固数量", "integer", (), 62, "anchor"),
     ColumnSpec(
         "anchor_type",
         "锚固件类型",
         "enum",
         tuple(label for label, _ in ANCHOR_TYPES),
-        102,
+        82,
         "anchor",
     ),
-    ColumnSpec("anchor_length_mm", "锚固件长度", "number", (), 104, "anchor"),
-    ColumnSpec("anchor_material", "材质", "combo", ANCHOR_MATERIALS, 86, "anchor"),
-    ColumnSpec("thread_spec", "螺栓", "text", (), 78, "anchor"),
-    ColumnSpec("pin_diameter_mm", "插针", "number", PIN_DIAMETERS, 86, "anchor"),
-    ColumnSpec("hose_spec", "胶管", "combo", HOSE_SPECS, 96, "anchor"),
-    ColumnSpec("embedment_depth_mm", "嵌入深度", "number", (), 96, "anchor"),
-    ColumnSpec("source_note", "备注", width=180, group="footer"),
+    ColumnSpec("anchor_length_mm", "锚固件长度", "number", (), 72, "anchor"),
+    ColumnSpec("anchor_material", "材质", "combo", ANCHOR_MATERIALS, 60, "anchor"),
+    ColumnSpec("thread_spec", "螺栓", "text", (), 60, "anchor"),
+    ColumnSpec("pin_diameter_mm", "插针", "number", PIN_DIAMETERS, 54, "anchor"),
+    ColumnSpec("hose_spec", "胶管", "combo", HOSE_SPECS, 54, "anchor"),
+    ColumnSpec("embedment_depth_mm", "嵌入深度", "number", (), 62, "anchor"),
+    ColumnSpec("source_note", "备注", width=116, group="footer"),
 )
 COLUMN_INDEX = {spec.key: index for index, spec in enumerate(COLUMN_SPECS)}
 COLUMN_BY_KEY = {spec.key: spec for spec in COLUMN_SPECS}
@@ -179,6 +201,7 @@ DEFAULT_ROW = {
     "length_mm": "300",
     "expansion_length_mm": "300",
     "thickness_mm": "230",
+    "structure_type": "折叠",
     "material": "1430",
     "density_kg_m3": "220",
     "production_quantity": "1",
@@ -273,7 +296,7 @@ def _short_rule() -> QFrame:
     line = QFrame()
     line.setFrameShape(QFrame.Shape.HLine)
     line.setFrameShadow(QFrame.Shadow.Plain)
-    line.setFixedWidth(54)
+    line.setFixedWidth(32)
     line.setFixedHeight(1)
     return line
 
@@ -288,27 +311,14 @@ class ParameterDelegate(QStyledItemDelegate):
         spec = COLUMN_SPECS[index.column()]
         if spec.kind == "check":
             return None
-        if spec.kind in {"combo", "number", "integer", "enum"} and spec.options:
-            editor = QComboBox(parent)
-            editor.setMaxVisibleItems(18)
-            editor.setEditable(spec.kind != "enum")
-            editor.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-            editor.addItems(spec.options)
-            if editor.isEditable():
-                if spec.kind == "number":
-                    validator = QDoubleValidator(0.0, 1_000_000.0, 2, editor)
-                    validator.setNotation(QDoubleValidator.Notation.StandardNotation)
-                elif spec.kind == "integer":
-                    validator = QIntValidator(0, 1_000_000, editor)
-                else:
-                    validator = None
-                if validator is not None:
-                    editor.lineEdit().setValidator(validator)
-                editor.lineEdit().setPlaceholderText("自定义")
-            QTimer.singleShot(0, editor.showPopup)
-            return editor
         editor = QLineEdit(parent)
         editor.setMaxLength(180)
+        editor.setAutoFillBackground(True)
+        editor.setStyleSheet(
+            "QLineEdit { background: palette(base); color: palette(text);"
+            " border: 1px solid #3b82f6; padding: 0 4px;"
+            " selection-background-color: #3b82f6; selection-color: white; }"
+        )
         if spec.kind == "number":
             validator = QDoubleValidator(0.0, 1_000_000.0, 2, editor)
             validator.setNotation(QDoubleValidator.Notation.StandardNotation)
@@ -320,20 +330,12 @@ class ParameterDelegate(QStyledItemDelegate):
 
     def setEditorData(self, editor, index) -> None:
         value = index.data(Qt.ItemDataRole.DisplayRole) or ""
-        if isinstance(editor, QComboBox):
-            position = editor.findText(str(value))
-            if position >= 0:
-                editor.setCurrentIndex(position)
-            elif editor.isEditable():
-                editor.setCurrentText(str(value))
-        elif isinstance(editor, QLineEdit):
+        if isinstance(editor, QLineEdit):
             editor.setText(str(value))
             editor.selectAll()
 
     def setModelData(self, editor, model, index) -> None:
-        if isinstance(editor, QComboBox):
-            model.setData(index, editor.currentText(), Qt.ItemDataRole.EditRole)
-        elif isinstance(editor, QLineEdit):
+        if isinstance(editor, QLineEdit):
             model.setData(index, editor.text(), Qt.ItemDataRole.EditRole)
 
     def updateEditorGeometry(self, editor, option, index) -> None:
@@ -342,19 +344,39 @@ class ParameterDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
         spec = COLUMN_SPECS[index.column()]
         item = self.parent().item(index.row(), index.column())
+        background = (
+            option.palette.alternateBase()
+            if index.row() % 2
+            else option.palette.base()
+        )
+        if option.state & QStyle.StateFlag.State_Selected:
+            background = option.palette.highlight()
         if item is not None and not (item.flags() & Qt.ItemFlag.ItemIsEnabled):
-            painter.fillRect(option.rect, option.palette.base())
+            painter.fillRect(option.rect, background)
             return
         if spec.kind == "check":
-            opt = QStyleOptionViewItem(option)
-            opt.rect = option.rect.adjusted(
-                (option.rect.width() - 16) // 2,
-                (option.rect.height() - 16) // 2,
-                -((option.rect.width() - 16) // 2),
-                -((option.rect.height() - 16) // 2),
+            painter.save()
+            painter.fillRect(option.rect, background)
+            control = QStyleOptionButton()
+            control.initFrom(self.parent())
+            control.rect = QRect(
+                option.rect.center().x() - 8,
+                option.rect.center().y() - 8,
+                16,
+                16,
             )
-            opt.state |= QStyle.StateFlag.State_On if item.checkState() == Qt.CheckState.Checked else QStyle.StateFlag.State_Off
-            self.parent().style().drawControl(QStyle.ControlElement.CE_CheckBox, opt, painter, self.parent())
+            control.state = QStyle.StateFlag.State_Enabled | (
+                QStyle.StateFlag.State_On
+                if item is not None and item.checkState() == Qt.CheckState.Checked
+                else QStyle.StateFlag.State_Off
+            )
+            self.parent().style().drawControl(
+                QStyle.ControlElement.CE_CheckBox,
+                control,
+                painter,
+                self.parent(),
+            )
+            painter.restore()
             return
         super().paint(painter, option, index)
 
@@ -390,6 +412,41 @@ class ParameterTable(QTableWidget):
         corner = self.visualRect(self.model().index(bottom, right))
         return QRect(corner.right() - 3, corner.bottom() - 3, 7, 7)
 
+    def _edit_cell(self, row: int, column: int) -> None:
+        index = self.model().index(row, column)
+        if index.isValid():
+            self.setCurrentIndex(index)
+            self.edit(index)
+
+    def _show_cell_menu(self, row: int, column: int) -> None:
+        item = self.item(row, column)
+        if item is None or not (item.flags() & Qt.ItemFlag.ItemIsEnabled):
+            return
+        spec = COLUMN_SPECS[column]
+        if not spec.options:
+            self._edit_cell(row, column)
+            return
+        self.setCurrentCell(row, column)
+        menu = QMenu(self)
+        current = item.text().strip()
+        for option in spec.options:
+            action = menu.addAction(option)
+            action.setCheckable(True)
+            action.setChecked(current == option)
+        custom_action = None
+        if "自定义" not in spec.options:
+            menu.addSeparator()
+            custom_action = menu.addAction("自定义…")
+            custom_action.setData("__custom__")
+        rect = self.visualRect(self.model().index(row, column))
+        chosen = menu.exec(self.viewport().mapToGlobal(rect.bottomLeft()))
+        if chosen is None:
+            return
+        if custom_action is not None and chosen.data() == "__custom__":
+            QTimer.singleShot(0, lambda: self._edit_cell(row, column))
+            return
+        item.setText(chosen.text())
+
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
         if self._fill_dragging and self._fill_source and self._fill_target:
@@ -419,10 +476,17 @@ class ParameterTable(QTableWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             position = event.position().toPoint()
             target = self.indexAt(position)
+            if self._handle_rect().adjusted(-2, -2, 2, 2).contains(position):
+                self._fill_source = self._visible_selected_range()
+                self._fill_target = (target.row(), target.column()) if target.isValid() else None
+                self._fill_dragging = self._fill_source is not None
+                self.viewport().setCursor(Qt.CursorShape.SizeFDiagCursor)
+                event.accept()
+                return
             if target.isValid():
                 item = self.item(target.row(), target.column())
                 spec = COLUMN_SPECS[target.column()]
-                if item is not None and spec.kind == "check":
+                if item is not None and item.flags() & Qt.ItemFlag.ItemIsEnabled and spec.kind == "check":
                     self.setCurrentCell(target.row(), target.column())
                     next_state = (
                         Qt.CheckState.Unchecked
@@ -432,15 +496,24 @@ class ParameterTable(QTableWidget):
                     item.setCheckState(next_state)
                     event.accept()
                     return
-            if self._handle_rect().adjusted(-2, -2, 2, 2).contains(position):
-                self._fill_source = self._visible_selected_range()
-                target = self.indexAt(position)
-                self._fill_target = (target.row(), target.column()) if target.isValid() else None
-                self._fill_dragging = self._fill_source is not None
-                self.viewport().setCursor(Qt.CursorShape.SizeFDiagCursor)
-                event.accept()
-                return
         super().mousePressEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton:
+            target = self.indexAt(event.position().toPoint())
+            if target.isValid():
+                item = self.item(target.row(), target.column())
+                spec = COLUMN_SPECS[target.column()]
+                if item is None or not (item.flags() & Qt.ItemFlag.ItemIsEnabled):
+                    return
+                if spec.options:
+                    QTimer.singleShot(
+                        0,
+                        lambda r=target.row(), c=target.column(): self._show_cell_menu(r, c),
+                    )
+                    return
+                QTimer.singleShot(
+                    0,
+                    lambda r=target.row(), c=target.column(): self._edit_cell(r, c),
+                )
 
     def mouseMoveEvent(self, event) -> None:
         if self._fill_dragging:
@@ -666,14 +739,15 @@ class StandardWindow(MainWindow):
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         table.setEditTriggers(
-            QAbstractItemView.EditTrigger.CurrentChanged
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed
             | QAbstractItemView.EditTrigger.AnyKeyPressed
         )
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        table.horizontalHeader().setStretchLastSection(True)
-        table.horizontalHeader().setMinimumSectionSize(52)
+        table.horizontalHeader().setStretchLastSection(False)
+        table.horizontalHeader().setMinimumSectionSize(44)
         table.verticalHeader().setDefaultSectionSize(31)
-        table.verticalHeader().setMinimumWidth(40)
+        table.verticalHeader().setMinimumWidth(34)
         table.setMinimumHeight(185)
         for column, spec in enumerate(COLUMN_SPECS):
             table.setColumnWidth(column, spec.width)
@@ -727,7 +801,7 @@ class StandardWindow(MainWindow):
         self.pdf_font_directory_edit = QLineEdit()
         self.pdf_font_directory_edit.setPlaceholderText("内置字体，可选择外挂字体目录")
         self.pdf_font_directory_edit.setToolTip(
-            "目录中可放置 .ttf/.otf/.ttc 字体；也可选择包含 gbenor.shx、gbcbig.shx 的目录。"
+            "可选择任意 .shx 字体目录；下方可分别指定正文字体和大字体。"
         )
         self.browse_font_directory_button = QPushButton("选择")
         self.browse_font_directory_button.setFixedWidth(58)
@@ -735,6 +809,13 @@ class StandardWindow(MainWindow):
         font_row.addWidget(self.pdf_font_directory_edit, 1)
         font_row.addWidget(self.browse_font_directory_button)
         output_layout.addLayout(font_row)
+
+        self.pdf_shx_font_combo = QComboBox()
+        self.pdf_shx_font_combo.setToolTip("任意 SHX 可作为正文字体；自动优先 gbenor.shx")
+        output_layout.addWidget(self.pdf_shx_font_combo)
+        self.pdf_shx_bigfont_combo = QComboBox()
+        self.pdf_shx_bigfont_combo.setToolTip("任意 SHX 可作为大字体；自动优先 gbcbig.shx")
+        output_layout.addWidget(self.pdf_shx_bigfont_combo)
 
         self.output_path_label = QLabel()
         self.output_path_label.setProperty("role", "fieldLabel")
@@ -749,6 +830,7 @@ class StandardWindow(MainWindow):
 
         self.output_dxf_button = QPushButton("导出 DXF")
         self.output_pdf_button = QPushButton("导出 PDF")
+        self.output_dxf_button.setProperty("primary", True)
         self.output_pdf_button.setProperty("primary", True)
         self.output_dxf_button.clicked.connect(self.export_dxf_file)
         self.output_pdf_button.clicked.connect(self.export_pdf_file)
@@ -804,10 +886,17 @@ class StandardWindow(MainWindow):
         self.pdf_font_directory_edit.setText(
             str(self._settings.value("pdf/font_directory", ""))
         )
+        self._refresh_shx_choices(
+            str(self._settings.value("pdf/shx_font", "自动")),
+            str(self._settings.value("pdf/shx_bigfont", "自动")),
+        )
         self.output_directory_edit.textChanged.connect(self._update_output_preview)
         self.output_filename_edit.textChanged.connect(self._update_output_preview)
         self.output_directory_edit.editingFinished.connect(self._save_output_settings)
         self.pdf_font_directory_edit.editingFinished.connect(self._save_output_settings)
+        self.pdf_font_directory_edit.editingFinished.connect(self._refresh_shx_choices)
+        self.pdf_shx_font_combo.currentTextChanged.connect(self._save_output_settings)
+        self.pdf_shx_bigfont_combo.currentTextChanged.connect(self._save_output_settings)
         self._update_output_preview()
 
         self.setStyleSheet(
@@ -851,9 +940,48 @@ class StandardWindow(MainWindow):
         )
         if directory:
             self.pdf_font_directory_edit.setText(directory)
+            self._refresh_shx_choices()
             self._save_output_settings()
 
-    def _save_output_settings(self) -> None:
+    def _refresh_shx_choices(self, preferred_font: str = "", preferred_bigfont: str = "") -> None:
+        if not hasattr(self, "pdf_shx_font_combo"):
+            return
+        directory = self.pdf_font_directory_edit.text().strip()
+        infos = list_shx_fonts(directory)
+        names = [info.name for info in infos]
+        current_font = preferred_font or self.pdf_shx_font_combo.currentText() or "自动"
+        current_bigfont = preferred_bigfont or self.pdf_shx_bigfont_combo.currentText() or "自动"
+
+        self.pdf_shx_font_combo.blockSignals(True)
+        self.pdf_shx_bigfont_combo.blockSignals(True)
+        try:
+            self.pdf_shx_font_combo.clear()
+            self.pdf_shx_font_combo.addItem("自动")
+            self.pdf_shx_font_combo.addItems(names)
+            if current_font in names:
+                self.pdf_shx_font_combo.setCurrentText(current_font)
+            elif "gbenor.shx" in names:
+                self.pdf_shx_font_combo.setCurrentText("gbenor.shx")
+            else:
+                self.pdf_shx_font_combo.setCurrentText("自动")
+
+            self.pdf_shx_bigfont_combo.clear()
+            self.pdf_shx_bigfont_combo.addItem("无")
+            self.pdf_shx_bigfont_combo.addItem("自动")
+            self.pdf_shx_bigfont_combo.addItems(names)
+            if current_bigfont in names:
+                self.pdf_shx_bigfont_combo.setCurrentText(current_bigfont)
+            elif "gbcbig.shx" in names:
+                self.pdf_shx_bigfont_combo.setCurrentText("gbcbig.shx")
+            elif any(info.is_bigfont for info in infos):
+                self.pdf_shx_bigfont_combo.setCurrentText("自动")
+            else:
+                self.pdf_shx_bigfont_combo.setCurrentText("无")
+        finally:
+            self.pdf_shx_font_combo.blockSignals(False)
+            self.pdf_shx_bigfont_combo.blockSignals(False)
+
+    def _save_output_settings(self, *_args) -> None:
         if not hasattr(self, "output_directory_edit"):
             return
         self._settings.setValue(
@@ -862,6 +990,8 @@ class StandardWindow(MainWindow):
         self._settings.setValue(
             "pdf/font_directory", self.pdf_font_directory_edit.text().strip()
         )
+        self._settings.setValue("pdf/shx_font", self.pdf_shx_font_combo.currentText())
+        self._settings.setValue("pdf/shx_bigfont", self.pdf_shx_bigfont_combo.currentText())
 
     def closeEvent(self, event) -> None:
         self._save_output_settings()
@@ -948,6 +1078,7 @@ class StandardWindow(MainWindow):
             "length_mm": f"{module_values.length_mm:g}",
             "expansion_length_mm": f"{module_values.expansion_length_mm:g}",
             "thickness_mm": f"{module_values.thickness_mm:g}",
+            "structure_type": STRUCTURE_LABEL_BY_TYPE.get(module_values.structure_type, "自定义"),
             "material": _without_suffix(module_values.material, "材质", "板材"),
             "production_quantity": str(module_values.production_quantity),
             "taper_enabled": module_values.taper_enabled,
@@ -1399,6 +1530,7 @@ class StandardWindow(MainWindow):
             length_mm=_number(str(values["length_mm"]), "长度", module_id),
             expansion_length_mm=_number(str(values["expansion_length_mm"]), "膨胀长度", module_id),
             thickness_mm=_number(str(values["thickness_mm"]), "厚度", module_id),
+            structure_type=self._structure_type(str(values["structure_type"]), module_id),
             taper_enabled=bool(values["taper_enabled"]),
             big_head_mm=(
                 _number(str(values["big_head_mm"]), "大头", module_id)
@@ -1440,6 +1572,25 @@ class StandardWindow(MainWindow):
             return GeometryType(value)
         except ValueError:
             raise ValueError(f"{module_id}: 大小头类型必须是正敲或侧敲") from None
+
+    @staticmethod
+    def _structure_type(value: str, module_id: str) -> StructureType:
+        label = value.strip()
+        structure = STRUCTURE_TYPE_BY_LABEL.get(label)
+        if structure is not None:
+            return structure
+        try:
+            return StructureType(label)
+        except ValueError:
+            if label in {"折叠模块", "折叠"}:
+                return StructureType.FOLDED
+            if label in {"半折叠模块", "半折叠"}:
+                return StructureType.HALF_FOLDED
+            if label in {"层叠模块", "层叠"}:
+                return StructureType.STACKED
+            if label in {"自定义", "其他"}:
+                return StructureType.CUSTOM
+            raise ValueError(f"{module_id}: 折叠方式必须是折叠、半折叠、层叠或自定义") from None
 
     def _anchor_values(self, values: dict[str, str | bool], module_id: str) -> StandardAnchorValues:
         enabled = bool(values["anchor_enabled"])
@@ -1503,6 +1654,43 @@ class StandardWindow(MainWindow):
         ensure_standard_project(project)
         return project
 
+    def _show_busy(self, text: str) -> QProgressDialog:
+        dialog = QProgressDialog(text, "", 0, 0, self)
+        dialog.setWindowTitle("正在处理")
+        dialog.setCancelButton(None)
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.show()
+        QApplication.processEvents()
+        return dialog
+
+    @staticmethod
+    def _set_busy_text(dialog: QProgressDialog, text: str) -> None:
+        dialog.setLabelText(text)
+        QApplication.processEvents()
+
+    def generate(self) -> None:
+        progress = self._show_busy("正在整理参数…")
+        try:
+            self._set_busy_text(progress, "正在整理参数…")
+            self.project = self._collect_project()
+            self._set_busy_text(progress, "正在计算视图和排版…")
+            library = ReferenceLibrary(self.reference_dxf) if self.reference_dxf.exists() else None
+            self.drawing_document = DrawingGenerator(library).generate(self.project)
+            self._set_busy_text(progress, "正在更新预览…")
+            self.page_spin.setMaximum(max(1, len(self.drawing_document.pages)))
+            self.page_spin.setValue(1)
+            self.preview.show_page(self.drawing_document, 0)
+            warnings = "\n".join(self.drawing_document.warnings)
+            self.statusBar().showMessage("图纸已生成" + (f"；警告：{warnings}" if warnings else ""))
+        except Exception as exc:
+            progress.close()
+            QMessageBox.critical(self, "生成失败", str(exc))
+        finally:
+            progress.close()
+
     def export_dxf_file(self) -> None:
         if not self.drawing_document:
             self.generate()
@@ -1511,12 +1699,17 @@ class StandardWindow(MainWindow):
         path = self._output_target(".dxf")
         if path is None:
             return
+        progress = self._show_busy("正在导出 DXF…")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+            self._set_busy_text(progress, "正在写入 DXF…")
             export_dxf(self.drawing_document, path, self.reference_dxf)
             self.statusBar().showMessage(f"DXF 已导出：{path}")
         except Exception as exc:
+            progress.close()
             QMessageBox.critical(self, "DXF 导出失败", str(exc))
+        finally:
+            progress.close()
 
     def export_pdf_file(self) -> None:
         if not self.drawing_document:
@@ -1526,6 +1719,7 @@ class StandardWindow(MainWindow):
         path = self._output_target(".pdf")
         if path is None:
             return
+        progress = self._show_busy("正在准备 PDF…")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             font_directory = self.pdf_font_directory_edit.text().strip() or None
@@ -1536,10 +1730,26 @@ class StandardWindow(MainWindow):
                 path,
                 reference_dxf=self.reference_dxf,
                 font_directory=font_directory,
+                shx_font=(
+                    self.pdf_shx_font_combo.currentText()
+                    if self.pdf_shx_font_combo.currentText() != "自动"
+                    else None
+                ),
+                shx_bigfont=(
+                    ""
+                    if self.pdf_shx_bigfont_combo.currentText() == "无"
+                    else None
+                    if self.pdf_shx_bigfont_combo.currentText() == "自动"
+                    else self.pdf_shx_bigfont_combo.currentText()
+                ),
+                progress=lambda text: self._set_busy_text(progress, text),
             )
             self.statusBar().showMessage(f"PDF 已导出：{path}")
         except Exception as exc:
+            progress.close()
             QMessageBox.critical(self, "PDF 导出失败", str(exc))
+        finally:
+            progress.close()
 
     def _preview_page_step(self, step: int) -> None:
         if not self.drawing_document:

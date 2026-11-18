@@ -14,7 +14,9 @@ class GeometryType(StrEnum):
 
 class StructureType(StrEnum):
     FOLDED = "折叠模块"
+    HALF_FOLDED = "半折叠模块"
     STACKED = "层叠模块"
+    CUSTOM = "自定义"
     OTHER = "其他"
 
 

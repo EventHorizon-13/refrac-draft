@@ -475,11 +475,13 @@ def test_dxf_uses_reference_dimension_style_and_big_font(tmp_path):
     title_inserts = [entity for entity in exported.modelspace().query("INSERT") if entity.dxf.name == "标题栏"]
     assert title_inserts
     assert title_inserts[0].dxf.xscale == pytest.approx(1.02)
-    detail_heights = {
-        entity.dxf.height for entity in exported.modelspace().query("TEXT") if entity.dxf.height < 40
-    }
-    assert len(detail_heights) == 1
-    assert next(iter(detail_heights)) == pytest.approx(36.0)
+    detail_texts = list(exported.modelspace().query("MTEXT"))
+    assert len(detail_texts) == 1
+    assert detail_texts[0].dxf.char_height == pytest.approx(42.0)
+    assert detail_texts[0].dxf.line_spacing_style == 2
+    assert detail_texts[0].dxf.line_spacing_factor == pytest.approx(0.75)
+    assert "\\P" in detail_texts[0].text
+    assert detail_texts[0].dxf.insert.y > 44 * 10
     for style_name in ("工程字", "大字体"):
         style = exported.styles.get(style_name)
         assert style.dxf.font.lower() == "gbenor.shx"

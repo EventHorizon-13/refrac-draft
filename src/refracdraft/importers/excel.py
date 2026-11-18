@@ -20,7 +20,7 @@ FIELD_ALIASES = {
     "modules": {
         "module_id": {"模块编号", "编号", "型号", "模块型号"},
         "name": {"模块名称", "名称"},
-        "structure_type": {"结构类型", "模块结构"},
+        "structure_type": {"结构类型", "模块结构", "折叠方式"},
         "geometry_type": {"几何类型", "模块几何", "敲型"},
         "front_width_mm": {"正面宽度", "正面长度", "正面宽度mm", "宽度", "长度"},
         "front_height_mm": {"正面高度", "高度"},
@@ -123,10 +123,14 @@ def _enum_value(field: str, value: Any) -> Any:
         if "普通" in v:
             return "普通"
     if field == "structure_type":
+        if "半折叠" in v:
+            return "半折叠模块"
         if "折叠" in v:
             return "折叠模块"
         if "层叠" in v:
             return "层叠模块"
+        if "自定义" in v:
+            return "自定义"
     if field == "layout_mode":
         if "均布" in v:
             return "均布"

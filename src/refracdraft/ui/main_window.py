@@ -15,6 +15,7 @@ from refracdraft.domain.models import Project
 from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.drawing.layout import (
     BOARD_VIEW_BOTTOM_MM,
+    DETAIL_PREVIEW_LINE_SPACING,
     DETAIL_TEXT_SIZE_MM,
     SIDE_VIEW_GAP_MM,
     TOP_VIEW_BOTTOM_MM,
@@ -111,12 +112,12 @@ class DrawingPreview(QGraphicsView):
                 drawing.module_id,
                 VIEW_SCALE,
             )
-            for i, line in enumerate(drawing.details):
-                self._add_text(
+            if drawing.details:
+                self._add_multiline_text(
                     scene,
-                    line,
+                    "\n".join(drawing.details),
                     px,
-                    detail_baseline(i),
+                    detail_baseline(0),
                     DETAIL_TEXT_SIZE_MM,
                     "#111111",
                 )
@@ -127,6 +128,13 @@ class DrawingPreview(QGraphicsView):
         item.setDefaultTextColor(QColor(color))
         item.setScale(size / 10.0)
         item.setPos(x, 210 - y - size)
+
+    def _add_multiline_text(self, scene, text, x, first_baseline, size, color):
+        item = scene.addText(text)
+        item.setDefaultTextColor(QColor(color))
+        item.document().setDocumentMargin(0)
+        item.setScale(size / 10.0)
+        item.setPos(x, 210 - first_baseline - size * (DETAIL_PREVIEW_LINE_SPACING + 0.08))
 
     def _draw_view(self, scene, view, origin, module_id, scale):
         ox, oy = origin

@@ -90,7 +90,8 @@ def _small_head_contour_lines(width: float, overall_height: float, small_height:
 
 def _details(module, board, anchor) -> tuple[str, ...]:
     name = module.name or module.structure_type.value
-    lines = [f"1、名称：{name}{module.module_id}", f"2、材质：{module.material or '未填写'}"]
+    display_name = name if module.module_id in name else f"{name}{module.module_id}"
+    lines = [f"1、名称：{display_name}", f"2、材质：{module.material or '未填写'}"]
     if not anchor.exists or anchor.anchor_type == AnchorType.NONE:
         lines.extend(("3、锚固件：无", "4、锚固件长度：无"))
     else:
