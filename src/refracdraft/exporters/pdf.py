@@ -54,18 +54,17 @@ def _font_score(path: Path) -> tuple[int, str]:
 def _fonts_in_directory(directory: Path | None) -> list[Path]:
     if directory is None or not directory.is_dir():
         return []
-    roots = [directory]
-    nested = directory / "fonts"
-    if nested.is_dir() and nested != directory:
-        roots.append(nested)
     found: list[Path] = []
-    for root in roots:
+    for root in (directory, *directory.glob("*")):
         try:
-            found.extend(
-                path
-                for path in root.iterdir()
-                if path.is_file() and path.suffix.lower() in PDF_FONT_SUFFIXES
-            )
+            if root.is_file() and root.suffix.lower() in PDF_FONT_SUFFIXES:
+                found.append(root)
+            elif root.is_dir():
+                found.extend(
+                    path
+                    for path in root.rglob("*")
+                    if path.is_file() and path.suffix.lower() in PDF_FONT_SUFFIXES
+                )
         except OSError:
             continue
     return sorted(set(found), key=_font_score)
@@ -101,12 +100,12 @@ def _reference_dxf_path(reference_dxf: str | Path | None) -> Path | None:
 def _configure_cjk_fonts(context: RenderContext, font_path: Path | None) -> None:
     if font_path is None:
         return
-    # Keep source styles such as 仿宋 untouched. Only the engineering text styles
-    # that reference gbenor/gbcbig need a PDF-safe CJK font.
+    # A user-selected PDF font should own every text style in the plot. This
+    # avoids mixed glyphs when the title block carries its own style table.
     font_face = fonts.FontFace(filename=font_path.name)
-    for style_name in ("standard", "工程字", "大字体"):
-        if style_name in context.fonts:
-            context.fonts[style_name] = font_face
+    for style_name in tuple(context.fonts):
+        context.fonts[style_name] = font_face
+    context.fonts["standard"] = font_face
 
 
 def _render_page(

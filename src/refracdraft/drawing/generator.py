@@ -297,22 +297,31 @@ class DrawingGenerator:
             warnings.append(f"未加载参考 DXF，夹板面模板 {module.board_face_template_id} 暂以矩形代替")
             board_outline = rectangle(module.board_face_width_mm, module.board_face_height_mm)
 
+        symbol_lines: list[Polyline] = []
+        symbol_colors: list[int] = []
+        symbol_lineweights: list[int] = []
+        symbol_linetypes: list[str] = []
+        symbol_id = ANCHOR_SYMBOL_ID.get(anchor.anchor_type) if anchor.exists else None
+        symbol = None
         positions = _anchor_positions(
             anchor,
             module.board_face_width_mm,
             module.board_face_height_mm,
             board_face=True,
         )
+        if positions and symbol_id and self.reference_library:
+            symbol = self.reference_library.anchor_symbol(symbol_id)
+        if symbol is not None and anchor.anchor_type == AnchorType.DIAMOND and anchor.embedment_depth_mm:
+            symbol_ys = [point[1] for line in symbol.polylines for point in line.points]
+            symbol_half_height = (max(symbol_ys) - min(symbol_ys)) / 2.0 if symbol_ys else 0.0
+            positions = [
+                (x, module.board_face_height_mm - anchor.embedment_depth_mm + symbol_half_height)
+                for x, _y in positions
+            ]
         for x, y in positions:
             if not point_in_outline(board_outline, (x, y)):
                 raise ValueError(f"{module.module_id}: 锚固件坐标 ({x:g}, {y:g}) 位于夹板面轮廓之外")
-        symbol_lines: list[Polyline] = []
-        symbol_colors: list[int] = []
-        symbol_lineweights: list[int] = []
-        symbol_linetypes: list[str] = []
-        symbol_id = ANCHOR_SYMBOL_ID.get(anchor.anchor_type) if anchor.exists else None
-        if positions and symbol_id and self.reference_library:
-            symbol = self.reference_library.anchor_symbol(symbol_id)
+        if positions and symbol is not None:
             profile_colors = symbol.colors if len(symbol.colors) == len(symbol.polylines) else (5,) * len(symbol.polylines)
             profile_lineweights = symbol.lineweights if len(symbol.lineweights) == len(symbol.polylines) else (13,) * len(symbol.polylines)
             profile_linetypes = symbol.linetypes if len(symbol.linetypes) == len(symbol.polylines) else ("CONTINUOUS",) * len(symbol.polylines)

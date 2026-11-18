@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 
 from PySide6.QtCore import QRect, QSettings, QStandardPaths, Qt, Signal
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -34,6 +35,8 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
+    QStyle,
+    QStyleOptionViewItem,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -85,11 +88,11 @@ EMBEDMENT_PRESETS = ("25", "30", "40", "50", "60", "70", "80", "100", "120")
 ANCHOR_LENGTH_PRESETS = ("180", "200", "220", "230", "250", "280", "300", "330", "350", "400")
 DENSITY_PRESETS = ("180", "200", "210", "220", "240", "260", "280", "300")
 MODULE_MATERIALS = ("1260", "1350", "1430")
-BOARD_TYPES = ("5厘", "9厘", "12厘", "15厘", "18厘")
+BOARD_TYPES = ("9厘", "8厘", "6厘")
 ANCHOR_MATERIALS = ("201", "304", "309", "310")
 THREAD_SPECS = ("M6", "M8", "M10", "M12", "M16")
-PIN_DIAMETERS = ("5", "6", "8", "10", "12")
-HOSE_SPECS = ("无", "25", "32", "38")
+PIN_DIAMETERS = ("8", "6", "5")
+HOSE_SPECS = ("25", "32")
 QUANTITY_PRESETS = ("1", "2", "5", "10", "20", "50", "100")
 ANCHOR_COUNT_PRESETS = ("1", "2", "3", "4", "5", "6", "8", "10")
 
@@ -123,22 +126,22 @@ class TableState:
 
 COLUMN_SPECS = (
     ColumnSpec("module_id", "编号", width=78, group="base"),
-    ColumnSpec("length_mm", "长度", "number", LENGTH_PRESETS, 70, "base"),
-    ColumnSpec("expansion_length_mm", "膨胀长度", "number", EXPANSION_PRESETS, 84, "base"),
-    ColumnSpec("thickness_mm", "厚度", "number", THICKNESS_PRESETS, 70, "base"),
-    ColumnSpec("material", "模块型号", "combo", MODULE_MATERIALS, 88, "base"),
-    ColumnSpec("density_kg_m3", "容重", "number", DENSITY_PRESETS, 72, "base"),
-    ColumnSpec("production_quantity", "数量", "integer", QUANTITY_PRESETS, 70, "base"),
+    ColumnSpec("length_mm", "长度", "number", (), 70, "base"),
+    ColumnSpec("expansion_length_mm", "膨胀长度", "number", (), 84, "base"),
+    ColumnSpec("thickness_mm", "厚度", "number", (), 70, "base"),
+    ColumnSpec("material", "模块材质", "combo", MODULE_MATERIALS, 88, "base"),
+    ColumnSpec("density_kg_m3", "容重", "number", (), 72, "base"),
+    ColumnSpec("production_quantity", "数量", "integer", (), 70, "base"),
     ColumnSpec("taper_enabled", "大小头", "check", width=66, group="taper"),
-    ColumnSpec("big_head_mm", "大头", "number", HEAD_PRESETS, 70, "taper"),
-    ColumnSpec("small_head_mm", "小头", "number", HEAD_PRESETS, 70, "taper"),
+    ColumnSpec("big_head_mm", "大头", "number", (), 70, "taper"),
+    ColumnSpec("small_head_mm", "小头", "number", (), 70, "taper"),
     ColumnSpec("taper_type", "类型", "enum", ("正敲", "侧敲"), 78, "taper"),
     ColumnSpec("board_exists", "夹板", "check", width=60, group="board"),
     ColumnSpec("board_material", "夹板型号", "combo", BOARD_TYPES, 88, "board"),
     ColumnSpec("anchor_enabled", "锚固件", "check", width=66, group="anchor"),
-    ColumnSpec("anchor_position_mm", "位置", "number", POSITION_PRESETS, 72, "anchor"),
-    ColumnSpec("anchor_spacing_mm", "间距", "number", SPACING_PRESETS, 72, "anchor"),
-    ColumnSpec("anchor_count", "锚固数量", "integer", ANCHOR_COUNT_PRESETS, 94, "anchor"),
+    ColumnSpec("anchor_position_mm", "位置", "number", (), 72, "anchor"),
+    ColumnSpec("anchor_spacing_mm", "间距", "number", (), 72, "anchor"),
+    ColumnSpec("anchor_count", "锚固数量", "integer", (), 94, "anchor"),
     ColumnSpec(
         "anchor_type",
         "锚固件类型",
@@ -147,12 +150,12 @@ COLUMN_SPECS = (
         102,
         "anchor",
     ),
-    ColumnSpec("anchor_length_mm", "锚固件长度", "number", ANCHOR_LENGTH_PRESETS, 104, "anchor"),
-    ColumnSpec("anchor_material", "锚固型号", "combo", ANCHOR_MATERIALS, 86, "anchor"),
-    ColumnSpec("thread_spec", "螺栓", "combo", THREAD_SPECS, 78, "anchor"),
-    ColumnSpec("pin_diameter_mm", "插针 φ", "number", PIN_DIAMETERS, 86, "anchor"),
+    ColumnSpec("anchor_length_mm", "锚固件长度", "number", (), 104, "anchor"),
+    ColumnSpec("anchor_material", "材质", "combo", ANCHOR_MATERIALS, 86, "anchor"),
+    ColumnSpec("thread_spec", "螺栓", "text", (), 78, "anchor"),
+    ColumnSpec("pin_diameter_mm", "插针", "number", PIN_DIAMETERS, 86, "anchor"),
     ColumnSpec("hose_spec", "胶管", "combo", HOSE_SPECS, 96, "anchor"),
-    ColumnSpec("embedment_depth_mm", "嵌入深度", "number", EMBEDMENT_PRESETS, 96, "anchor"),
+    ColumnSpec("embedment_depth_mm", "嵌入深度", "number", (), 96, "anchor"),
     ColumnSpec("source_note", "备注", width=180, group="footer"),
 )
 COLUMN_INDEX = {spec.key: index for index, spec in enumerate(COLUMN_SPECS)}
@@ -285,7 +288,7 @@ class ParameterDelegate(QStyledItemDelegate):
         spec = COLUMN_SPECS[index.column()]
         if spec.kind == "check":
             return None
-        if spec.kind in {"combo", "number", "integer", "enum"}:
+        if spec.kind in {"combo", "number", "integer", "enum"} and spec.options:
             editor = QComboBox(parent)
             editor.setMaxVisibleItems(18)
             editor.setEditable(spec.kind != "enum")
@@ -302,9 +305,17 @@ class ParameterDelegate(QStyledItemDelegate):
                 if validator is not None:
                     editor.lineEdit().setValidator(validator)
                 editor.lineEdit().setPlaceholderText("自定义")
+            QTimer.singleShot(0, editor.showPopup)
             return editor
         editor = QLineEdit(parent)
         editor.setMaxLength(180)
+        if spec.kind == "number":
+            validator = QDoubleValidator(0.0, 1_000_000.0, 2, editor)
+            validator.setNotation(QDoubleValidator.Notation.StandardNotation)
+            editor.setValidator(validator)
+        elif spec.kind == "integer":
+            validator = QIntValidator(0, 1_000_000, editor)
+            editor.setValidator(validator)
         return editor
 
     def setEditorData(self, editor, index) -> None:
@@ -317,6 +328,7 @@ class ParameterDelegate(QStyledItemDelegate):
                 editor.setCurrentText(str(value))
         elif isinstance(editor, QLineEdit):
             editor.setText(str(value))
+            editor.selectAll()
 
     def setModelData(self, editor, model, index) -> None:
         if isinstance(editor, QComboBox):
@@ -326,6 +338,25 @@ class ParameterDelegate(QStyledItemDelegate):
 
     def updateEditorGeometry(self, editor, option, index) -> None:
         editor.setGeometry(option.rect)
+
+    def paint(self, painter, option, index):
+        spec = COLUMN_SPECS[index.column()]
+        item = self.parent().item(index.row(), index.column())
+        if item is not None and not (item.flags() & Qt.ItemFlag.ItemIsEnabled):
+            painter.fillRect(option.rect, option.palette.base())
+            return
+        if spec.kind == "check":
+            opt = QStyleOptionViewItem(option)
+            opt.rect = option.rect.adjusted(
+                (option.rect.width() - 16) // 2,
+                (option.rect.height() - 16) // 2,
+                -((option.rect.width() - 16) // 2),
+                -((option.rect.height() - 16) // 2),
+            )
+            opt.state |= QStyle.StateFlag.State_On if item.checkState() == Qt.CheckState.Checked else QStyle.StateFlag.State_Off
+            self.parent().style().drawControl(QStyle.ControlElement.CE_CheckBox, opt, painter, self.parent())
+            return
+        super().paint(painter, option, index)
 
 
 class ParameterTable(QTableWidget):
@@ -387,6 +418,20 @@ class ParameterTable(QTableWidget):
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             position = event.position().toPoint()
+            target = self.indexAt(position)
+            if target.isValid():
+                item = self.item(target.row(), target.column())
+                spec = COLUMN_SPECS[target.column()]
+                if item is not None and spec.kind == "check":
+                    self.setCurrentCell(target.row(), target.column())
+                    next_state = (
+                        Qt.CheckState.Unchecked
+                        if item.checkState() == Qt.CheckState.Checked
+                        else Qt.CheckState.Checked
+                    )
+                    item.setCheckState(next_state)
+                    event.accept()
+                    return
             if self._handle_rect().adjusted(-2, -2, 2, 2).contains(position):
                 self._fill_source = self._visible_selected_range()
                 target = self.indexAt(position)
@@ -554,7 +599,7 @@ class StandardWindow(MainWindow):
         self._history_ready = True
         self._reset_history()
         self.setWindowTitle("RefracDraft Standard — 模块加工图生成器")
-        self.statusBar().showMessage("修改参数后点击「生成图纸」；可拖动选区右下角批量填充。")
+        self.statusBar().showMessage("修改参数后点击「预览」；可拖动选区右下角批量填充。")
 
     def _build_ui(self) -> None:
         self._row_bases: list[
@@ -575,7 +620,7 @@ class StandardWindow(MainWindow):
             action.triggered.connect(callback)
             toolbar.addAction(action)
         toolbar.addSeparator()
-        generate_action = QAction("生成图纸", self)
+        generate_action = QAction("预览", self)
         generate_action.setShortcut(QKeySequence("F5"))
         generate_action.triggered.connect(self.generate)
         toolbar.addAction(generate_action)
@@ -597,15 +642,15 @@ class StandardWindow(MainWindow):
         title = QLabel("模块参数")
         title.setStyleSheet("font-weight: 600;")
         header.addWidget(title)
-        self.row_count_label = QLabel("0 个模块")
-        header.addWidget(self.row_count_label)
-        header.addStretch(1)
         add_button = QPushButton("添加模块")
         remove_button = QPushButton("删除模块")
         add_button.clicked.connect(lambda _checked=False: self._add_module())
         remove_button.clicked.connect(lambda _checked=False: self._remove_selected_module())
         header.addWidget(add_button)
         header.addWidget(remove_button)
+        self.row_count_label = QLabel("0 个模块")
+        header.addWidget(self.row_count_label)
+        header.addStretch(1)
         parameter_layout.addLayout(header)
 
         self.parameter_table = ParameterTable()
@@ -621,9 +666,7 @@ class StandardWindow(MainWindow):
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         table.setEditTriggers(
-            QAbstractItemView.EditTrigger.DoubleClicked
-            | QAbstractItemView.EditTrigger.EditKeyPressed
-            | QAbstractItemView.EditTrigger.SelectedClicked
+            QAbstractItemView.EditTrigger.CurrentChanged
             | QAbstractItemView.EditTrigger.AnyKeyPressed
         )
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
@@ -693,21 +736,16 @@ class StandardWindow(MainWindow):
         font_row.addWidget(self.browse_font_directory_button)
         output_layout.addLayout(font_row)
 
-        page_row = QHBoxLayout()
-        page_row.addWidget(QLabel("预览页"))
-        self.page_spin = QSpinBox()
-        self.page_spin.setMinimum(1)
-        self.page_spin.setMaximum(1)
-        self.page_spin.valueChanged.connect(self._show_selected_page)
-        page_row.addWidget(self.page_spin)
-        page_row.addStretch(1)
-        output_layout.addLayout(page_row)
-
         self.output_path_label = QLabel()
         self.output_path_label.setProperty("role", "fieldLabel")
         self.output_path_label.setWordWrap(True)
         output_layout.addWidget(self.output_path_label)
         output_layout.addStretch(1)
+
+        self.preview_button = QPushButton("预览")
+        self.preview_button.setProperty("primary", True)
+        self.preview_button.clicked.connect(self.generate)
+        output_layout.addWidget(self.preview_button)
 
         self.output_dxf_button = QPushButton("导出 DXF")
         self.output_pdf_button = QPushButton("导出 PDF")
@@ -723,8 +761,19 @@ class StandardWindow(MainWindow):
         canvas_header = QHBoxLayout()
         canvas_header.addWidget(QLabel("图纸预览"))
         canvas_header.addStretch(1)
+        page_row = QHBoxLayout()
+        page_row.addWidget(QLabel("预览页"))
+        self.page_spin = QSpinBox()
+        self.page_spin.setMinimum(1)
+        self.page_spin.setMaximum(1)
+        self.page_spin.valueChanged.connect(self._show_selected_page)
+        page_row.addWidget(self.page_spin)
+        canvas_header.addLayout(page_row)
+        canvas_header.addStretch(1)
         canvas_layout.addLayout(canvas_header)
         self.preview = DrawingPreview()
+        self.preview.page_step_requested.connect(self._preview_page_step)
+        self.preview.zoom_requested.connect(self._preview_zoom)
         self.preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         canvas_layout.addWidget(self.preview)
 
@@ -1281,7 +1330,7 @@ class StandardWindow(MainWindow):
             self._updating_table = False
         self._update_conditional_states()
         self._record_history()
-        self.statusBar().showMessage("参数已修改，点击「生成图纸」更新图纸。")
+        self.statusBar().showMessage("参数已修改，点击「预览」更新图纸。")
 
     def _table_bulk_changed(self) -> None:
         if self._updating_table:
@@ -1294,7 +1343,7 @@ class StandardWindow(MainWindow):
         self._update_row_count()
         self._update_conditional_states()
         self._record_history()
-        self.statusBar().showMessage("参数已修改，点击「生成图纸」更新图纸。")
+        self.statusBar().showMessage("参数已修改，点击「预览」更新图纸。")
 
     def _ensure_unique_module_ids(self) -> None:
         used: set[str] = set()
@@ -1491,3 +1540,17 @@ class StandardWindow(MainWindow):
             self.statusBar().showMessage(f"PDF 已导出：{path}")
         except Exception as exc:
             QMessageBox.critical(self, "PDF 导出失败", str(exc))
+
+    def _preview_page_step(self, step: int) -> None:
+        if not self.drawing_document:
+            return
+        page_count = len(self.drawing_document.pages)
+        if page_count <= 1:
+            return
+        next_page = max(1, min(page_count, self.page_spin.value() + step))
+        self.page_spin.setValue(next_page)
+
+    def _preview_zoom(self, factor: float) -> None:
+        if not self.drawing_document:
+            return
+        self.preview.scale(factor, factor)

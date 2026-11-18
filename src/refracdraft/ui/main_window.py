@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QBrush, QPen, QPainter, QPalette
 from PySide6.QtWidgets import (
     QFileDialog, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QMainWindow,
@@ -51,6 +51,9 @@ ANCHOR_LABELS = ["模块编号", "有无锚固件", "锚固件类型", "锚固�
 
 
 class DrawingPreview(QGraphicsView):
+    page_step_requested = Signal(int)
+    zoom_requested = Signal(float)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setScene(QGraphicsScene(self))
@@ -65,6 +68,15 @@ class DrawingPreview(QGraphicsView):
         if event.type() == QEvent.Type.PaletteChange:
             self._apply_theme_background()
         super().changeEvent(event)
+
+    def wheelEvent(self, event) -> None:
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            factor = 1.1 if event.angleDelta().y() > 0 else 0.9
+            self.zoom_requested.emit(factor)
+        else:
+            step = 1 if event.angleDelta().y() > 0 else -1
+            self.page_step_requested.emit(step)
+        event.accept()
 
     def show_page(self, document, page_index: int = 0):
         scene = self.scene()
