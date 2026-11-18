@@ -1,6 +1,9 @@
 name: Release Standard 20261118
 
 on:
+  push:
+    branches:
+      - release-standard-20261118
   workflow_dispatch:
 
 permissions:
