@@ -1,0 +1,66 @@
+name: Publish standard release
+
+on:
+  push:
+    tags:
+      - standard-*
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Find verified build for parent commit
+        id: build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SOURCE_SHA=$(git rev-parse "$GITHUB_SHA^1")
+          BUILD_RUN_ID=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow windows-standard.yml \
+            --branch feat/standard-edition \
+            --commit "$SOURCE_SHA" \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+          if [ -z "$BUILD_RUN_ID" ]; then
+            echo "No successful Windows build found for $SOURCE_SHA" >&2
+            exit 1
+          fi
+          echo "build_run_id=$BUILD_RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download verified portable build
+        uses: actions/download-artifact@v4
+        with:
+          name: RefracDraft-Standard-Windows-x64-portable
+          path: release/RefracDraft-Standard
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ steps.build.outputs.build_run_id }}
+
+      - name: Package release asset
+        run: |
+          ASSET_NAME="RefracDraft-Standard-Windows-x64-portable-${GITHUB_REF_NAME#standard-}.zip"
+          echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+          cd release
+          zip -r "$GITHUB_WORKSPACE/$ASSET_NAME" RefracDraft-Standard
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_RUN_ID: ${{ steps.build.outputs.build_run_id }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "$GITHUB_WORKSPACE/$ASSET_NAME" \
+            "examples/standard_example_6_modules.xlsx#模块加工图示例_6模块.xlsx" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "RefracDraft Standard ${GITHUB_REF_NAME#standard-}" \
+            --notes "Windows x64 便携版。构建与打包版冒烟验证：GitHub Actions run $BUILD_RUN_ID。示例 Excel 已单独附上，包内 examples/standard_example_6_modules.xlsx 也可直接使用。"
