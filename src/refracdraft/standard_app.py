@@ -21,6 +21,7 @@ def main() -> None:
     if smoke:
         trace.write_text("start\n", encoding="utf-8")
     app = QApplication([sys.argv[0]] if smoke else sys.argv)
+    app.setOrganizationName("EventHorizon")
     app.setApplicationName("RefracDraft Standard")
     app_font_path = resource_path("assets/fonts/SourceHanSansSC-Regular.otf")
     if app_font_path.is_file():
@@ -64,19 +65,31 @@ def main() -> None:
             if not window._cell_bool(row, "anchor_enabled"):
                 raise ValueError("锚固件参数未按 B2 示例载入")
             if (
-                window._cell_text(row, "material") != "1430材质"
+                window._cell_text(row, "material") != "1430"
                 or window._cell_text(row, "production_quantity") != "26"
             ):
                 raise ValueError("模块材质或数量未按 B2 示例载入")
-            if window._cell_text(row, "board_material") != "9厘夹板":
+            if window._cell_text(row, "board_material") != "9厘":
                 raise ValueError("夹板类型未按 B2 示例载入")
             if (
                 window._cell_text(row, "anchor_material") != "310"
                 or window._cell_text(row, "thread_spec") != "M10"
                 or window._cell_text(row, "pin_diameter_mm") != "8"
-                or window._cell_text(row, "hose_spec") != "32胶管"
+                or window._cell_text(row, "hose_spec") != "32"
             ):
                 raise ValueError("锚固件材质、螺栓、插针或胶管未按 B2 示例载入")
+            if table.item(row, COLUMN_INDEX["anchor_enabled"]).text():
+                raise ValueError("锚固件复选框仍显示是/否文字")
+            headers = [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())]
+            if any("(" in label or "mm" in label.lower() for label in headers):
+                raise ValueError("参数表头仍包含单位")
+            if COLUMN_INDEX["density_kg_m3"] > COLUMN_INDEX["production_quantity"]:
+                raise ValueError("容重列未放到前面")
+            if not (
+                window._filename_stem().startswith("模块加工图_")
+                and window._filename_stem().endswith("_")
+            ):
+                raise ValueError("默认文件名规则不正确")
             roundtrip = window._collect_project()
             module = roundtrip.modules[0]
             if module.front_width_mm != 300 or module.board_face_height_mm != 230:
@@ -100,6 +113,17 @@ def main() -> None:
 
             DrawingGenerator(ReferenceLibrary(window.reference_dxf)).generate(roundtrip)
             trace.write_text("mapped drawing passed\n", encoding="utf-8")
+
+            length_cell = table.item(row, COLUMN_INDEX["length_mm"])
+            length_cell.setText("301")
+            window.undo()
+            if window._cell_text(row, "length_mm") != "300":
+                raise ValueError("Ctrl+Z 撤销未恢复参数")
+            window.redo()
+            if window._cell_text(row, "length_mm") != "301":
+                raise ValueError("Ctrl+Y 重做未恢复参数")
+            table.item(row, COLUMN_INDEX["length_mm"]).setText("300")
+            trace.write_text("undo/redo passed\n", encoding="utf-8")
 
             anchor_cell = table.item(row, COLUMN_INDEX["anchor_enabled"])
             anchor_cell.setCheckState(Qt.CheckState.Unchecked)

@@ -15,6 +15,7 @@ from refracdraft.domain.models import Project
 from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.drawing.layout import (
     BOARD_VIEW_BOTTOM_MM,
+    DETAIL_TEXT_SIZE_MM,
     SIDE_VIEW_GAP_MM,
     TOP_VIEW_BOTTOM_MM,
     VIEW_SCALE,
@@ -99,7 +100,14 @@ class DrawingPreview(QGraphicsView):
                 VIEW_SCALE,
             )
             for i, line in enumerate(drawing.details):
-                self._add_text(scene, line, px, detail_baseline(i), 3.0, "#111111")
+                self._add_text(
+                    scene,
+                    line,
+                    px,
+                    detail_baseline(i),
+                    DETAIL_TEXT_SIZE_MM,
+                    "#111111",
+                )
         self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def _add_text(self, scene, text, x, y, size, color):

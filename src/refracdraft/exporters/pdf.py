@@ -23,16 +23,66 @@ PAGE_STRIDE_MM = 230.0
 MODEL_SCALE = 10.0
 PDF_FONT_CANDIDATES = (
     Path(os.environ.get("REFRACDRAFT_CJK_FONT", "")),
-    Path(r"C:\Windows\Fonts\msyh.ttc"),
     Path(r"C:\Windows\Fonts\simsun.ttc"),
+    Path(r"C:\Windows\Fonts\simhei.ttf"),
+    Path(r"C:\Windows\Fonts\msyh.ttc"),
     resource_path("assets/fonts/SourceHanSansSC-Regular.otf"),
     resource_path("assets/fonts/SourceHanSansSC-Regular.ttf"),
     Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
     Path("/System/Library/Fonts/PingFang.ttc"),
 )
+PDF_FONT_SUFFIXES = {".otf", ".ttf", ".ttc"}
+PDF_FONT_PREFERRED_STEMS = (
+    "sourcehansanssc",
+    "notosanscjk",
+    "sourcehansans",
+    "microsoftyahei",
+    "msyh",
+    "simhei",
+    "simsun",
+)
 
 
-def _find_pdf_font() -> Path | None:
+def _font_score(path: Path) -> tuple[int, str]:
+    stem = path.stem.lower().replace("-", "").replace("_", "").replace(" ", "")
+    for index, preferred in enumerate(PDF_FONT_PREFERRED_STEMS):
+        if preferred in stem:
+            return index, str(path).lower()
+    return len(PDF_FONT_PREFERRED_STEMS), str(path).lower()
+
+
+def _fonts_in_directory(directory: Path | None) -> list[Path]:
+    if directory is None or not directory.is_dir():
+        return []
+    roots = [directory]
+    nested = directory / "fonts"
+    if nested.is_dir() and nested != directory:
+        roots.append(nested)
+    found: list[Path] = []
+    for root in roots:
+        try:
+            found.extend(
+                path
+                for path in root.iterdir()
+                if path.is_file() and path.suffix.lower() in PDF_FONT_SUFFIXES
+            )
+        except OSError:
+            continue
+    return sorted(set(found), key=_font_score)
+
+
+def _find_pdf_font(
+    font_directory: str | Path | None = None,
+    font_path: str | Path | None = None,
+) -> Path | None:
+    if font_path:
+        explicit = Path(font_path).expanduser()
+        if explicit.is_file():
+            return explicit
+    if font_directory:
+        external = _fonts_in_directory(Path(font_directory).expanduser())
+        if external:
+            return external[0]
     for path in PDF_FONT_CANDIDATES:
         if path and path.is_file():
             return path
@@ -51,25 +101,32 @@ def _reference_dxf_path(reference_dxf: str | Path | None) -> Path | None:
 def _configure_cjk_fonts(context: RenderContext, font_path: Path | None) -> None:
     if font_path is None:
         return
-    # The DXF keeps the approved gbenor/gbcbig styles. For PDF plotting only,
-    # map those styles to a bundled TrueType font because AutoCAD SHX files are
-    # not installed on every machine that runs the portable build.
-    fonts.font_manager.scan_folder(font_path.parent)
+    # Keep source styles such as 仿宋 untouched. Only the engineering text styles
+    # that reference gbenor/gbcbig need a PDF-safe CJK font.
     font_face = fonts.FontFace(filename=font_path.name)
-    for style_name in tuple(context.fonts):
-        context.fonts[style_name] = font_face
-    context.fonts["standard"] = font_face
-    context.fonts["工程字"] = font_face
-    context.fonts["大字体"] = font_face
+    for style_name in ("standard", "工程字", "大字体"):
+        if style_name in context.fonts:
+            context.fonts[style_name] = font_face
 
 
-def _render_page(doc, page_index: int, font_path: Path | None) -> bytes:
+def _render_page(
+    doc,
+    page_index: int,
+    font_path: Path | None,
+    font_directory: Path | None = None,
+) -> bytes:
     page_y = -page_index * PAGE_STRIDE_MM * MODEL_SCALE
     render_box = BoundingBox2d(
         [(0, page_y), (PAGE_WIDTH_MM * MODEL_SCALE, page_y + PAGE_HEIGHT_MM * MODEL_SCALE)]
     )
     backend = PyMuPdfBackend()
-    context = RenderContext(doc)
+    for folder in (font_directory, font_path.parent if font_path else None):
+        if folder and folder.is_dir():
+            fonts.font_manager.scan_folder(folder)
+    # Export mode honors each layer's plot flag, so text/geometry on a
+    # non-printing layer (for example the source DXF's 不打印 layer) stays out
+    # of the PDF while remaining visible and editable in the DXF.
+    context = RenderContext(doc, export_mode=True)
     _configure_cjk_fonts(context, font_path)
     frontend = Frontend(
         context,
@@ -132,6 +189,8 @@ def export_pdf(
     *,
     reference_dxf: str | Path | None = None,
     dxf_path: str | Path | None = None,
+    font_directory: str | Path | None = None,
+    font_path: str | Path | None = None,
 ) -> Path:
     """Render a PDF from the same DXF that is exported to the customer.
 
@@ -142,7 +201,10 @@ def export_pdf(
     del reference_pdf
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    font_path = _find_pdf_font()
+    external_font_directory = (
+        Path(font_directory).expanduser() if font_directory else None
+    )
+    selected_font_path = _find_pdf_font(external_font_directory, font_path)
     source_dxf = Path(dxf_path) if dxf_path is not None else None
 
     with TemporaryDirectory(prefix="refracdraft-pdf-", dir=output_path.parent) as temp_dir:
@@ -155,12 +217,17 @@ def export_pdf(
         dxf = ezdxf.readfile(source_dxf)
         merged = pymupdf.open()
         for page_index in range(len(document.pages)):
-            page_bytes = _render_page(dxf, page_index, font_path)
+            page_bytes = _render_page(
+                dxf,
+                page_index,
+                selected_font_path,
+                external_font_directory,
+            )
             with pymupdf.open(stream=page_bytes, filetype="pdf") as one_page:
                 merged.insert_pdf(one_page)
 
         for page_index, page in enumerate(merged):
-            _add_searchable_text_layer(page, document, page_index, font_path)
+            _add_searchable_text_layer(page, document, page_index, selected_font_path)
 
         merged.set_metadata(
             {

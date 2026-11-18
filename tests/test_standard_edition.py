@@ -1,5 +1,6 @@
 import pytest
 import ezdxf
+import pymupdf
 
 from refracdraft.drawing.generator import DrawingGenerator, _anchor_positions, _balanced_page_groups, _details
 from refracdraft.drawing.layout import PANEL_INNER_MARGIN_MM
@@ -15,6 +16,7 @@ from refracdraft.domain.models import (
 from refracdraft.importers.excel import _normalize_row
 from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.exporters.dxf import export_dxf
+from refracdraft.exporters.pdf import _render_page
 from refracdraft.standard import (
     StandardAnchorValues,
     StandardModuleValues,
@@ -211,7 +213,7 @@ def test_standard_excel_generic_heads_move_to_side_for_side_taper():
     ("anchor_type", "expected_y"),
     [
         (AnchorType.M_SHAPE, 230 - 35.4391501542),
-        (AnchorType.DIAMOND, 160.0),
+        (AnchorType.DIAMOND, 180.0),
     ],
 )
 def test_board_face_anchor_uses_source_top_offset(anchor_type, expected_y):
@@ -254,8 +256,8 @@ def test_standard_details_include_new_manufacturing_fields():
     assert "插针φ8" in text
     assert "数量：84 Pcs" in text
     assert "容重：220 kg/m³" in text
-    assert "25胶管，12厘夹板" in text
-    assert "备注：现场复核" in text
+    assert "7、胶管/夹板：25胶管，12厘夹板" in text
+    assert "8、备注：现场复核" in text
 
 
 def test_standard_anchor_length_round_trip_and_validation():
@@ -397,6 +399,32 @@ def test_standard_anchor_positions_are_dimensioned_on_board_face():
     depth_dimension = depth_dimensions[0]
     assert depth_dimension.start == (80, 230)
     assert depth_dimension.end == (80, 180)
+    symbol_points = [
+        point
+        for line in document.pages[0].modules[0].drawing.board_view.anchor_symbols
+        for point in line.points
+    ]
+    symbol_y = [point[1] for point in symbol_points]
+    assert (min(symbol_y) + max(symbol_y)) / 2.0 == pytest.approx(180.0)
+
+
+@pytest.mark.parametrize("depth", [50.0, 60.0])
+def test_diamond_anchor_geometry_follows_real_embedment_depth(depth):
+    module = build_standard_module(None, StandardModuleValues("D3", 500, 300, 230))
+    board = build_standard_board(None, "D3", True)
+    anchor = build_standard_anchor(
+        None,
+        "D3",
+        500,
+        StandardAnchorValues(True, 80, 150, 3, AnchorType.DIAMOND, depth),
+    )
+    project = Project(modules=[module], boards=[board], anchors=[anchor])
+    drawing = DrawingGenerator(ReferenceLibrary("references/示例.dxf")).generate(project).pages[0].modules[0].drawing
+    points = [point for line in drawing.board_view.anchor_symbols for point in line.points]
+    ys = [point[1] for point in points]
+    assert (min(ys) + max(ys)) / 2.0 == pytest.approx(230.0 - depth)
+    depth_dimensions = [dim for dim in drawing.board_view.dimensions if dim.label == f"{depth:g}"]
+    assert depth_dimensions[0].end[1] == pytest.approx(230.0 - depth)
 
 
 def test_automatic_layout_keeps_panel_gaps_and_paginates():
@@ -448,12 +476,34 @@ def test_dxf_uses_reference_dimension_style_and_big_font(tmp_path):
     assert title_inserts
     assert title_inserts[0].dxf.xscale == pytest.approx(1.02)
     detail_heights = {
-        entity.dxf.height for entity in exported.modelspace().query("TEXT") if entity.dxf.height > 50
+        entity.dxf.height for entity in exported.modelspace().query("TEXT") if entity.dxf.height < 40
     }
     assert len(detail_heights) == 1
-    assert next(iter(detail_heights)) == pytest.approx(56.7)
+    assert next(iter(detail_heights)) == pytest.approx(36.0)
     for style_name in ("工程字", "大字体"):
         style = exported.styles.get(style_name)
         assert style.dxf.font.lower() == "gbenor.shx"
         assert style.dxf.bigfont.lower() == "gbcbig.shx"
+
+
+def test_pdf_render_skips_layers_with_plot_disabled():
+    source = ezdxf.new("R2018")
+    source.layers.add("PRINT", color=7)
+    no_plot = source.layers.add("NO_PLOT", color=1)
+    no_plot.dxf.plot = 0
+    msp = source.modelspace()
+    msp.add_line((0, 0), (1000, 0), dxfattribs={"layer": "PRINT"})
+    msp.add_line((0, 500), (1000, 500), dxfattribs={"layer": "NO_PLOT", "color": 1})
+
+    pdf_bytes = _render_page(source, 0, None)
+    with pymupdf.open(stream=pdf_bytes, filetype="pdf") as pdf:
+        drawings = pdf[0].get_drawings()
+
+    assert drawings
+    red_paths = [
+        drawing
+        for drawing in drawings
+        if drawing.get("color") and tuple(round(v, 3) for v in drawing["color"]) == (1.0, 0.0, 0.0)
+    ]
+    assert red_paths == []
 

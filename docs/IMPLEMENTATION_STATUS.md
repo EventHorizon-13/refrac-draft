@@ -31,7 +31,7 @@
 - Several anchor profile mappings and all B1–B13 / S1–S4 parameters still require page-by-page validation against the supplied samples.
 - The current layout algorithm is an initial approximation, not a universal packing rule.
 - PDF font/line-weight tuning and exact annotation spacing still need golden-master comparison.
-- Undo/redo and row-level duplication shortcuts are not yet implemented; the Standard editor now has fill-handle and multi-cell paste interactions.
+- The Standard editor now has fill-handle, multi-cell paste, whole-column edit, and Ctrl+Z/Ctrl+Y history; row-level duplication shortcuts remain future work.
 
 ## Next phase
 

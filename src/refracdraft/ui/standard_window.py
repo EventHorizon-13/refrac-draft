@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 import re
 
-from PySide6.QtCore import QRect, QStandardPaths, Qt, Signal
+from PySide6.QtCore import QRect, QSettings, QStandardPaths, Qt, Signal
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -82,12 +84,12 @@ SPACING_PRESETS = (
 EMBEDMENT_PRESETS = ("25", "30", "40", "50", "60", "70", "80", "100", "120")
 ANCHOR_LENGTH_PRESETS = ("180", "200", "220", "230", "250", "280", "300", "330", "350", "400")
 DENSITY_PRESETS = ("180", "200", "210", "220", "240", "260", "280", "300")
-MODULE_MATERIALS = ("1260材质", "1350板材", "1430材质", "1260", "1350", "1430")
-BOARD_TYPES = ("5厘夹板", "9厘夹板", "12厘夹板", "15厘夹板", "18厘夹板")
+MODULE_MATERIALS = ("1260", "1350", "1430")
+BOARD_TYPES = ("5厘", "9厘", "12厘", "15厘", "18厘")
 ANCHOR_MATERIALS = ("201", "304", "309", "310")
 THREAD_SPECS = ("M6", "M8", "M10", "M12", "M16")
 PIN_DIAMETERS = ("5", "6", "8", "10", "12")
-HOSE_SPECS = ("无胶管", "25胶管", "32胶管", "38胶管")
+HOSE_SPECS = ("无", "25", "32", "38")
 QUANTITY_PRESETS = ("1", "2", "5", "10", "20", "50", "100")
 ANCHOR_COUNT_PRESETS = ("1", "2", "3", "4", "5", "6", "8", "10")
 
@@ -113,22 +115,29 @@ class ColumnSpec:
     group: str = "module"
 
 
+@dataclass(frozen=True)
+class TableState:
+    rows: tuple[dict[str, str | bool], ...]
+    bases: tuple[object, ...]
+
+
 COLUMN_SPECS = (
     ColumnSpec("module_id", "编号", width=78, group="base"),
-    ColumnSpec("length_mm", "长度 (mm)", "number", LENGTH_PRESETS, 78, "base"),
-    ColumnSpec("expansion_length_mm", "膨胀长度 (mm)", "number", EXPANSION_PRESETS, 92, "base"),
-    ColumnSpec("thickness_mm", "厚度 (mm)", "number", THICKNESS_PRESETS, 78, "base"),
-    ColumnSpec("material", "模块材质", "combo", MODULE_MATERIALS, 108, "base"),
-    ColumnSpec("production_quantity", "模块数量", "integer", QUANTITY_PRESETS, 76, "base"),
+    ColumnSpec("length_mm", "长度", "number", LENGTH_PRESETS, 70, "base"),
+    ColumnSpec("expansion_length_mm", "膨胀长度", "number", EXPANSION_PRESETS, 84, "base"),
+    ColumnSpec("thickness_mm", "厚度", "number", THICKNESS_PRESETS, 70, "base"),
+    ColumnSpec("material", "模块型号", "combo", MODULE_MATERIALS, 88, "base"),
+    ColumnSpec("density_kg_m3", "容重", "number", DENSITY_PRESETS, 72, "base"),
+    ColumnSpec("production_quantity", "数量", "integer", QUANTITY_PRESETS, 70, "base"),
     ColumnSpec("taper_enabled", "大小头", "check", width=66, group="taper"),
-    ColumnSpec("big_head_mm", "大头 (mm)", "number", HEAD_PRESETS, 78, "taper"),
-    ColumnSpec("small_head_mm", "小头 (mm)", "number", HEAD_PRESETS, 78, "taper"),
-    ColumnSpec("taper_type", "大小头类型", "enum", ("正敲", "侧敲"), 92, "taper"),
+    ColumnSpec("big_head_mm", "大头", "number", HEAD_PRESETS, 70, "taper"),
+    ColumnSpec("small_head_mm", "小头", "number", HEAD_PRESETS, 70, "taper"),
+    ColumnSpec("taper_type", "类型", "enum", ("正敲", "侧敲"), 78, "taper"),
     ColumnSpec("board_exists", "夹板", "check", width=60, group="board"),
-    ColumnSpec("board_material", "夹板类型", "combo", BOARD_TYPES, 100, "board"),
+    ColumnSpec("board_material", "夹板型号", "combo", BOARD_TYPES, 88, "board"),
     ColumnSpec("anchor_enabled", "锚固件", "check", width=66, group="anchor"),
-    ColumnSpec("anchor_position_mm", "位置 (mm)", "number", POSITION_PRESETS, 78, "anchor"),
-    ColumnSpec("anchor_spacing_mm", "间距 (mm)", "number", SPACING_PRESETS, 78, "anchor"),
+    ColumnSpec("anchor_position_mm", "位置", "number", POSITION_PRESETS, 72, "anchor"),
+    ColumnSpec("anchor_spacing_mm", "间距", "number", SPACING_PRESETS, 72, "anchor"),
     ColumnSpec("anchor_count", "锚固数量", "integer", ANCHOR_COUNT_PRESETS, 94, "anchor"),
     ColumnSpec(
         "anchor_type",
@@ -138,14 +147,13 @@ COLUMN_SPECS = (
         102,
         "anchor",
     ),
-    ColumnSpec("anchor_length_mm", "锚固件长度 (mm)", "number", ANCHOR_LENGTH_PRESETS, 112, "anchor"),
-    ColumnSpec("anchor_material", "锚固件材质", "combo", ANCHOR_MATERIALS, 96, "anchor"),
-    ColumnSpec("thread_spec", "螺栓 M", "combo", THREAD_SPECS, 90, "anchor"),
-    ColumnSpec("pin_diameter_mm", "插针 φ (mm)", "number", PIN_DIAMETERS, 98, "anchor"),
+    ColumnSpec("anchor_length_mm", "锚固件长度", "number", ANCHOR_LENGTH_PRESETS, 104, "anchor"),
+    ColumnSpec("anchor_material", "锚固型号", "combo", ANCHOR_MATERIALS, 86, "anchor"),
+    ColumnSpec("thread_spec", "螺栓", "combo", THREAD_SPECS, 78, "anchor"),
+    ColumnSpec("pin_diameter_mm", "插针 φ", "number", PIN_DIAMETERS, 86, "anchor"),
     ColumnSpec("hose_spec", "胶管", "combo", HOSE_SPECS, 96, "anchor"),
-    ColumnSpec("embedment_depth_mm", "嵌入深度 (mm)", "number", EMBEDMENT_PRESETS, 108, "anchor"),
-    ColumnSpec("density_kg_m3", "容重 (kg/m³)", "number", DENSITY_PRESETS, 108, "footer"),
-    ColumnSpec("source_note", "备注", width=170, group="footer"),
+    ColumnSpec("embedment_depth_mm", "嵌入深度", "number", EMBEDMENT_PRESETS, 96, "anchor"),
+    ColumnSpec("source_note", "备注", width=180, group="footer"),
 )
 COLUMN_INDEX = {spec.key: index for index, spec in enumerate(COLUMN_SPECS)}
 COLUMN_BY_KEY = {spec.key: spec for spec in COLUMN_SPECS}
@@ -168,14 +176,15 @@ DEFAULT_ROW = {
     "length_mm": "300",
     "expansion_length_mm": "300",
     "thickness_mm": "230",
-    "material": "1430材质",
+    "material": "1430",
+    "density_kg_m3": "220",
     "production_quantity": "1",
     "taper_enabled": False,
     "big_head_mm": "289",
     "small_head_mm": "220",
     "taper_type": "正敲",
     "board_exists": True,
-    "board_material": "9厘夹板",
+    "board_material": "9厘",
     "anchor_enabled": False,
     "anchor_position_mm": "50",
     "anchor_spacing_mm": "300",
@@ -185,9 +194,8 @@ DEFAULT_ROW = {
     "anchor_material": "310",
     "thread_spec": "M10",
     "pin_diameter_mm": "8",
-    "hose_spec": "32胶管",
+    "hose_spec": "32",
     "embedment_depth_mm": "50",
-    "density_kg_m3": "220",
     "source_note": "",
 }
 
@@ -216,6 +224,46 @@ def _integer(value: str, label: str, module_id: str, minimum: int = 1) -> int:
     if parsed < minimum:
         raise ValueError(f"{module_id or '未编号模块'}: {label}必须至少为 {minimum}")
     return parsed
+
+
+def _without_suffix(value: str, *suffixes: str) -> str:
+    text = value.strip()
+    for suffix in sorted(suffixes, key=len, reverse=True):
+        if suffix and text.endswith(suffix):
+            return text[: -len(suffix)].strip()
+    return text
+
+
+def _module_material_value(value: str) -> str:
+    text = value.strip()
+    known = {
+        "1260": "1260材质",
+        "1350": "1350板材",
+        "1430": "1430材质",
+    }
+    if text in known:
+        return known[text]
+    if text.endswith(("材质", "板材")):
+        return text
+    return f"{text}材质" if text else ""
+
+
+def _board_material_value(value: str) -> str:
+    text = value.strip()
+    if not text or text == "无" or text.endswith(("夹板", "mm")):
+        return text
+    return f"{text}夹板"
+
+
+def _hose_value(value: str) -> str:
+    text = value.strip()
+    if not text or text == "无" or text.endswith("胶管"):
+        return "无胶管" if text == "无" else text
+    return f"{text}胶管"
+
+
+def _default_filename_stem() -> str:
+    return f"模块加工图_{datetime.now():%m%d}_"
 
 
 def _short_rule() -> QFrame:
@@ -485,7 +533,7 @@ class ParameterTable(QTableWidget):
                             item.setCheckState(
                                 Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
                             )
-                            item.setText("是" if checked else "否")
+                            item.setText("")
                         elif item.flags() & Qt.ItemFlag.ItemIsEditable:
                             item.setText(value.strip())
                     column_index += 1
@@ -496,9 +544,17 @@ class ParameterTable(QTableWidget):
 
 class StandardWindow(MainWindow):
     def __init__(self):
+        self._settings = QSettings("EventHorizon", "RefracDraft Standard")
+        self._history_ready = False
+        self._history_restoring = False
+        self._undo_stack: list[TableState] = []
+        self._redo_stack: list[TableState] = []
+        self._history_state: TableState | None = None
         super().__init__()
+        self._history_ready = True
+        self._reset_history()
         self.setWindowTitle("RefracDraft Standard — 模块加工图生成器")
-        self.statusBar().showMessage("修改参数后点击「生成预览」；可拖动选区右下角批量填充。")
+        self.statusBar().showMessage("修改参数后点击「生成图纸」；可拖动选区右下角批量填充。")
 
     def _build_ui(self) -> None:
         self._row_bases: list[
@@ -508,26 +564,29 @@ class StandardWindow(MainWindow):
 
         toolbar = QToolBar("主工具栏")
         self.addToolBar(toolbar)
-        for label, callback in (
-            ("新建", self.new_project),
-            ("打开 JSON", self.open_json),
-            ("导入 Excel", self.import_excel),
-            ("保存 JSON", self.save_json),
-            ("生成预览", self.generate),
+        for label, callback, shortcut in (
+            ("新建", self.new_project, "Ctrl+N"),
+            ("打开", self.open_json, "Ctrl+O"),
+            ("导入 Excel", self.import_excel, "Ctrl+I"),
+            ("保存", self.save_json, "Ctrl+S"),
         ):
             action = QAction(label, self)
+            action.setShortcut(QKeySequence(shortcut))
             action.triggered.connect(callback)
             toolbar.addAction(action)
         toolbar.addSeparator()
-        for label, callback in (
-            ("添加模块", lambda: self._add_module()),
-            ("删除模块", self._remove_selected_module),
-            ("导出 DXF", self.export_dxf_file),
-            ("导出 PDF", self.export_pdf_file),
-        ):
-            action = QAction(label, self)
-            action.triggered.connect(callback)
-            toolbar.addAction(action)
+        generate_action = QAction("生成图纸", self)
+        generate_action.setShortcut(QKeySequence("F5"))
+        generate_action.triggered.connect(self.generate)
+        toolbar.addAction(generate_action)
+        self.undo_action = QAction("撤销", self)
+        self.undo_action.setShortcut(QKeySequence("Ctrl+Z"))
+        self.undo_action.triggered.connect(self.undo)
+        toolbar.addAction(self.undo_action)
+        self.redo_action = QAction("重做", self)
+        self.redo_action.setShortcuts([QKeySequence("Ctrl+Y"), QKeySequence("Ctrl+Shift+Z")])
+        self.redo_action.triggered.connect(self.redo)
+        toolbar.addAction(self.redo_action)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
 
@@ -565,6 +624,7 @@ class StandardWindow(MainWindow):
             QAbstractItemView.EditTrigger.DoubleClicked
             | QAbstractItemView.EditTrigger.EditKeyPressed
             | QAbstractItemView.EditTrigger.SelectedClicked
+            | QAbstractItemView.EditTrigger.AnyKeyPressed
         )
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         table.horizontalHeader().setStretchLastSection(True)
@@ -577,6 +637,8 @@ class StandardWindow(MainWindow):
             header_item = table.horizontalHeaderItem(column)
             if header_item is not None:
                 header_item.setToolTip(spec.label)
+                header_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        table.horizontalHeader().sectionDoubleClicked.connect(self._edit_whole_column)
         table.itemChanged.connect(self._table_item_changed)
         table.currentCellChanged.connect(self._current_cell_changed)
         table.changed.connect(self._table_bulk_changed)
@@ -613,9 +675,23 @@ class StandardWindow(MainWindow):
         output_layout.addLayout(directory_row)
 
         output_layout.addWidget(QLabel("自定义文件名"))
-        self.output_filename_edit = QLineEdit("module-drawing")
+        self.output_filename_edit = QLineEdit(_default_filename_stem())
         self.output_filename_edit.setPlaceholderText("不含扩展名")
         output_layout.addWidget(self.output_filename_edit)
+
+        output_layout.addWidget(QLabel("PDF 字体"))
+        font_row = QHBoxLayout()
+        self.pdf_font_directory_edit = QLineEdit()
+        self.pdf_font_directory_edit.setPlaceholderText("内置字体，可选择外挂字体目录")
+        self.pdf_font_directory_edit.setToolTip(
+            "目录中可放置 .ttf/.otf/.ttc 字体；也可选择包含 gbenor.shx、gbcbig.shx 的目录。"
+        )
+        self.browse_font_directory_button = QPushButton("选择")
+        self.browse_font_directory_button.setFixedWidth(58)
+        self.browse_font_directory_button.clicked.connect(self._choose_pdf_font_directory)
+        font_row.addWidget(self.pdf_font_directory_edit, 1)
+        font_row.addWidget(self.browse_font_directory_button)
+        output_layout.addLayout(font_row)
 
         page_row = QHBoxLayout()
         page_row.addWidget(QLabel("预览页"))
@@ -666,12 +742,23 @@ class StandardWindow(MainWindow):
         splitter.setSizes([330, 570])
         self.setCentralWidget(splitter)
 
+        remembered_directory = str(self._settings.value("output/last_directory", ""))
         preferred_directory = QStandardPaths.writableLocation(
             QStandardPaths.StandardLocation.DocumentsLocation
         )
-        self.output_directory_edit.setText(preferred_directory or str(Path.cwd()))
+        output_directory = (
+            remembered_directory
+            if remembered_directory and Path(remembered_directory).expanduser().is_dir()
+            else preferred_directory or str(Path.cwd())
+        )
+        self.output_directory_edit.setText(output_directory)
+        self.pdf_font_directory_edit.setText(
+            str(self._settings.value("pdf/font_directory", ""))
+        )
         self.output_directory_edit.textChanged.connect(self._update_output_preview)
         self.output_filename_edit.textChanged.connect(self._update_output_preview)
+        self.output_directory_edit.editingFinished.connect(self._save_output_settings)
+        self.pdf_font_directory_edit.editingFinished.connect(self._save_output_settings)
         self._update_output_preview()
 
         self.setStyleSheet(
@@ -704,13 +791,39 @@ class StandardWindow(MainWindow):
         )
         if directory:
             self.output_directory_edit.setText(directory)
+            self._save_output_settings()
+
+    def _choose_pdf_font_directory(self) -> None:
+        current = self.pdf_font_directory_edit.text().strip()
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "选择 PDF 外挂字体目录",
+            current if current and Path(current).is_dir() else str(self._default_output_directory()),
+        )
+        if directory:
+            self.pdf_font_directory_edit.setText(directory)
+            self._save_output_settings()
+
+    def _save_output_settings(self) -> None:
+        if not hasattr(self, "output_directory_edit"):
+            return
+        self._settings.setValue(
+            "output/last_directory", self.output_directory_edit.text().strip()
+        )
+        self._settings.setValue(
+            "pdf/font_directory", self.pdf_font_directory_edit.text().strip()
+        )
+
+    def closeEvent(self, event) -> None:
+        self._save_output_settings()
+        super().closeEvent(event)
 
     def _filename_stem(self) -> str:
         value = self.output_filename_edit.text().strip() if hasattr(self, "output_filename_edit") else ""
         if value.lower().endswith((".dxf", ".pdf")):
             value = Path(value).stem
         value = re.sub(r'[<>:"/\\|?*]+', "-", value).strip(" .")
-        return value or "module-drawing"
+        return value or _default_filename_stem()
 
     def _update_output_preview(self, *_args) -> None:
         if not hasattr(self, "output_path_label"):
@@ -720,6 +833,7 @@ class StandardWindow(MainWindow):
         self.output_path_label.setText(f"{directory}\n{stem}.dxf  /  {stem}.pdf")
 
     def _output_target(self, suffix: str) -> Path | None:
+        self._save_output_settings()
         directory_text = self.output_directory_edit.text().strip()
         if not directory_text:
             path, _ = QFileDialog.getSaveFileName(
@@ -785,14 +899,14 @@ class StandardWindow(MainWindow):
             "length_mm": f"{module_values.length_mm:g}",
             "expansion_length_mm": f"{module_values.expansion_length_mm:g}",
             "thickness_mm": f"{module_values.thickness_mm:g}",
-            "material": module_values.material,
+            "material": _without_suffix(module_values.material, "材质", "板材"),
             "production_quantity": str(module_values.production_quantity),
             "taper_enabled": module_values.taper_enabled,
             "big_head_mm": f"{module_values.big_head_mm:g}" if module_values.big_head_mm is not None else "289",
             "small_head_mm": f"{module_values.small_head_mm:g}" if module_values.small_head_mm is not None else "220",
             "taper_type": module_values.taper_type.value,
             "board_exists": module_values.board_exists,
-            "board_material": module_values.board_material,
+            "board_material": _without_suffix(module_values.board_material, "夹板"),
             "anchor_enabled": anchor_values.enabled,
             "anchor_position_mm": f"{anchor_values.position_mm:g}",
             "anchor_spacing_mm": f"{anchor_values.spacing_mm:g}",
@@ -804,7 +918,10 @@ class StandardWindow(MainWindow):
             "pin_diameter_mm": (
                 f"{anchor_values.pin_diameter_mm:g}" if anchor_values.pin_diameter_mm is not None else "8"
             ),
-            "hose_spec": anchor_model.hose_spec or anchor_values.hose_spec,
+            "hose_spec": _without_suffix(
+                anchor_model.hose_spec or anchor_values.hose_spec,
+                "胶管",
+            ),
             "embedment_depth_mm": (
                 f"{anchor_values.embedment_depth_mm:g}"
                 if anchor_values.embedment_depth_mm is not None
@@ -826,7 +943,7 @@ class StandardWindow(MainWindow):
                     checked = value.strip().lower() in {"1", "是", "yes", "true", "y"}
                 else:
                     checked = bool(value)
-                item.setText("是" if checked else "否")
+                item.setText("")
                 item.setFlags(
                     Qt.ItemFlag.ItemIsSelectable
                     | Qt.ItemFlag.ItemIsEnabled
@@ -841,12 +958,7 @@ class StandardWindow(MainWindow):
                     | Qt.ItemFlag.ItemIsEnabled
                     | Qt.ItemFlag.ItemIsEditable
                 )
-                alignment = (
-                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-                    if spec.kind in {"number", "integer"}
-                    else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-                )
-                item.setTextAlignment(alignment)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             table.setItem(row, column, item)
 
     def _sheet_values(self, row: int) -> dict[str, str | bool]:
@@ -898,6 +1010,7 @@ class StandardWindow(MainWindow):
         self._update_conditional_states()
         table.clearSelection()
         table.setCurrentCell(row, 0)
+        self._record_history()
         return row
 
     def _ensure_row_count(self, extra: int) -> None:
@@ -928,6 +1041,7 @@ class StandardWindow(MainWindow):
             table.setCurrentCell(min(rows[-1], table.rowCount() - 1), 0)
         self._update_row_count()
         self._update_conditional_states()
+        self._record_history()
 
     def _update_row_count(self) -> None:
         count = self.parameter_table.rowCount()
@@ -1017,6 +1131,141 @@ class StandardWindow(MainWindow):
         finally:
             self._updating_table = was_updating
 
+    def _capture_table_state(self) -> TableState:
+        rows = tuple(self._sheet_values(row) for row in range(self.parameter_table.rowCount()))
+        bases = list(self._row_bases[: self.parameter_table.rowCount()])
+        while len(bases) < len(rows):
+            bases.append((None, None, None))
+        return TableState(rows=rows, bases=tuple(bases))
+
+    def _reset_history(self) -> None:
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self._history_state = self._capture_table_state()
+        self._refresh_history_actions()
+
+    def _record_history(self) -> None:
+        if not self._history_ready or self._history_restoring:
+            return
+        current = self._capture_table_state()
+        if self._history_state is None:
+            self._history_state = current
+            return
+        if current == self._history_state:
+            return
+        self._undo_stack.append(self._history_state)
+        if len(self._undo_stack) > 100:
+            self._undo_stack.pop(0)
+        self._redo_stack.clear()
+        self._history_state = current
+        self._refresh_history_actions()
+
+    def _refresh_history_actions(self) -> None:
+        if hasattr(self, "undo_action"):
+            self.undo_action.setEnabled(bool(self._undo_stack))
+        if hasattr(self, "redo_action"):
+            self.redo_action.setEnabled(bool(self._redo_stack))
+
+    def _restore_table_state(self, state: TableState) -> None:
+        table = self.parameter_table
+        self._history_restoring = True
+        self._updating_table = True
+        table.blockSignals(True)
+        try:
+            table.setRowCount(0)
+            self._row_bases.clear()
+            for row, values in enumerate(state.rows):
+                table.insertRow(row)
+                self._write_row(row, values)
+                base = state.bases[row] if row < len(state.bases) else (None, None, None)
+                self._row_bases.append(base)
+        finally:
+            table.blockSignals(False)
+            self._updating_table = False
+            self._history_restoring = False
+        self._update_row_count()
+        self._update_conditional_states()
+        self._history_state = state
+        self._refresh_history_actions()
+
+    def undo(self) -> None:
+        if not self._undo_stack:
+            return
+        current = self._capture_table_state()
+        previous = self._undo_stack.pop()
+        self._redo_stack.append(current)
+        self._restore_table_state(previous)
+        self.statusBar().showMessage("已撤销参数修改。")
+
+    def redo(self) -> None:
+        if not self._redo_stack:
+            return
+        current = self._capture_table_state()
+        following = self._redo_stack.pop()
+        self._undo_stack.append(current)
+        self._restore_table_state(following)
+        self.statusBar().showMessage("已重做参数修改。")
+
+    def _edit_whole_column(self, column: int) -> None:
+        if column < 0 or column >= len(COLUMN_SPECS):
+            return
+        table = self.parameter_table
+        if table.isColumnHidden(column) or table.rowCount() == 0:
+            return
+        spec = COLUMN_SPECS[column]
+        if spec.kind == "check":
+            items = [table.item(row, column) for row in range(table.rowCount())]
+            target = not all(
+                item is not None and item.checkState() == Qt.CheckState.Checked
+                for item in items
+            )
+            table.blockSignals(True)
+            try:
+                for item in items:
+                    if item is None:
+                        continue
+                    item.setCheckState(
+                        Qt.CheckState.Checked if target else Qt.CheckState.Unchecked
+                    )
+                    item.setText("")
+            finally:
+                table.blockSignals(False)
+            self._table_bulk_changed()
+            return
+
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle(f"修改整列 - {spec.label}")
+        hint = "，".join(spec.options) if spec.options else "输入任意自定义内容"
+        dialog.setLabelText(f"将第 {column + 1} 列设置为：\n{hint}")
+        if spec.options:
+            dialog.setComboBoxItems(list(spec.options))
+            dialog.setComboBoxEditable(True)
+        table.blockSignals(True)
+        try:
+            values = {
+                table.item(row, column).text().strip()
+                for row in range(table.rowCount())
+                if table.item(row, column) is not None
+            }
+        finally:
+            table.blockSignals(False)
+        if len(values) == 1:
+            dialog.setTextValue(next(iter(values)))
+        if dialog.exec() != QInputDialog.DialogCode.Accepted:
+            return
+        value = dialog.textValue().strip()
+        if not value:
+            return
+        table.blockSignals(True)
+        try:
+            for row in range(table.rowCount()):
+                item = table.item(row, column)
+                if item is not None:
+                    item.setText(value)
+        finally:
+            table.blockSignals(False)
+        self._table_bulk_changed()
+
     def _table_item_changed(self, item: QTableWidgetItem) -> None:
         if self._updating_table or item.row() >= len(self._row_bases):
             return
@@ -1025,13 +1274,14 @@ class StandardWindow(MainWindow):
         try:
             if spec.kind == "check":
                 checked = item.checkState() == Qt.CheckState.Checked
-                item.setText("是" if checked else "否")
+                item.setText("")
             if spec.key in {"taper_enabled", "big_head_mm"}:
                 self._sync_expansion_length(item.row())
         finally:
             self._updating_table = False
         self._update_conditional_states()
-        self.statusBar().showMessage("参数已修改，点击「生成预览」更新图纸。")
+        self._record_history()
+        self.statusBar().showMessage("参数已修改，点击「生成图纸」更新图纸。")
 
     def _table_bulk_changed(self) -> None:
         if self._updating_table:
@@ -1043,7 +1293,8 @@ class StandardWindow(MainWindow):
             self._updating_table = False
         self._update_row_count()
         self._update_conditional_states()
-        self.statusBar().showMessage("参数已修改，点击「生成预览」更新图纸。")
+        self._record_history()
+        self.statusBar().showMessage("参数已修改，点击「生成图纸」更新图纸。")
 
     def _ensure_unique_module_ids(self) -> None:
         used: set[str] = set()
@@ -1076,6 +1327,7 @@ class StandardWindow(MainWindow):
             self._add_module()
         self._update_row_count()
         self._update_conditional_states()
+        self._reset_history()
 
     def new_project(self) -> None:
         self.project = Project()
@@ -1084,6 +1336,7 @@ class StandardWindow(MainWindow):
         self.page_spin.setMaximum(1)
         self._clear_rows()
         self._add_module()
+        self._reset_history()
 
     def _build_project_row(self, row: int) -> tuple[
         ModuleParameters, BoardParameters, AnchorParameters
@@ -1110,9 +1363,9 @@ class StandardWindow(MainWindow):
             ),
             taper_type=self._geometry_type(str(values["taper_type"]), module_id),
             board_exists=bool(values["board_exists"]),
-            material=str(values["material"]).strip(),
+            material=_module_material_value(str(values["material"])),
             production_quantity=_integer(str(values["production_quantity"]), "模块数量", module_id),
-            board_material=str(values["board_material"]).strip() or "9厘夹板",
+            board_material=_board_material_value(str(values["board_material"]).strip() or "9厘"),
             density_kg_m3=_optional_number(str(values["density_kg_m3"]), "容重", module_id),
             source_note=str(values["source_note"]).strip(),
         )
@@ -1156,7 +1409,7 @@ class StandardWindow(MainWindow):
                 material=str(values["anchor_material"]).strip() or "310",
                 thread_spec=str(values["thread_spec"]).strip() or "M10",
                 pin_diameter_mm=_optional_number(pin_text, "插针直径", module_id),
-                hose_spec=str(values["hose_spec"]).strip() or "32胶管",
+                hose_spec=_hose_value(str(values["hose_spec"]).strip()) or "32胶管",
             )
         if anchor_type == AnchorType.NONE:
             raise ValueError(f"{module_id}: 已勾选锚固件，必须选择锚固件类型")
@@ -1179,7 +1432,7 @@ class StandardWindow(MainWindow):
             material=str(values["anchor_material"]).strip() or "310",
             thread_spec=str(values["thread_spec"]).strip() or "M10",
             pin_diameter_mm=pin_diameter,
-            hose_spec=str(values["hose_spec"]).strip() or "32胶管",
+            hose_spec=_hose_value(str(values["hose_spec"]).strip()) or "32胶管",
             length_mm=_number(str(values["anchor_length_mm"]), "锚固件长度", module_id),
         )
 
@@ -1226,7 +1479,15 @@ class StandardWindow(MainWindow):
             return
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            export_pdf(self.drawing_document, path, reference_dxf=self.reference_dxf)
+            font_directory = self.pdf_font_directory_edit.text().strip() or None
+            if font_directory and not Path(font_directory).expanduser().is_dir():
+                raise FileNotFoundError(f"PDF 字体目录不存在: {font_directory}")
+            export_pdf(
+                self.drawing_document,
+                path,
+                reference_dxf=self.reference_dxf,
+                font_directory=font_directory,
+            )
             self.statusBar().showMessage(f"PDF 已导出：{path}")
         except Exception as exc:
             QMessageBox.critical(self, "PDF 导出失败", str(exc))

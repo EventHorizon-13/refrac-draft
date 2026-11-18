@@ -30,7 +30,6 @@ ANCHOR_SYMBOL_ID = {
 
 BOARD_ANCHOR_TOP_OFFSET_MM = {
     AnchorType.M_SHAPE: 35.4391501542,
-    AnchorType.DIAMOND: 70.0,
     AnchorType.WELDED_DIAMOND: 70.0,
 }
 
@@ -61,6 +60,12 @@ def _anchor_positions(
         return [(p.x_mm, p.y_mm) for p in anchor.positions]
     xs = _anchor_x_positions(anchor, width)
     if board_face:
+        if anchor.anchor_type == AnchorType.DIAMOND and anchor.embedment_depth_mm:
+            # The source diamond block defaults to a 70 mm insertion offset, but the
+            # user-facing embedment depth is a real geometric parameter. The symbol is
+            # extracted around its insertion point, so that point must coincide with
+            # the dimension endpoint instead of keeping the block's stale default.
+            return [(x, max(0.0, height - anchor.embedment_depth_mm)) for x in xs]
         offset = BOARD_ANCHOR_TOP_OFFSET_MM.get(anchor.anchor_type, 35.4391501542)
         y = max(0.0, height - offset)
     else:
@@ -112,9 +117,9 @@ def _details(module, board, anchor) -> tuple[str, ...]:
     lines.append(f"6、容重：{module.density_kg_m3:g} kg/m³" if module.density_kg_m3 else "6、容重：未填写")
     hose = anchor.hose_spec if anchor.exists else "无胶管"
     board_text = board.material if board.exists else "无夹板"
-    lines.append(f"{hose or '未填写胶管'}，{board_text}")
+    lines.append(f"7、胶管/夹板：{hose or '未填写胶管'}，{board_text}")
     if module.source_note:
-        lines.append(f"备注：{module.source_note}")
+        lines.append(f"8、备注：{module.source_note}")
     return tuple(lines)
 
 
