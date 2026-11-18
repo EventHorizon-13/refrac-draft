@@ -1,4 +1,4 @@
-name: Standard followup release
+name: Standard followup release retry
 
 on:
   pull_request:
@@ -20,21 +20,21 @@ jobs:
           ref: feat/standard-edition
           fetch-depth: 0
           persist-credentials: true
-      - name: Apply verified followup patch
+      - name: Apply remaining followup patch
         shell: bash
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           git fetch origin "$HEAD_SHA"
-          git cat-file blob "$HEAD_SHA:.refrac-standard-followup.patch.b64" > /tmp/refrac-standard-followup.patch
-          git apply --check /tmp/refrac-standard-followup.patch
-          git apply /tmp/refrac-standard-followup.patch
-          rm -f .github/workflows/standard-release-followup.yml
+          git cat-file blob "$HEAD_SHA:.refrac-standard-followup.patch.gz.b64" | base64 -d | gzip -d > /tmp/refrac-standard-followup.patch
+          git apply --exclude=README.md --exclude=docs/WINDOWS_STANDARD.md --check /tmp/refrac-standard-followup.patch
+          git apply --exclude=README.md --exclude=docs/WINDOWS_STANDARD.md /tmp/refrac-standard-followup.patch
+          rm -f .github/workflows/standard-release-followup.yml .github/workflows/standard-release-retry.yml
           git config user.name "RefracDraft Release Bot"
           git config user.email "actions@github.com"
           git add -A
-          git commit -m "fix: refine standard editor interaction [skip ci]"
+          git commit -m "fix: complete standard editor interaction [skip ci]"
           git push origin HEAD:feat/standard-edition
       - name: Install build dependencies
         run: python -m pip install -e ".[ui]" "pyinstaller==6.22.3"
