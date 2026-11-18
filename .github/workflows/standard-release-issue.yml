@@ -20,7 +20,7 @@ jobs:
       - name: Apply verified patch from release branch
         shell: bash
         env:
-          HEAD_SHA: 8e81653d1a53291ffb9194261b8e5c78cee2de66
+          HEAD_SHA: a65d82c6c9f50961854df7d47c4572ba739b53f5
         run: |
           set -euo pipefail
           git fetch origin "$HEAD_SHA"
