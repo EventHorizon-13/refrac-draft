@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin "$HEAD_SHA"
-          git cat-file blob "$HEAD_SHA:.refrac-standard-followup.patch.gz.b64" | base64 -d | gzip -d > /tmp/refrac-standard-followup.patch
+          git cat-file blob "$HEAD_SHA:.refrac-standard-followup.patch.gz.b64" | gzip -d > /tmp/refrac-standard-followup.patch
           git apply --exclude=README.md --exclude=docs/WINDOWS_STANDARD.md --check /tmp/refrac-standard-followup.patch
           git apply --exclude=README.md --exclude=docs/WINDOWS_STANDARD.md /tmp/refrac-standard-followup.patch
           rm -f .github/workflows/standard-release-followup.yml .github/workflows/standard-release-retry.yml
