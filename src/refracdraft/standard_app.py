@@ -23,7 +23,7 @@ def main() -> None:
     app = QApplication([sys.argv[0]] if smoke else sys.argv)
     app.setOrganizationName("EventHorizon")
     app.setApplicationName("RefracDraft Standard")
-    app.setWindowIcon(QIcon(str(resource_path("assets/RefracDraft.ico"))))
+    app.setWindowIcon(QIcon(str(resource_path("assets/RefracDraft.png"))))
     app_font_path = resource_path("assets/fonts/SourceHanSansSC-Regular.otf")
     if app_font_path.is_file():
         font_id = QFontDatabase.addApplicationFont(str(app_font_path))
@@ -218,6 +218,7 @@ def main() -> None:
             finally:
                 underlay.hide()
                 underlay.deleteLater()
+                app.sendPostedEvents(underlay, QEvent.Type.DeferredDelete)
             QApplication.sendEvent(table, QKeyEvent(
                 QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
             ))
@@ -252,6 +253,10 @@ def main() -> None:
             trace.write_text("fill handle passed\n", encoding="utf-8")
             _smoke_test(window)
             trace.write_text("exporters passed\n", encoding="utf-8")
+            window.close()
+            window.deleteLater()
+            app.sendPostedEvents(window, QEvent.Type.DeferredDelete)
+            app.setWindowIcon(QIcon())
         except Exception:
             import traceback
 
