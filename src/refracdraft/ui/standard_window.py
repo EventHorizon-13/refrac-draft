@@ -22,6 +22,7 @@ from PySide6.QtGui import (
     QPixmap,
 )
 from PySide6.QtWidgets import (
+    QAbstractItemDelegate,
     QAbstractItemView,
     QApplication,
     QDialog,
@@ -488,7 +489,7 @@ class ParameterTable(QTableWidget):
 
     def _commit_and_move_down(self, editor: QLineEdit) -> None:
         self.commitData(editor)
-        self.closeEditor(editor, QAbstractItemView.EndEditHint.NoHint)
+        self.closeEditor(editor, QAbstractItemDelegate.EndEditHint.NoHint)
         self._move_current_cell(1, 0)
 
     def _show_cell_menu(self, row: int, column: int) -> None:
