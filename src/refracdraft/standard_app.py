@@ -7,15 +7,17 @@ def main() -> None:
     from pathlib import Path
 
     from PySide6.QtCore import QEvent, QPointF, Qt
-    from PySide6.QtGui import QFont, QFontDatabase, QIcon, QKeyEvent, QMouseEvent
-    from PySide6.QtWidgets import QApplication, QLineEdit, QWidget
+    from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QKeyEvent, QMouseEvent
+    from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QWidget
 
     from refracdraft.app import _smoke_test
     from refracdraft.domain.models import Project
     from refracdraft.exporters.pdf import _find_pdf_font
     from refracdraft.importers.excel import import_project_xlsx
+    from refracdraft.release import build_time_display
     from refracdraft.resources import resource_path
     from refracdraft.standard import ensure_standard_project
+    from refracdraft.ui.about import AboutDialog
     from refracdraft.ui.standard_window import COLUMN_INDEX, StandardWindow
 
     smoke = "--smoke-test" in sys.argv
@@ -38,6 +40,13 @@ def main() -> None:
         try:
             if window.windowIcon().pixmap(32, 32).isNull():
                 raise ValueError("便携版缺少可加载的程序图标")
+            about = AboutDialog(window)
+            build_time = build_time_display()
+            build_label = about.findChild(QLabel, "buildTimeLabel")
+            if not build_time or build_label is None or build_time not in build_label.text():
+                raise ValueError("关于窗口未显示便携版的编译时间")
+            about.deleteLater()
+            app.sendPostedEvents(about, QEvent.Type.DeferredDelete)
             if _find_pdf_font() != resource_path("assets/fonts/SourceHanSerifSC-Regular.otf"):
                 raise ValueError("缺省 PDF 字体未使用随包思源宋体")
             example_excel = import_project_xlsx(resource_path("examples/standard_example_6_modules.xlsx"))
@@ -220,8 +229,11 @@ def main() -> None:
                     raise ValueError("下拉菜单背景测试无法绘制对比底层")
                 presets.show()
                 presets.raise_()
-                if capture_preset_area("#ff00ff") != capture_preset_area("#00ffff"):
+                panel = capture_preset_area("#ff00ff")
+                if panel != capture_preset_area("#00ffff"):
                     raise ValueError("预设下拉菜单透出了底层表格")
+                if panel.pixelColor(panel.width() // 2, 0) != QColor("#5688c7"):
+                    raise ValueError("预设下拉菜单的蓝色边框未绘制")
             finally:
                 underlay.hide()
                 underlay.deleteLater()

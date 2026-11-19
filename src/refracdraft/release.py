@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 import re
 import tomllib
@@ -19,6 +20,15 @@ def app_version() -> str:
     except PackageNotFoundError:
         with resource_path("pyproject.toml").open("rb") as project:
             return tomllib.load(project)["project"]["version"]
+
+
+def build_time_display() -> str | None:
+    try:
+        timestamp = resource_path("assets/build-time.txt").read_text(encoding="ascii").strip()
+        built_at = datetime.fromisoformat(timestamp)
+    except (OSError, ValueError):
+        return None
+    return built_at.astimezone().strftime("%Y-%m-%d %H:%M:%S UTC%z")
 
 
 def latest_portable_release(releases: list[dict]) -> tuple[str, str] | None:

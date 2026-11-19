@@ -7,7 +7,9 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
-from refracdraft.release import PROJECT_URL, RELEASES_API, app_version, latest_portable_release
+from refracdraft.release import (
+    PROJECT_URL, RELEASES_API, app_version, build_time_display, latest_portable_release,
+)
 
 
 class AboutDialog(QDialog):
@@ -27,6 +29,9 @@ class AboutDialog(QDialog):
         title.setFont(font)
         layout.addWidget(title)
         layout.addWidget(QLabel(f"版本 v{app_version()} · Windows x64 便携版"))
+        build_label = QLabel(f"编译时间 {build_time_display() or '未记录'}")
+        build_label.setObjectName("buildTimeLabel")
+        layout.addWidget(build_label)
         layout.addWidget(QLabel("耐火材料模块加工图生成器"))
         project = QLabel(f'<a href="{PROJECT_URL}">GitHub 项目主页</a>')
         project.setOpenExternalLinks(True)

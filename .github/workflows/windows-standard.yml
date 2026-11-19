@@ -59,6 +59,11 @@ jobs:
           Copy-Item (Join-Path $exporter.FullName "*") "assets/pdf-exporter" -Recurse -Force
           if (-not (Test-Path "assets/pdf-exporter/node.exe")) { throw "PdfExporter/node.exe is missing." }
           if (-not (Test-Path "assets/pdf-exporter/pdf-exporter.bundle.mjs")) { throw "pdf-exporter.bundle.mjs is missing." }
+      - name: Record build time
+        shell: pwsh
+        run: |
+          [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'") |
+            Set-Content -Encoding ascii "assets/build-time.txt"
       - name: Build one-folder application
         run: >
           python -m PyInstaller --noconfirm --clean --onedir --windowed

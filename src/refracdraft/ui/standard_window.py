@@ -840,7 +840,7 @@ class StandardWindow(MainWindow):
             "QLabel#previewTitle { padding: 4px 7px; }"
             "QListWidget#parameterPresetList {"
             " background-color: palette(base); color: palette(text);"
-            " border: 1px solid palette(mid); }"
+            " border: 2px solid #5688c7; }"
             "QListWidget#parameterPresetList::item {"
             " background-color: palette(base); color: palette(text); padding: 4px 7px; }"
             "QListWidget#parameterPresetList::item:hover, QListWidget#parameterPresetList::item:selected {"
