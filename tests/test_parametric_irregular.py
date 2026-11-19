@@ -149,9 +149,9 @@ def test_board_profile_hidden_projection_and_dimension_lanes():
 
 @pytest.mark.parametrize(("rotation", "labels", "datum", "side_x", "front_solid", "side_solid"), [
     (270, ("104", "150"), (46, 230), 120, True, True),
-    (0, ("30", "150"), (120, 46), 184, False, True),
+    (0, ("150", "150"), (0, 46), 184, True, True),
     (180, ("150", "30"), (180, 230), 46, True, False),
-    (90, ("150", "104"), (254, 120), 110, False, False),
+    (90, ("150", "150"), (300, 120), 110, True, False),
 ])
 def test_board_profile_datums_and_line_visibility(rotation, labels, datum, side_x, front_solid, side_solid):
     profile = BoardFaceProfile.model_validate({"features": [

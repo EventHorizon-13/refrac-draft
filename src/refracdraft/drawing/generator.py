@@ -112,17 +112,19 @@ def _section_intersections(outline: Polyline, station: float) -> tuple[float, ..
 def _add_board_projection(view: ViewDrawing, board: Polyline) -> ViewDrawing:
     """Project near-side corners as solid edges and far-side corners as hidden edges."""
     left, _, right, _ = view.outline.bounds
-    board_left, _, board_right, _ = board.bounds
-    corners: dict[float, float] = {}
+    board_left, board_bottom, board_right, _ = board.bounds
+    corners: dict[float, list[float]] = {}
     for x, depth in board.points:
         if board_left < x < board_right:
-            corners[x] = max(depth, corners.get(x, depth))
+            corners.setdefault(x, []).append(depth)
     visible = []
     hidden = []
-    for station, depth in sorted(corners.items()):
+    for station, depths in sorted(corners.items()):
         x = left + (station - board_left) * (right - left) / (board_right - board_left)
         nearest = max(_section_intersections(board, station))
-        lines = visible if nearest - depth < 1e-6 else hidden
+        # An open step reaching the lower edge also leaves a solid seam in the front view.
+        opens_at_bottom = view.view_type == "front" and abs(min(depths) - board_bottom) < 1e-6
+        lines = visible if nearest - max(depths) < 1e-6 or opens_at_bottom else hidden
         intersections = _section_intersections(view.outline, x)
         for bottom, top in zip(intersections, intersections[1:]):
             if top - bottom > 1e-6 and point_in_outline(view.outline, (x, (bottom + top) / 2)):
@@ -131,28 +133,28 @@ def _add_board_projection(view: ViewDrawing, board: Polyline) -> ViewDrawing:
 
 
 def _anchor_chain_endpoints(
-    board: Polyline, first: float, last: float,
+    board: Polyline, first: tuple[float, float], last: tuple[float, float],
 ) -> tuple[tuple[float, float], tuple[float, float]]:
-    """Use the recessed left/right material edges as the anchor measurement datums."""
-    # In section coordinates y is the station and x is the distance along the board.
+    """Locate the dimension chain on the two outer edges around the anchors."""
+    left, bottom, right, top = board.bounds
     section = Polyline(tuple((y, x) for x, y in board.points))
-    left_edges = []
-    right_edges = []
-    for (x1, y1), (x2, y2) in zip(board.points, board.points[1:] + board.points[:1]):
-        if y1 == y2:
-            continue
-        intersections = _section_intersections(section, (y1 + y2) / 2)
-        midpoint = (x1 + x2) / 2
-        endpoints = ((x1, y1), (x2, y2))
-        if abs(intersections[0] - midpoint) < 1e-6:
-            left_edges.extend(point for point in endpoints if point[0] <= first)
-        if abs(intersections[-1] - midpoint) < 1e-6:
-            right_edges.extend(point for point in endpoints if point[0] >= last)
-    left, _, right, top = board.bounds
-    return (
-        max(left_edges, default=(left, top)),
-        min(right_edges, key=lambda point: (point[0], -point[1]), default=(right, top)),
-    )
+    top_edges = _section_intersections(section, top)
+    top_left, top_right = top_edges[0], top_edges[-1]
+
+    def datum(top_edge: float, outer_edge: float, anchor: tuple[float, float], is_left: bool):
+        x, y = anchor
+        if (is_left and top_edge > x) or (not is_left and top_edge < x):
+            return (_section_intersections(section, y)[0 if is_left else -1], y)
+        if top_edge == outer_edge:
+            # A lower step can supply an actual extension-line origin without shifting the width datum.
+            shoulder = max(
+                (py for px, py in board.points if px == outer_edge and bottom < py < top),
+                default=top,
+            )
+            return (outer_edge, shoulder)
+        return (top_edge, top)
+
+    return datum(top_left, left, first, True), datum(top_right, right, last, False)
 
 
 def _details(module, board, anchor) -> tuple[str, ...]:
@@ -435,15 +437,15 @@ class DrawingGenerator:
         ]
         board_dims.extend(profile_dimensions)
         if anchor.dimension_horizontal and positions:
-            xs = sorted(p[0] for p in positions)
+            ordered = sorted(positions)
             top = module.board_face_height_mm
             cut_dim_top = max(
                 (dim.line_position for dim in profile_dimensions if dim.orientation == "horizontal"),
                 default=top,
             )
             chain_offset = max(35.0, cut_dim_top - top + 62) if cut_dim_top > top else 35.0
-            left, right = _anchor_chain_endpoints(board_outline, xs[0], xs[-1])
-            chain = [left, *((x, _section_intersections(board_outline, x)[-1]) for x in xs), right]
+            left, right = _anchor_chain_endpoints(board_outline, ordered[0], ordered[-1])
+            chain = [left, *((x, _section_intersections(board_outline, x)[-1]) for x, _ in ordered), right]
             for start, end in zip(chain, chain[1:]):
                 distance = end[0] - start[0]
                 if distance > 0.01:
