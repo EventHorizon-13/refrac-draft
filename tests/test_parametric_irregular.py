@@ -136,9 +136,8 @@ def test_board_profile_hidden_projection_and_dimension_lanes():
         board_face_width_mm=300, board_face_height_mm=230, board_face_outline=profile,
     )
     drawing = DrawingGenerator().build_module(Project(modules=[module]), module)
-    assert [line.points for line in drawing.front_view.hidden_lines] == [
-        ((45, 0), (45, 300)), ((90, 0), (90, 300)),
-    ]
+    assert [line.points for line in drawing.front_view.internal_lines] == [((45, 0), (45, 300))]
+    assert [line.points for line in drawing.front_view.hidden_lines] == [((90, 0), (90, 300))]
     overall_width, overall_height, lower_step, notch_width, notch_height, shoulder = (
         drawing.board_view.dimensions
     )
@@ -146,4 +145,35 @@ def test_board_profile_hidden_projection_and_dimension_lanes():
     assert overall_height.line_position < lower_step.line_position < 0
     assert 0 < notch_height.line_position < 45
     assert shoulder.line_position > 230
+
+
+@pytest.mark.parametrize(("rotation", "labels", "datum", "side_x", "front_solid", "side_solid"), [
+    (270, ("104", "150"), (46, 230), 120, True, True),
+    (0, ("30", "150"), (120, 46), 184, False, True),
+    (180, ("150", "30"), (180, 230), 46, True, False),
+    (90, ("150", "104"), (254, 120), 110, False, False),
+])
+def test_board_profile_datums_and_line_visibility(rotation, labels, datum, side_x, front_solid, side_solid):
+    profile = BoardFaceProfile.model_validate({"features": [
+        {"type": 1, "a": 120, "b": 46, "rotation_deg": rotation},
+    ]})
+    module = ModuleParameters(
+        module_id="M1", geometry_type=GeometryType.SIDE_TAPER, front_width_mm=300, front_height_mm=289,
+        side_length_mm=230, side_left_height_mm=289, side_right_height_mm=220,
+        board_face_width_mm=300, board_face_height_mm=230, board_face_outline=profile,
+    )
+    anchor = AnchorParameters(
+        module_id="M1", positions=[{"x_mm": 150, "y_mm": 190}], dimension_horizontal=True,
+    )
+    drawing = DrawingGenerator().build_module(Project(modules=[module], anchors=[anchor]), module)
+    dimensions = drawing.board_view.dimensions[-2:]
+    assert tuple(dimension.label for dimension in dimensions) == labels
+    assert datum in (dimensions[0].start, dimensions[-1].end)
+    assert all((150, 230) in (dimension.start, dimension.end) for dimension in dimensions)
+    for view, solid in ((drawing.front_view, front_solid), (drawing.side_view, side_solid)):
+        solid_verticals = [line for line in view.internal_lines if line.points[0][0] == line.points[1][0]]
+        assert len(solid_verticals) == int(solid)
+        assert len(view.hidden_lines) == int(not solid)
+    side_edges = drawing.side_view.internal_lines if side_solid else drawing.side_view.hidden_lines
+    assert any(line.points[0][0] == side_x == line.points[1][0] for line in side_edges)
 

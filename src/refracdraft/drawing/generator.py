@@ -97,23 +97,62 @@ def _small_head_contour_lines(width: float, overall_height: float, small_height:
     )
 
 
-def _board_hidden_lines(front: Polyline, board: Polyline) -> tuple[Polyline, ...]:
-    left, _, right, _ = front.bounds
+def _section_intersections(outline: Polyline, station: float) -> tuple[float, ...]:
+    """Return the contour intersections along the vertical section at station."""
+    depths = set()
+    for (x1, y1), (x2, y2) in zip(outline.points, outline.points[1:] + outline.points[:1]):
+        if x1 == x2:
+            if station == x1:
+                depths.update((y1, y2))
+        elif min(x1, x2) <= station <= max(x1, x2):
+            depths.add(y1 + (y2 - y1) * (station - x1) / (x2 - x1))
+    return tuple(sorted(depths))
+
+
+def _add_board_projection(view: ViewDrawing, board: Polyline) -> ViewDrawing:
+    """Project near-side corners as solid edges and far-side corners as hidden edges."""
+    left, _, right, _ = view.outline.bounds
     board_left, _, board_right, _ = board.bounds
-    front_edges = tuple(zip(front.points, front.points[1:] + front.points[:1]))
-    stations = {x for x, _ in board.points if board_left < x < board_right}
-    lines = []
-    for station in sorted(stations):
+    corners: dict[float, float] = {}
+    for x, depth in board.points:
+        if board_left < x < board_right:
+            corners[x] = max(depth, corners.get(x, depth))
+    visible = []
+    hidden = []
+    for station, depth in sorted(corners.items()):
         x = left + (station - board_left) * (right - left) / (board_right - board_left)
-        intersections = sorted({
-            y1 + (y2 - y1) * (x - x1) / (x2 - x1)
-            for (x1, y1), (x2, y2) in front_edges
-            if x1 != x2 and min(x1, x2) <= x <= max(x1, x2)
-        })
+        nearest = max(_section_intersections(board, station))
+        lines = visible if nearest - depth < 1e-6 else hidden
+        intersections = _section_intersections(view.outline, x)
         for bottom, top in zip(intersections, intersections[1:]):
-            if top - bottom > 1e-6 and point_in_outline(front, (x, (bottom + top) / 2)):
+            if top - bottom > 1e-6 and point_in_outline(view.outline, (x, (bottom + top) / 2)):
                 lines.append(Polyline(((x, bottom), (x, top)), closed=False))
-    return tuple(lines)
+    return replace(view, internal_lines=view.internal_lines + tuple(visible), hidden_lines=tuple(hidden))
+
+
+def _anchor_chain_endpoints(
+    board: Polyline, first: float, last: float,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Use the recessed left/right material edges as the anchor measurement datums."""
+    # In section coordinates y is the station and x is the distance along the board.
+    section = Polyline(tuple((y, x) for x, y in board.points))
+    left_edges = []
+    right_edges = []
+    for (x1, y1), (x2, y2) in zip(board.points, board.points[1:] + board.points[:1]):
+        if y1 == y2:
+            continue
+        intersections = _section_intersections(section, (y1 + y2) / 2)
+        midpoint = (x1 + x2) / 2
+        endpoints = ((x1, y1), (x2, y2))
+        if abs(intersections[0] - midpoint) < 1e-6:
+            left_edges.extend(point for point in endpoints if point[0] <= first)
+        if abs(intersections[-1] - midpoint) < 1e-6:
+            right_edges.extend(point for point in endpoints if point[0] >= last)
+    left, _, right, top = board.bounds
+    return (
+        max(left_edges, default=(left, top)),
+        min(right_edges, key=lambda point: (point[0], -point[1]), default=(right, top)),
+    )
 
 
 def _details(module, board, anchor) -> tuple[str, ...]:
@@ -331,7 +370,11 @@ class DrawingGenerator:
             board_outline = rectangle(module.board_face_width_mm, module.board_face_height_mm)
 
         if module.board_face_outline is not None:
-            front_view = replace(front_view, hidden_lines=_board_hidden_lines(front, board_outline))
+            front_view = _add_board_projection(front_view, board_outline)
+            if side_view is not None:
+                # First-angle projection places the left view to the right of the front view.
+                side_board = Polyline(tuple((-y, -x) for x, y in board_outline.points))
+                side_view = _add_board_projection(side_view, side_board)
 
         symbol_lines: list[Polyline] = []
         symbol_colors: list[int] = []
@@ -391,7 +434,7 @@ class DrawingGenerator:
                       max(70, -left_cut_dim + 44) if profile_dimensions else 40),
         ]
         board_dims.extend(profile_dimensions)
-        if anchor.dimension_horizontal:
+        if anchor.dimension_horizontal and positions:
             xs = sorted(p[0] for p in positions)
             top = module.board_face_height_mm
             cut_dim_top = max(
@@ -399,12 +442,13 @@ class DrawingGenerator:
                 default=top,
             )
             chain_offset = max(35.0, cut_dim_top - top + 62) if cut_dim_top > top else 35.0
-            chain = [0.0, *xs, module.board_face_width_mm]
-            for start_x, end_x in zip(chain, chain[1:]):
-                if end_x - start_x > 0.01:
-                    board_dims.append(Dimension((start_x, module.board_face_height_mm),
-                                                (end_x, module.board_face_height_mm),
-                                                f"{end_x - start_x:g}", "horizontal", chain_offset))
+            left, right = _anchor_chain_endpoints(board_outline, xs[0], xs[-1])
+            chain = [left, *((x, _section_intersections(board_outline, x)[-1]) for x in xs), right]
+            for start, end in zip(chain, chain[1:]):
+                distance = end[0] - start[0]
+                if distance > 0.01:
+                    offset = top + chain_offset - max(start[1], end[1])
+                    board_dims.append(Dimension(start, end, f"{distance:g}", "horizontal", offset))
         if anchor.dimension_vertical:
             seen_offsets: set[float] = set()
             for x, y in positions:
