@@ -170,6 +170,7 @@ class DrawingPreview(QGraphicsView):
         item.setDefaultTextColor(QColor(color))
         item.setScale(size / 10.0)
         item.setPos(x, 210 - y - size)
+        return item
 
     def _add_multiline_text(self, scene, text, x, max_width):
         item = scene.addText(text)
@@ -236,10 +237,12 @@ class DrawingPreview(QGraphicsView):
                 scene.addLine(cx, cy - 1.5, cx, cy + 1.5, QPen(QColor("#ff0000"), 0.25))
         min_x, min_y, max_x, max_y = view.outline.bounds
         label = view.note or module_id
-        label_y = (max_y - min_y) / 2
+        label_y = (min_y + max_y) * scale / 2
         if view.view_type != "board-face" and (view.anchor_symbols or view.anchor_points):
-            label_y = (view.outline.points[0][1] + view.outline.points[1][1]) / 2 + 5.0
-        self._add_text(scene, label, ox + (max_x - min_x) * scale / 2 - 3, oy + label_y, 4, "#111111")
+            label_y = (view.outline.points[0][1] + view.outline.points[1][1]) * scale / 2 + 5.0
+        center = ox + (min_x + max_x) * scale / 2
+        item = self._add_text(scene, label, center, oy + label_y, 4, "#111111")
+        item.setX(center - item.boundingRect().width() * item.scale() / 2)
 
     def _dim_line(self, scene, x1, y1, x2, y2, label, horizontal):
         pen = QPen(QColor("#00ffff"), 0.25)

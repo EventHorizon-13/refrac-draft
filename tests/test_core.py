@@ -159,7 +159,7 @@ def test_stacked_no_anchor_uses_source_layer_marks():
     drawing = DrawingGenerator(ReferenceLibrary(REF_DXF) if REF_DXF.exists() else None).generate(project).pages[0].modules[0].drawing
     if REF_DXF.exists():
         assert len(drawing.front_view.internal_lines) == 4
-    assert drawing.board_view.note == ""
+    assert drawing.board_view.note == "夹板"
 
 
 def test_anchor_position_dimension_flags_are_explicit():

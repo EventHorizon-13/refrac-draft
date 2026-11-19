@@ -524,6 +524,17 @@ def test_short_module_details_are_centered_independently_of_geometry(tmp_path):
     assert detail.dxf.width == pytest.approx(width * 10)
 
 
+@pytest.mark.parametrize(("board_exists", "label"), [(True, "夹板"), (False, "无夹板")])
+def test_board_face_has_status_label_when_no_anchors(tmp_path, board_exists, label):
+    item = build_standard_module(None, StandardModuleValues("M1", 300, 300, 230))
+    board = build_standard_board(None, item.module_id, board_exists)
+    document = DrawingGenerator().generate(Project(modules=[item], boards=[board]))
+    assert document.pages[0].modules[0].drawing.board_view.note == label
+    output = export_dxf(document, tmp_path / "board-label.dxf")
+    labels = [entity.dxf.text for entity in ezdxf.readfile(output).modelspace().query("TEXT")]
+    assert labels == ["M1", label]
+
+
 def test_dxf_uses_reference_dimension_style_and_big_font(tmp_path):
     module = build_standard_module(None, StandardModuleValues("S1", 300, 300, 230))
     board = build_standard_board(None, "S1", True)

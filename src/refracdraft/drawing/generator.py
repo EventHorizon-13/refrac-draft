@@ -384,7 +384,11 @@ class DrawingGenerator:
                     80,
                 )
             )
-        board_note = "无夹板" if not board.exists else ""
+        board_note = ""
+        if not board.exists:
+            board_note = "无夹板"
+        elif not anchor.exists or anchor.anchor_type == AnchorType.NONE or not anchor.count:
+            board_note = "夹板"
         # The source board-face blocks already contain their own center marks and end marks.
         # Do not add a second marker at the insertion point (which sits on the board edge).
         board_view = ViewDrawing(
