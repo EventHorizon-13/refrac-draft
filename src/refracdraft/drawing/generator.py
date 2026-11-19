@@ -13,7 +13,7 @@ from refracdraft.domain.models import (
     OutlineKind,
     Project,
 )
-from refracdraft.drawing.board_profiles import build_board_profile
+from refracdraft.drawing.board_profiles import build_board_profile, machining_dimensions
 from refracdraft.drawing.model import Dimension, DrawingDocument, ModuleDrawing, SheetPage, PlacedModule, ViewDrawing
 from refracdraft.drawing.layout import (
     PAGE_CONTENT_WIDTH_MM,
@@ -112,7 +112,7 @@ def _section_intersections(outline: Polyline, station: float) -> tuple[float, ..
 def _add_board_projection(view: ViewDrawing, board: Polyline) -> ViewDrawing:
     """Project near-side corners as solid edges and far-side corners as hidden edges."""
     left, _, right, _ = view.outline.bounds
-    board_left, board_bottom, board_right, _ = board.bounds
+    board_left, _, board_right, _ = board.bounds
     corners: dict[float, list[float]] = {}
     for x, depth in board.points:
         if board_left < x < board_right:
@@ -121,10 +121,9 @@ def _add_board_projection(view: ViewDrawing, board: Polyline) -> ViewDrawing:
     hidden = []
     for station, depths in sorted(corners.items()):
         x = left + (station - board_left) * (right - left) / (board_right - board_left)
-        nearest = max(_section_intersections(board, station))
-        # An open step reaching the lower edge also leaves a solid seam in the front view.
-        opens_at_bottom = view.view_type == "front" and abs(min(depths) - board_bottom) < 1e-6
-        lines = visible if nearest - max(depths) < 1e-6 or opens_at_bottom else hidden
+        section = _section_intersections(board, station)
+        at_far_outline = view.view_type == "front" and min(depths) - section[0] < 1e-6
+        lines = visible if section[-1] - max(depths) < 1e-6 or at_far_outline else hidden
         intersections = _section_intersections(view.outline, x)
         for bottom, top in zip(intersections, intersections[1:]):
             if top - bottom > 1e-6 and point_in_outline(view.outline, (x, (bottom + top) / 2)):
@@ -181,8 +180,13 @@ def _details(module, board, anchor) -> tuple[str, ...]:
     hose = anchor.hose_spec if anchor.exists else "无胶管"
     board_text = board.material if board.exists else "无夹板"
     lines.append(f"7、{hose or '未填写胶管'}，{board_text}")
-    if module.source_note:
-        lines.append(f"8、备注：{module.source_note}")
+    notes = [module.source_note] if module.source_note else []
+    if anchor.exists and anchor.anchor_type == AnchorType.SIDE_INSERT:
+        instruction = "木板开口60*110 插针隔1层毯子插"
+        if not any(instruction in note for note in notes):
+            notes.append(instruction)
+    if notes:
+        lines.append(f"8、备注：{'；'.join(notes)}")
     return tuple(lines)
 
 
@@ -356,6 +360,7 @@ class DrawingGenerator:
                 board_outline, profile_dimensions = build_board_profile(
                     module.board_face_width_mm, module.board_face_height_mm, module.board_face_outline
                 )
+                profile_dimensions += machining_dimensions(board_outline, profile_dimensions)
             except ValueError as exc:
                 raise ValueError(f"{module.module_id}: {exc}") from exc
         elif module.board_face_outline:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, QIODevice, QSaveFile, Qt, Signal
 from PySide6.QtGui import (
     QAction, QColor, QBrush, QFont, QFontMetricsF, QPen, QPainter, QPalette, QPixmap,
     QTextBlockFormat, QTextCursor, QTextOption,
@@ -447,27 +447,39 @@ class MainWindow(QMainWindow):
                 values = model.model_dump(mode="json")
                 self._add_row(table, key, {k: json.dumps(v, ensure_ascii=False) if isinstance(v, list) else v for k, v in values.items()})
 
+    def _project_save_path(self) -> Path | None:
+        path, _ = QFileDialog.getSaveFileName(self, "保存项目", "project.json", "RefracDraft 项目 (*.json)")
+        return Path(path) if path else None
+
     def save_json(self):
         try:
-            self.project = self._collect_project()
-            path, _ = QFileDialog.getSaveFileName(self, "保存项目", "project.json", "RefracDraft 项目 (*.json)")
+            project = self._collect_project()
+            path = self._project_save_path()
             if path:
                 # Keep ordinary projects readable by versions predating custom labels.
                 excluded = {
                     "modules": {
                         index: {"custom_structure_label"}
-                        for index, module in enumerate(self.project.modules)
+                        for index, module in enumerate(project.modules)
                         if not module.custom_structure_label
                     },
                     "anchors": {
                         index: {"custom_type_label"}
-                        for index, anchor in enumerate(self.project.anchors)
+                        for index, anchor in enumerate(project.anchors)
                         if not anchor.custom_type_label
                     },
                 }
-                Path(path).write_text(
-                    self.project.model_dump_json(indent=2, exclude=excluded), encoding="utf-8"
-                )
+                path.parent.mkdir(parents=True, exist_ok=True)
+                data = project.model_dump_json(indent=2, exclude=excluded).encode("utf-8")
+                output = QSaveFile(str(path))
+                if not output.open(QIODevice.OpenModeFlag.WriteOnly):
+                    raise OSError(output.errorString())
+                if output.write(data) != len(data):
+                    output.cancelWriting()
+                    raise OSError(output.errorString())
+                if not output.commit():
+                    raise OSError(output.errorString())
+                self.project = project
                 self.statusBar().showMessage(f"项目已保存：{path}")
         except Exception as exc:
             QMessageBox.critical(self, "保存失败", str(exc))

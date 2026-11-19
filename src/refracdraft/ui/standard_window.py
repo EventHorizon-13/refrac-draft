@@ -910,17 +910,21 @@ class StandardWindow(MainWindow):
 
     def _filename_stem(self) -> str:
         value = self.output_filename_edit.text().strip() if hasattr(self, "output_filename_edit") else ""
-        if value.lower().endswith((".dxf", ".pdf")):
+        if value.lower().endswith((".dxf", ".pdf", ".json")):
             value = Path(value).stem
         value = re.sub(r'[<>:"/\\|?*]+', "-", value).strip(" .")
         return value or _default_filename_stem()
+
+    def _project_save_path(self) -> Path:
+        self._save_output_settings()
+        return self._default_output_directory() / f"{self._filename_stem()}.json"
 
     def _update_output_preview(self, *_args) -> None:
         if not hasattr(self, "output_path_label"):
             return
         directory = self.output_directory_edit.text().strip() or "当前工作目录"
         stem = self._filename_stem()
-        self.output_path_label.setText(f"{directory}\n{stem}.dxf  /  {stem}.pdf")
+        self.output_path_label.setText(f"{directory}\n{stem}.json  /  {stem}.dxf  /  {stem}.pdf")
 
     def _output_target(self, suffix: str) -> Path | None:
         self._save_output_settings()

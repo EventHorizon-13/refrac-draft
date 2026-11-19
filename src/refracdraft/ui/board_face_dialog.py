@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt
 from PySide6.QtGui import QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QLabel,
@@ -151,6 +151,15 @@ class BoardFaceDialog(QDialog):
         layout.addWidget(buttons)
         for feature in profile.features if profile else (None,):
             self._add_cut(feature)
+        self._refresh(self.cuts[0])
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.FocusIn:
+            for cut in self.cuts:
+                if watched in cut.widgets():
+                    self._refresh(cut)
+                    break
+        return super().eventFilter(watched, event)
 
     def accept(self) -> None:
         if self.confirm.isEnabled():
@@ -178,6 +187,8 @@ class BoardFaceDialog(QDialog):
         self.cuts.append(cut)
         self._place_rows()
         self._set_inputs(cut, feature)
+        for widget in cut.widgets():
+            widget.installEventFilter(self)
         kind.currentIndexChanged.connect(lambda: self._set_inputs(cut))
         for field in inputs.values():
             field.textChanged.connect(lambda: self._refresh(cut))

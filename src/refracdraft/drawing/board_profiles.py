@@ -14,6 +14,42 @@ Measure = tuple[Point, Point, float]
 EPSILON = 1e-8
 
 
+def machining_dimensions(
+    outline: Polyline, existing: tuple[Dimension, ...],
+) -> tuple[Dimension, ...]:
+    """Dimension unmarked machining edges and the run/rise of sloped cuts."""
+    left, bottom, right, top = outline.bounds
+    added: list[Dimension] = []
+    edges = tuple(zip(outline.points, outline.points[1:] + outline.points[:1]))
+    for axis, orientation, total, lanes in (
+        (0, "horizontal", right - left, (bottom - 48, top + 12)),
+        (1, "vertical", top - bottom, (left - 35, right + 35)),
+    ):
+        matches = [dim for dim in existing if dim.orientation == orientation]
+        measured = {
+            tuple(sorted((round(dim.start[axis], 6), round(dim.end[axis], 6)))) for dim in matches
+        }
+        for start, end in sorted(edges, key=lambda edge: abs(edge[1][axis] - edge[0][axis])):
+            a, b = sorted((round(start[axis], 6), round(end[axis], 6)))
+            if b - a <= EPSILON or b - a >= total - EPSILON or (a, b) in measured:
+                continue
+
+            def overlaps(dim: Dimension, lane: float) -> bool:
+                low, high = sorted((dim.start[axis], dim.end[axis]))
+                return abs(lane - dim.line_position) < 44 and a < high - EPSILON and b > low + EPSILON
+
+            lane = next((candidate for candidate in lanes
+                         if not any(overlaps(dim, candidate) for dim in matches)), lanes[-1])
+            while any(overlaps(dim, lane) for dim in matches):
+                lane += 45
+            offset = lane - max(start[1], end[1]) if axis == 0 else min(start[0], end[0]) - lane
+            dimension = Dimension(start, end, f"{b - a:g}", orientation, offset)
+            added.append(dimension)
+            matches.append(dimension)
+            measured.add((a, b))
+    return tuple(added)
+
+
 def _cut_path(
     width: float, height: float, feature: BoardFaceFeature
 ) -> tuple[tuple[Point, ...], tuple[Measure, ...]]:

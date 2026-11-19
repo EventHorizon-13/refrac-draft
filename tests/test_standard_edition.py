@@ -312,6 +312,16 @@ def test_standard_details_include_new_manufacturing_fields():
     assert "8、备注：现场复核" in text
 
 
+def test_side_insert_adds_machining_note_without_replacing_existing_note():
+    module = build_standard_module(None, StandardModuleValues("M1", 300, 300, 230))
+    module = module.model_copy(update={"source_note": "现场复核"})
+    board = build_standard_board(None, "M1", True)
+    anchor = build_standard_anchor(
+        None, "M1", 300, StandardAnchorValues(enabled=True, anchor_type=AnchorType.SIDE_INSERT),
+    )
+    assert _details(module, board, anchor)[-1] == "8、备注：现场复核；木板开口60*110 插针隔1层毯子插"
+
+
 def test_custom_type_labels_survive_project_json_and_appear_in_details():
     module = build_standard_module(
         None,

@@ -139,7 +139,7 @@ def test_board_profile_hidden_projection_and_dimension_lanes():
     assert [line.points for line in drawing.front_view.internal_lines] == [((45, 0), (45, 300))]
     assert [line.points for line in drawing.front_view.hidden_lines] == [((90, 0), (90, 300))]
     overall_width, overall_height, lower_step, notch_width, notch_height, shoulder = (
-        drawing.board_view.dimensions
+        drawing.board_view.dimensions[:6]
     )
     assert overall_width.line_position < notch_width.line_position < 0
     assert overall_height.line_position < lower_step.line_position < 0
@@ -176,4 +176,20 @@ def test_board_profile_datums_and_line_visibility(rotation, labels, datum, side_
         assert len(view.hidden_lines) == int(not solid)
     side_edges = drawing.side_view.internal_lines if side_solid else drawing.side_view.hidden_lines
     assert any(line.points[0][0] == side_x == line.points[1][0] for line in side_edges)
+
+
+def test_mixed_rotated_board_profile_marks_exposed_steps_and_missing_lengths():
+    profile = BoardFaceProfile.model_validate({"features": [
+        {"type": 2, "a": 69, "b": 90, "c": 69, "d": 45, "rotation_deg": 90},
+        {"type": 1, "a": 120, "b": 46, "rotation_deg": 270},
+    ]})
+    module = ModuleParameters(
+        module_id="M1", front_width_mm=300, front_height_mm=300,
+        board_face_width_mm=300, board_face_height_mm=230, board_face_outline=profile,
+    )
+    drawing = DrawingGenerator().build_module(Project(modules=[module]), module)
+    assert [line.points[0][0] for line in drawing.front_view.internal_lines] == [46, 162, 231]
+    assert not drawing.front_view.hidden_lines
+    labels = {(dim.orientation, dim.label) for dim in drawing.board_view.dimensions}
+    assert {("horizontal", "162"), ("horizontal", "254"), ("vertical", "65")} <= labels
 
