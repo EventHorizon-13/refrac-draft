@@ -1,12 +1,13 @@
-# PDF CJK font
+# Bundled CJK fonts
 
-The portable build downloads `SourceHanSansSC-Regular.otf` from the official
-Adobe Source Han Sans release branch during CI. The font is not stored in Git,
-which keeps the source repository and release workflow payload small.
+The portable build downloads the official Adobe fonts in CI. Source Han Sans
+SC Regular is used by the application interface. Source Han Serif SC Regular
+(思源宋体) is the default PDF font. Explicit PDF font selections and fonts
+placed in the portable `fonts/` directory take precedence.
 
-Source: https://github.com/adobe-fonts/source-han-sans
+Sources:
+- https://github.com/adobe-fonts/source-han-sans
+- https://github.com/adobe-fonts/source-han-serif
 
-License: SIL Open Font License 1.1, copied in `LICENSE-SourceHanSans.txt`.
-
-At runtime the PDF renderer prefers `REFRACDRAFT_CJK_FONT`, then the Windows
-system CJK fonts, then this bundled font, then common system fallbacks.
+Both use the SIL Open Font License 1.1. The respective license texts accompany
+the fonts in the portable package.

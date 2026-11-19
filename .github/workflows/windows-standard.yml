@@ -30,13 +30,19 @@ jobs:
           cache: pip
       - name: Install build dependencies
         run: python -m pip install -e ".[ui]" "pyinstaller==6.22.3"
-      - name: Prepare PDF CJK font
+      - name: Prepare bundled CJK fonts
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force "assets/fonts" | Out-Null
           Invoke-WebRequest `
             -Uri "https://raw.githubusercontent.com/adobe-fonts/source-han-sans/release/OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf" `
             -OutFile "assets/fonts/SourceHanSansSC-Regular.otf"
+          Invoke-WebRequest `
+            -Uri "https://raw.githubusercontent.com/adobe-fonts/source-han-serif/release/OTF/SimplifiedChinese/SourceHanSerifSC-Regular.otf" `
+            -OutFile "assets/fonts/SourceHanSerifSC-Regular.otf"
+          Invoke-WebRequest `
+            -Uri "https://raw.githubusercontent.com/adobe-fonts/source-han-serif/release/LICENSE.txt" `
+            -OutFile "assets/fonts/LICENSE-SourceHanSerif.txt"
       - name: Prepare SHX PDF renderer runtime
         shell: pwsh
         run: |

@@ -12,6 +12,7 @@ def main() -> None:
 
     from refracdraft.app import _smoke_test
     from refracdraft.domain.models import Project
+    from refracdraft.exporters.pdf import _find_pdf_font
     from refracdraft.resources import resource_path
     from refracdraft.standard import ensure_standard_project
     from refracdraft.ui.standard_window import COLUMN_INDEX, StandardWindow
@@ -36,6 +37,8 @@ def main() -> None:
         try:
             if window.windowIcon().pixmap(32, 32).isNull():
                 raise ValueError("便携版缺少可加载的程序图标")
+            if _find_pdf_font() != resource_path("assets/fonts/SourceHanSerifSC-Regular.otf"):
+                raise ValueError("缺省 PDF 字体未使用随包思源宋体")
             sample = Project.model_validate_json(
                 resource_path("examples/b2_positive_tap.json").read_text(encoding="utf-8")
             )

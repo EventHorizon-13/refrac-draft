@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 import ezdxf
 import pymupdf
@@ -24,7 +26,7 @@ from refracdraft.domain.models import (
 from refracdraft.importers.excel import _normalize_row
 from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.exporters.dxf import export_dxf
-from refracdraft.exporters.pdf import _render_page
+from refracdraft.exporters.pdf import PDF_FONT_CANDIDATES, _find_pdf_font, _render_page, _single_page_dxf
 from refracdraft.release import latest_portable_release
 from refracdraft.standard import (
     StandardAnchorValues,
@@ -601,6 +603,35 @@ def test_dxf_uses_reference_dimension_style_and_big_font(tmp_path):
         style = exported.styles.get(style_name)
         assert style.dxf.font.lower() == "gbenor.shx"
         assert style.dxf.bigfont.lower() == "gbcbig.shx"
+
+
+def test_pdf_plot_uses_one_font_in_title_and_nested_logo_without_changing_source(tmp_path):
+    source = ezdxf.new("R2018")
+    title = source.blocks.new("标题栏")
+    logo = source.blocks.new("设计标志")
+    title.add_blockref(logo.name, (50, 50))
+    english = title.add_mtext(r"{\T0.9;ZHUMADIAN\fSimSun|b0;\~\fFangSong|b0;HENGRUI}")
+    chinese = logo.add_mtext(r"{\fSimHei|b0;\C170;恒 瑞}")
+    source.modelspace().add_blockref(title.name, (0, 0))
+    input_path = tmp_path / "source.dxf"
+    source.saveas(input_path)
+
+    plotted_path = _single_page_dxf(input_path, 0, tmp_path / "plot.dxf", True)
+    plotted = ezdxf.readfile(plotted_path)
+    plotted_english, = plotted.blocks[title.name].query("MTEXT")
+    plotted_chinese, = plotted.blocks[logo.name].query("MTEXT")
+    assert plotted_english.text == r"{\T0.9;ZHUMADIAN HENGRUI}"
+    assert plotted_chinese.text == r"{\C170;恒 瑞}"
+    original = ezdxf.readfile(input_path)
+    assert original.entitydb[english.dxf.handle].text == english.text
+    assert original.entitydb[chinese.dxf.handle].text == chinese.text
+
+
+def test_pdf_prefers_bundled_song_font_to_system_font(monkeypatch):
+    bundled_song = next(path for path in PDF_FONT_CANDIDATES if path.name == "SourceHanSerifSC-Regular.otf")
+    system_font = Path(r"C:\Windows\Fonts\simsun.ttc")
+    monkeypatch.setattr(Path, "is_file", lambda path: path in (bundled_song, system_font))
+    assert _find_pdf_font() == bundled_song
 
 
 def test_pdf_render_skips_layers_with_plot_disabled():

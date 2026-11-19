@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 from tempfile import TemporaryDirectory
@@ -29,6 +30,7 @@ PAGE_STRIDE_MM = 230.0
 MODEL_SCALE = 10.0
 PDF_FONT_CANDIDATES = (
     Path(os.environ.get("REFRACDRAFT_CJK_FONT", "")),
+    resource_path("assets/fonts/SourceHanSerifSC-Regular.otf"),
     Path(r"C:\Windows\Fonts\simsun.ttc"),
     Path(r"C:\Windows\Fonts\simhei.ttf"),
     Path(r"C:\Windows\Fonts\msyh.ttc"),
@@ -194,6 +196,28 @@ def _apply_shx_text_style(doc, has_bigfont: bool) -> None:
         style.dxf.bigfont = "gbcbig.shx" if has_bigfont else ""
 
 
+_TITLE_INLINE_FONT = re.compile(r"(?<!\\)\\[fF][^;]*;")
+
+
+def _normalize_title_fonts(doc) -> None:
+    """Use the plot font in the template's title block and its nested logo."""
+    pending = ["标题栏"]
+    visited: set[str] = set()
+    while pending:
+        name = pending.pop()
+        if name.casefold() in visited:
+            continue
+        visited.add(name.casefold())
+        block = doc.blocks.get(name)
+        if block is None:
+            continue
+        for entity in block.query("MTEXT INSERT"):
+            if entity.dxftype() == "INSERT":
+                pending.append(entity.dxf.name)
+            else:
+                entity.text = _TITLE_INLINE_FONT.sub("", entity.text).replace(r"\~", " ")
+
+
 def _single_page_dxf(
     source_dxf: Path,
     page_index: int,
@@ -215,6 +239,7 @@ def _single_page_dxf(
         for entity in list(msp):
             entity.translate(0.0, -page_y, 0.0)
     _apply_shx_text_style(doc, has_bigfont)
+    _normalize_title_fonts(doc)
     target.parent.mkdir(parents=True, exist_ok=True)
     doc.saveas(target)
     return target
@@ -442,6 +467,7 @@ def export_pdf(
             )
 
         dxf = ezdxf.readfile(source_dxf)
+        _normalize_title_fonts(dxf)
         merged = pymupdf.open()
         for page_index in range(len(document.pages)):
             report(f"正在渲染 PDF {page_index + 1}/{len(document.pages)}…")
