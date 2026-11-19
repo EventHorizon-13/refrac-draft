@@ -181,6 +181,8 @@ def main() -> None:
             window.undo()
             if window._collect_project().modules[0].board_face_outline is not None:
                 raise ValueError("撤销未清除异形轮廓")
+            window.activateWindow()
+            app.processEvents()
             trace.write_text("board profile editor passed\n", encoding="utf-8")
 
             anchor_cell = table.item(row, COLUMN_INDEX["anchor_enabled"])
@@ -237,7 +239,9 @@ def main() -> None:
             ):
                 raise ValueError("回车未提交并切换到同列下一行")
             structure = COLUMN_INDEX["structure_type"]
+            table.setFocus(Qt.FocusReason.OtherFocusReason)
             table.setCurrentCell(row, structure)
+            app.processEvents()
             center = table.visualRect(table.currentIndex()).center()
             global_center = table.viewport().mapToGlobal(center)
             for event_type, buttons in (
@@ -249,7 +253,10 @@ def main() -> None:
                     Qt.MouseButton.LeftButton, buttons, Qt.KeyboardModifier.NoModifier,
                 ))
             if not table._preset_list.isVisible() or not table.hasFocus():
-                raise ValueError("预设下拉菜单抢占表格焦点或未显示")
+                raise ValueError(
+                    f"预设下拉菜单状态错误，visible={table._preset_list.isVisible()}, "
+                    f"table_focus={table.hasFocus()}, active_window={window.isActiveWindow()}"
+                )
             presets = table._preset_list
             underlay = QWidget(table.viewport())
             underlay.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)

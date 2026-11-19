@@ -1026,6 +1026,7 @@ class StandardWindow(MainWindow):
             self._record_history()
             self.statusBar().showMessage("夹板面轮廓已修改，点击「预览」更新图纸。")
         dialog.deleteLater()
+        self.parameter_table.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _sheet_values(self, row: int) -> dict[str, str | bool]:
         values: dict[str, str | bool] = {}
