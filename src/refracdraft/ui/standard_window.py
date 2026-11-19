@@ -8,7 +8,8 @@ import re
 
 import pymupdf
 from PySide6.QtCore import (
-    QEvent, QEventLoop, QRect, QSettings, QSignalBlocker, QStandardPaths, Qt, QTimer, Signal,
+    QEvent, QEventLoop, QRect, QRegularExpression, QSettings, QSignalBlocker,
+    QStandardPaths, Qt, Signal,
 )
 from PySide6.QtGui import (
     QAction,
@@ -20,6 +21,7 @@ from PySide6.QtGui import (
     QPainter,
     QPen,
     QPixmap,
+    QRegularExpressionValidator,
 )
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
@@ -28,12 +30,14 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
     QLabel,
     QLineEdit,
-    QMenu,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -340,7 +344,7 @@ class ParameterDelegate(QStyledItemDelegate):
 
     def createEditor(self, parent: QWidget, option, index):
         spec = COLUMN_SPECS[index.column()]
-        if spec.kind == "check" or (spec.kind == "enum" and "自定义" not in spec.options):
+        if spec.kind == "check":
             return None
         editor = QLineEdit(parent)
         editor.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -358,6 +362,9 @@ class ParameterDelegate(QStyledItemDelegate):
         elif spec.kind == "integer":
             validator = QIntValidator(0, 1_000_000, editor)
             editor.setValidator(validator)
+        elif spec.kind == "enum" and "自定义" not in spec.options:
+            choices = QRegularExpression("|".join(QRegularExpression.escape(value) for value in spec.options))
+            editor.setValidator(QRegularExpressionValidator(choices, editor))
         return editor
 
     def eventFilter(self, editor, event) -> bool:
@@ -367,7 +374,7 @@ class ParameterDelegate(QStyledItemDelegate):
             and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
         ):
             if editor.hasAcceptableInput():
-                self.parent()._commit_and_move_right(editor)
+                self.parent()._commit_and_move_down(editor)
             return True
         return super().eventFilter(editor, event)
 
@@ -444,6 +451,15 @@ class ParameterTable(QTableWidget):
         self._fill_dragging = False
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
+        self._preset_list = QListWidget(self.viewport())
+        self._preset_list.setObjectName("parameterPresetList")
+        self._preset_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._preset_list.setMouseTracking(True)
+        self._preset_list.hide()
+        self._preset_list.itemClicked.connect(self._select_preset)
+        self.currentCellChanged.connect(self._preset_list.hide)
+        self.horizontalScrollBar().valueChanged.connect(self._preset_list.hide)
+        self.verticalScrollBar().valueChanged.connect(self._preset_list.hide)
 
     def _visible_selected_range(self) -> tuple[int, int, int, int] | None:
         indexes = [index for index in self.selectionModel().selectedIndexes()
@@ -463,12 +479,14 @@ class ParameterTable(QTableWidget):
         return QRect(corner.right() - 5, corner.bottom() - 5, 6, 6)
 
     def _edit_cell(self, row: int, column: int) -> None:
+        self._preset_list.hide()
         index = self.model().index(row, column)
         if index.isValid():
             self.setCurrentIndex(index)
             self.edit(index)
 
     def _move_current_cell(self, row_step: int, column_step: int) -> None:
+        self._preset_list.hide()
         row = self.currentRow()
         column = self.currentColumn()
         if row < 0 or column < 0:
@@ -486,56 +504,62 @@ class ParameterTable(QTableWidget):
                 self.clearSelection()
                 self.setCurrentCell(row, column)
                 self.setFocus()
-                self._queue_current_menu()
+                self._show_cell_menu(row, column)
                 return
             row += row_step
             column += column_step
 
-    def _commit_and_move_right(self, editor: QLineEdit) -> None:
+    def _commit_and_move_down(self, editor: QLineEdit) -> None:
         self.commitData(editor)
         self.closeEditor(editor, QAbstractItemDelegate.EndEditHint.NoHint)
-        self._move_current_cell(0, 1)
-
-    def _queue_current_menu(self) -> None:
-        index = self.currentIndex()
-        if not index.isValid() or not COLUMN_SPECS[index.column()].options:
-            return
-
-        def open_if_current():
-            if index == self.currentIndex() and self.state() != QAbstractItemView.State.EditingState:
-                self._show_cell_menu(index.row(), index.column())
-
-        QTimer.singleShot(0, self, open_if_current)
+        self._move_current_cell(1, 0)
 
     def _show_cell_menu(self, row: int, column: int) -> None:
+        self._preset_list.hide()
         item = self.item(row, column)
         if item is None or not (item.flags() & Qt.ItemFlag.ItemIsEnabled):
             return
         spec = COLUMN_SPECS[column]
         if not spec.options:
             return
-        self.setCurrentCell(row, column)
-        menu = QMenu(self)
+        choices = self._preset_list
+        choices.clear()
         current = item.text().strip()
         for option in spec.options:
             if option == "自定义":
                 continue
-            action = menu.addAction(option)
-            action.setCheckable(True)
-            action.setChecked(current == option)
-        custom_action = None
+            entry = QListWidgetItem(option, choices)
+            entry.setData(Qt.ItemDataRole.UserRole, option)
+            if current == option:
+                choices.setCurrentItem(entry)
         if spec.kind != "enum" or "自定义" in spec.options:
-            menu.addSeparator()
-            custom_action = menu.addAction("自定义…")
-            custom_action.setData("__custom__")
+            QListWidgetItem("自定义…", choices)
         rect = self.visualRect(self.model().index(row, column))
-        chosen = menu.exec(self.viewport().mapToGlobal(rect.bottomLeft()))
-        if chosen is None:
+        viewport = self.viewport()
+        width = min(viewport.width(), max(rect.width(), choices.sizeHintForColumn(0) + 32))
+        desired_height = choices.sizeHintForRow(0) * choices.count() + 2 * choices.frameWidth()
+        below = viewport.height() - rect.bottom() - 1
+        above = rect.top()
+        height = min(desired_height, max(above, below))
+        if height <= 0:
             return
-        if custom_action is not None and chosen.data() == "__custom__":
+        left = max(0, min(rect.left(), viewport.width() - width))
+        top = rect.bottom() + 1 if below >= height else above - height
+        choices.setGeometry(left, top, width, height)
+        choices.show()
+        choices.raise_()
+
+    def _select_preset(self, entry: QListWidgetItem) -> None:
+        value = entry.data(Qt.ItemDataRole.UserRole)
+        self._preset_list.hide()
+        row, column = self.currentRow(), self.currentColumn()
+        item = self.item(row, column)
+        if item is None or not (item.flags() & Qt.ItemFlag.ItemIsEnabled):
+            return
+        if value is None:
             self._edit_cell(row, column)
-            return
-        item.setText(chosen.text())
+        else:
+            item.setText(value)
 
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
@@ -563,6 +587,7 @@ class ParameterTable(QTableWidget):
             painter.end()
 
     def mousePressEvent(self, event) -> None:
+        self._preset_list.hide()
         if event.button() == Qt.MouseButton.LeftButton:
             position = event.position().toPoint()
             target = self.indexAt(position)
@@ -590,7 +615,22 @@ class ParameterTable(QTableWidget):
         super().mousePressEvent(event)
         if event.button() == Qt.MouseButton.LeftButton and event.modifiers() == Qt.KeyboardModifier.NoModifier:
             if target.isValid() and target == self.currentIndex():
-                self._queue_current_menu()
+                self._show_cell_menu(target.row(), target.column())
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        target = self.indexAt(event.position().toPoint())
+        if event.button() == Qt.MouseButton.LeftButton and target.isValid():
+            spec = COLUMN_SPECS[target.column()]
+            item = self.item(target.row(), target.column())
+            if spec.options and item is not None and item.flags() & Qt.ItemFlag.ItemIsEditable:
+                self._edit_cell(target.row(), target.column())
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
+
+    def focusOutEvent(self, event) -> None:
+        self._preset_list.hide()
+        super().focusOutEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
         if self._fill_dragging:
@@ -662,7 +702,7 @@ class ParameterTable(QTableWidget):
 
     def keyPressEvent(self, event) -> None:
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            self._move_current_cell(0, 1)
+            self._move_current_cell(1, 0)
             event.accept()
             return
         if (
@@ -673,6 +713,7 @@ class ParameterTable(QTableWidget):
             self._show_cell_menu(self.currentRow(), self.currentColumn())
             event.accept()
             return
+        self._preset_list.hide()
         directions = {
             Qt.Key.Key_Left: (0, -1),
             Qt.Key.Key_Right: (0, 1),
@@ -922,26 +963,34 @@ class StandardWindow(MainWindow):
         output_layout.addWidget(self.output_pdf_button)
 
         preview_canvas = QWidget()
-        canvas_layout = QVBoxLayout(preview_canvas)
+        canvas_layout = QGridLayout(preview_canvas)
         canvas_layout.setContentsMargins(0, 0, 0, 0)
-        canvas_header = QHBoxLayout()
-        canvas_header.addWidget(QLabel("图纸预览"))
-        canvas_header.addStretch(1)
-        page_row = QHBoxLayout()
+        self.preview = DrawingPreview()
+        self.preview.page_step_requested.connect(self._preview_page_step)
+        self.preview.zoom_requested.connect(self._preview_zoom)
+        self.preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        canvas_layout.addWidget(self.preview, 0, 0)
+
+        preview_title = QLabel("图纸预览")
+        preview_title.setObjectName("previewTitle")
+        preview_title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        canvas_layout.addWidget(
+            preview_title, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
+        )
+
+        page_controls = QFrame()
+        page_controls.setObjectName("previewPageControls")
+        page_row = QHBoxLayout(page_controls)
+        page_row.setContentsMargins(9, 5, 9, 5)
         page_row.addWidget(QLabel("预览页"))
         self.page_spin = PageSpinBox()
         self.page_spin.setMinimum(1)
         self.page_spin.setMaximum(1)
         self.page_spin.valueChanged.connect(self._show_selected_page)
         page_row.addWidget(self.page_spin)
-        canvas_header.addLayout(page_row)
-        canvas_header.addStretch(1)
-        canvas_layout.addLayout(canvas_header)
-        self.preview = DrawingPreview()
-        self.preview.page_step_requested.connect(self._preview_page_step)
-        self.preview.zoom_requested.connect(self._preview_zoom)
-        self.preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        canvas_layout.addWidget(self.preview)
+        canvas_layout.addWidget(
+            page_controls, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight
+        )
 
         preview_splitter.addWidget(output_panel)
         preview_splitter.addWidget(preview_canvas)
@@ -979,6 +1028,14 @@ class StandardWindow(MainWindow):
             " padding: 4px 6px; background-color: palette(button); color: palette(button-text);"
             " border: 0; border-right: 1px solid palette(mid); border-bottom: 1px solid palette(mid); }"
             "QFrame#outputPanel { border: 1px solid palette(mid); border-radius: 4px; }"
+            "QLabel#previewTitle, QFrame#previewPageControls {"
+            " background: palette(window); color: palette(window-text);"
+            " border: 1px solid palette(mid); border-radius: 4px; margin: 5px; }"
+            "QLabel#previewTitle { padding: 4px 7px; }"
+            "QListWidget#parameterPresetList { border: 1px solid palette(mid); }"
+            "QListWidget#parameterPresetList::item { padding: 4px 7px; }"
+            "QListWidget#parameterPresetList::item:hover {"
+            " background: palette(highlight); color: palette(highlighted-text); }"
             "QPushButton[primary='true'] { background: #2f6fde; color: white;"
             " border: 1px solid #245bb8; border-radius: 4px; padding: 6px 10px; }"
             "QPushButton[primary='true']:hover { background: #3b7bea; }"

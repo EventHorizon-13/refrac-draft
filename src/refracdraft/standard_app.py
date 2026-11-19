@@ -6,8 +6,8 @@ import sys
 def main() -> None:
     from pathlib import Path
 
-    from PySide6.QtCore import QEvent, Qt
-    from PySide6.QtGui import QFont, QFontDatabase, QKeyEvent
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QFont, QFontDatabase, QKeyEvent, QMouseEvent
     from PySide6.QtWidgets import QApplication, QLineEdit
 
     from refracdraft.app import _smoke_test
@@ -174,25 +174,48 @@ def main() -> None:
             QApplication.sendEvent(editor, QKeyEvent(
                 QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
             ))
-            thickness_column = COLUMN_INDEX["thickness_mm"]
             if (
-                table.currentRow() != row
-                or table.currentColumn() != thickness_column
+                table.currentRow() != added
+                or table.currentColumn() != length_column
                 or window._cell_text(row, "length_mm") != "456"
             ):
-                raise ValueError("回车未提交并切换到同一行的下一列")
-            opened = []
-            show_menu = table._show_cell_menu
-            table._show_cell_menu = lambda r, c: opened.append((r, c))
-            try:
-                QApplication.sendEvent(table, QKeyEvent(
-                    QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
+                raise ValueError("回车未提交并切换到同列下一行")
+            structure = COLUMN_INDEX["structure_type"]
+            table.setCurrentCell(row, structure)
+            center = table.visualRect(table.currentIndex()).center()
+            global_center = table.viewport().mapToGlobal(center)
+            for event_type, buttons in (
+                (QEvent.Type.MouseButtonPress, Qt.MouseButton.LeftButton),
+                (QEvent.Type.MouseButtonRelease, Qt.MouseButton.NoButton),
+            ):
+                QApplication.sendEvent(table.viewport(), QMouseEvent(
+                    event_type, QPointF(center), QPointF(global_center),
+                    Qt.MouseButton.LeftButton, buttons, Qt.KeyboardModifier.NoModifier,
                 ))
-                app.processEvents()
-            finally:
-                table._show_cell_menu = show_menu
-            if opened != [(row, COLUMN_INDEX["structure_type"])]:
-                raise ValueError("选中预设列后未自动打开下拉菜单")
+            if not table._preset_list.isVisible() or not table.hasFocus():
+                raise ValueError("预设下拉菜单抢占表格焦点或未显示")
+            QApplication.sendEvent(table, QKeyEvent(
+                QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
+            ))
+            if table.currentRow() != added or table.currentColumn() != structure:
+                raise ValueError("预设下拉展开时回车未移到同列下一行")
+            QApplication.sendEvent(table, QKeyEvent(
+                QEvent.Type.KeyPress, Qt.Key.Key_Up, Qt.KeyboardModifier.NoModifier
+            ))
+            if table.currentRow() != row or not table._preset_list.isVisible():
+                raise ValueError("预设下拉展开时方向键未切换单元格")
+            QApplication.sendEvent(table.viewport(), QMouseEvent(
+                QEvent.Type.MouseButtonDblClick, QPointF(center), QPointF(global_center),
+                Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+            ))
+            editor = table.focusWidget()
+            if not isinstance(editor, QLineEdit) or table._preset_list.isVisible():
+                raise ValueError("双击预设单元格未直接进入自定义编辑")
+            QApplication.sendEvent(editor, QKeyEvent(
+                QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier
+            ))
+            if window.preview.geometry() != window.preview.parentWidget().rect():
+                raise ValueError("预览浮层占用了图纸视口高度")
             trace.write_text("table keyboard editing passed\n", encoding="utf-8")
             table.item(0, length_column).setText("456")
             table.item(added, length_column).setText("300")
