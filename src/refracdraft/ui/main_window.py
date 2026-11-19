@@ -243,6 +243,8 @@ class DrawingPreview(QGraphicsView):
         center = ox + (min_x + max_x) * scale / 2
         item = self._add_text(scene, label, center, oy + label_y, 4, "#111111")
         item.setX(center - item.boundingRect().width() * item.scale() / 2)
+        if view.view_type == "board-face":
+            item.setY(PAGE_HEIGHT_MM - oy - label_y - item.boundingRect().height() * item.scale() / 2)
 
     def _dim_line(self, scene, x1, y1, x2, y2, label, horizontal):
         pen = QPen(QColor("#00ffff"), 0.25)

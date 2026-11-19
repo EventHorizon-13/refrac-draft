@@ -16,9 +16,9 @@ from refracdraft.drawing.layout import (
     PAGE_CONTENT_WIDTH_MM,
     PAGE_LEFT_MM,
     PANEL_GAP_MM,
-    PANEL_INNER_MARGIN_MM,
     geometry_width,
     module_required_width,
+    panel_content_left,
 )
 from refracdraft.geometry.primitives import Polyline, equal_anchor_positions, module_front_outline, module_side_outline, parametric_outline, point_in_outline, rectangle, scale_template
 from refracdraft.reference.library import ReferenceLibrary
@@ -428,10 +428,7 @@ class DrawingGenerator:
             panel_x = PAGE_LEFT_MM
             for panel_index, (drawing, required) in enumerate(zip(group, group_widths)):
                 panel_width = required + extra_each
-                content_x = panel_x + max(
-                    PANEL_INNER_MARGIN_MM,
-                    (panel_width - geometry_width(drawing)) / 2.0,
-                )
+                content_x = panel_x + panel_content_left(drawing, panel_width, geometry_width(drawing))
                 placed.append(
                     PlacedModule(
                         drawing=drawing,

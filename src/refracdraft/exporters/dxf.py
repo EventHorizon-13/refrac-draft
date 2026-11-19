@@ -4,6 +4,7 @@ from pathlib import Path
 
 import ezdxf
 from ezdxf.addons.importer import Importer
+from ezdxf.enums import TextEntityAlignment
 
 from refracdraft.drawing.layout import (
     BOARD_VIEW_BOTTOM_MM,
@@ -158,7 +159,6 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
             dim.label, dim.orientation == "horizontal", dim.offset * scale,
         )
     min_x, min_y, max_x, max_y = view.outline.bounds
-    width, height = max_x - min_x, max_y - min_y
     for cutout in view.cutouts:
         pts = [(ox + x * scale, oy + y * scale) for x, y in cutout.points]
         _add_polyline(msp, pts, cutout.closed, "OUTLINE")
@@ -184,12 +184,15 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
             msp.add_line((cx, cy - 1.5 * MODEL_SCALE), (cx, cy + 1.5 * MODEL_SCALE),
                          dxfattribs={"layer": "CENTER", "color": 1})
     label = view.note or module_id
-    label_y = height / 2.0
-    if view.view_type != "board-face" and (view.anchor_symbols or view.anchor_points):
+    board_face = view.view_type == "board-face"
+    label_y = (min_y + max_y) / 2
+    if not board_face and (view.anchor_symbols or view.anchor_points):
         label_y = (view.outline.points[0][1] + view.outline.points[1][1]) / 2.0 + 5.0 * MODEL_SCALE
-    label_point = (ox + width * scale / 2.0, oy + label_y * scale)
-    msp.add_text(label, dxfattribs={"insert": label_point, "height": VALUE_TEXT_HEIGHT, "style": TEXT_STYLE,
-                                    "layer": "TEXT", "halign": 1, "align_point": label_point})
+    label_point = (ox + (min_x + max_x) * scale / 2, oy + label_y * scale)
+    alignment = TextEntityAlignment.MIDDLE_CENTER if board_face else TextEntityAlignment.CENTER
+    msp.add_text(
+        label, dxfattribs={"height": VALUE_TEXT_HEIGHT, "style": TEXT_STYLE, "layer": "TEXT"}
+    ).set_placement(label_point, align=alignment)
 
 
 def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf: str | Path | None = None) -> Path:

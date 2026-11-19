@@ -17,12 +17,21 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Find verified build for parent commit
+      - name: Find verified build for release
         id: build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          SOURCE_SHA=$(git rev-parse "$GITHUB_SHA^1")
+          if [[ "$GITHUB_REF_NAME" == standard-v* ]]; then
+            VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+            if [[ "$GITHUB_REF_NAME" != "standard-v$VERSION" ]]; then
+              echo "Release tag does not match package version $VERSION" >&2
+              exit 1
+            fi
+            SOURCE_SHA="$GITHUB_SHA"
+          else
+            SOURCE_SHA=$(git rev-parse "$GITHUB_SHA^1")
+          fi
           BUILD_RUN_ID=$(gh run list \
             --repo "$GITHUB_REPOSITORY" \
             --workflow windows-standard.yml \

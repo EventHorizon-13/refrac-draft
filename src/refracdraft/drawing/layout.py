@@ -13,6 +13,7 @@ PAGE_CONTENT_WIDTH_MM = 283.0
 PANEL_INNER_MARGIN_MM = 8.0
 PANEL_GAP_MM = 6.0
 PANEL_MIN_WIDTH_MM = 58.0
+CENTERED_MODULE_MAX_LENGTH_MM = 350.0
 
 # A 150 mm model-space inset is 15 mm on the 1:10 A4 sheet.
 FRAME_INSET_MM = 7.0
@@ -56,6 +57,13 @@ def geometry_width(drawing: ModuleDrawing) -> float:
     return max(top_row_width(drawing), outline_width(drawing.board_view))
 
 
+def panel_content_left(drawing: ModuleDrawing, panel_width: float, content_width: float) -> float:
+    left, _, right, _ = drawing.front_view.outline.bounds
+    if right - left > CENTERED_MODULE_MAX_LENGTH_MM:
+        content_width = max(geometry_width(drawing), details_width(drawing))
+    return max(PANEL_INNER_MARGIN_MM, (panel_width - content_width) / 2)
+
+
 def module_required_width(drawing: ModuleDrawing) -> float:
     content_width = max(geometry_width(drawing), details_width(drawing))
     return max(PANEL_MIN_WIDTH_MM, content_width + PANEL_INNER_MARGIN_MM * 2.0)
@@ -63,5 +71,5 @@ def module_required_width(drawing: ModuleDrawing) -> float:
 
 def detail_box(placed: PlacedModule) -> tuple[float, float]:
     width = details_width(placed.drawing)
-    left = placed.x_mm + max(PANEL_INNER_MARGIN_MM, (placed.panel_width_mm - width) / 2)
+    left = placed.x_mm + panel_content_left(placed.drawing, placed.panel_width_mm, width)
     return left, placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM - left

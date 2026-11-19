@@ -25,6 +25,7 @@ from refracdraft.importers.excel import _normalize_row
 from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import _render_page
+from refracdraft.release import latest_portable_release
 from refracdraft.standard import (
     StandardAnchorValues,
     StandardModuleValues,
@@ -511,7 +512,7 @@ def test_balanced_pages_do_not_leave_a_tiny_last_page():
 
 
 def test_short_module_details_are_centered_independently_of_geometry(tmp_path):
-    item = build_standard_module(None, StandardModuleValues("M1", 300, 300, 230))
+    item = build_standard_module(None, StandardModuleValues("M1", 350, 300, 230))
     document = DrawingGenerator().generate(Project(modules=[item]))
     placed, = document.pages[0].modules
     left, width = detail_box(placed)
@@ -524,6 +525,13 @@ def test_short_module_details_are_centered_independently_of_geometry(tmp_path):
     assert detail.dxf.width == pytest.approx(width * 10)
 
 
+def test_long_module_details_line_up_with_geometry_on_the_left():
+    item = build_standard_module(None, StandardModuleValues("M1", 351, 300, 230))
+    document = DrawingGenerator().generate(Project(modules=[item]))
+    placed, = document.pages[0].modules
+    assert detail_box(placed)[0] == pytest.approx(placed.content_x_mm)
+
+
 @pytest.mark.parametrize(("board_exists", "label"), [(True, "夹板"), (False, "无夹板")])
 def test_board_face_has_status_label_when_no_anchors(tmp_path, board_exists, label):
     item = build_standard_module(None, StandardModuleValues("M1", 300, 300, 230))
@@ -531,8 +539,28 @@ def test_board_face_has_status_label_when_no_anchors(tmp_path, board_exists, lab
     document = DrawingGenerator().generate(Project(modules=[item], boards=[board]))
     assert document.pages[0].modules[0].drawing.board_view.note == label
     output = export_dxf(document, tmp_path / "board-label.dxf")
-    labels = [entity.dxf.text for entity in ezdxf.readfile(output).modelspace().query("TEXT")]
-    assert labels == ["M1", label]
+    labels = list(ezdxf.readfile(output).modelspace().query("TEXT"))
+    assert [entity.dxf.text for entity in labels] == ["M1", label]
+    assert labels[-1].get_align_enum().name == "MIDDLE_CENTER"
+
+
+def test_update_selects_the_latest_formal_release_with_a_standard_portable_zip(monkeypatch):
+    monkeypatch.setattr("refracdraft.release.app_version", lambda: "0.1.1")
+
+    def release(tag, *, prerelease=False, standard_zip=True):
+        assets = [{"name": f"RefracDraft-Standard-Windows-x64-portable-{tag.removeprefix('standard-')}.zip"}]
+        return {"tag_name": tag, "prerelease": prerelease, "assets": assets if standard_zip else []}
+
+    current = release("standard-v0.1.1")
+    assert latest_portable_release([current, release("standard-20261118-editor-shx-final")]) is None
+    version, url = latest_portable_release([
+        current,
+        release("standard-v0.2.1", prerelease=True),
+        release("standard-v0.2.0", standard_zip=False),
+        release("standard-v0.1.2"),
+    ])
+    assert version == "0.1.2"
+    assert url.endswith("/standard-v0.1.2/RefracDraft-Standard-Windows-x64-portable-v0.1.2.zip")
 
 
 def test_dxf_uses_reference_dimension_style_and_big_font(tmp_path):

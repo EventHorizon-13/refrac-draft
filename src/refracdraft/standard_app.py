@@ -174,12 +174,25 @@ def main() -> None:
             QApplication.sendEvent(editor, QKeyEvent(
                 QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
             ))
+            thickness_column = COLUMN_INDEX["thickness_mm"]
             if (
-                table.currentRow() != added
-                or table.currentColumn() != length_column
+                table.currentRow() != row
+                or table.currentColumn() != thickness_column
                 or window._cell_text(row, "length_mm") != "456"
             ):
-                raise ValueError("回车未提交并切换到下一行的同列")
+                raise ValueError("回车未提交并切换到同一行的下一列")
+            opened = []
+            show_menu = table._show_cell_menu
+            table._show_cell_menu = lambda r, c: opened.append((r, c))
+            try:
+                QApplication.sendEvent(table, QKeyEvent(
+                    QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
+                ))
+                app.processEvents()
+            finally:
+                table._show_cell_menu = show_menu
+            if opened != [(row, COLUMN_INDEX["structure_type"])]:
+                raise ValueError("选中预设列后未自动打开下拉菜单")
             trace.write_text("table keyboard editing passed\n", encoding="utf-8")
             table.item(0, length_column).setText("456")
             table.item(added, length_column).setText("300")

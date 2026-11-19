@@ -10,3 +10,9 @@ def resource_path(relative: str) -> Path:
         return Path(sys._MEIPASS) / relative
     return Path(__file__).resolve().parents[2] / relative
 
+
+def application_directory() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return resource_path(".")
+

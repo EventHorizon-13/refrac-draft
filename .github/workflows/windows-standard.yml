@@ -9,6 +9,7 @@ on:
       - src/**
       - pyproject.toml
       - docs/WINDOWS_STANDARD.md
+      - .github/workflows/publish-standard-release.yml
       - assets/pdf-exporter/**
       - examples/standard_example_6_modules.xlsx
   workflow_dispatch:
@@ -62,6 +63,7 @@ jobs:
           --add-data "examples/standard_example_6_modules.xlsx:examples"
           --collect-data reportlab
           --collect-submodules ezdxf
+          --copy-metadata refrac-draft
           src/refracdraft/standard_app.py
       - name: Exercise bundled references and vector exporters
         shell: pwsh
@@ -84,6 +86,8 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item "docs/WINDOWS_STANDARD.md" "dist/RefracDraft-Standard/README.md"
+          New-Item -ItemType Directory -Force "dist/RefracDraft-Standard/fonts" | Out-Null
+          Set-Content -Encoding utf8 "dist/RefracDraft-Standard/fonts/README.txt" "Place external SHX, TTF, OTF or TTC fonts in this folder."
           if (Test-Path "RefracDraft-Standard-ui.png") {
             Copy-Item "RefracDraft-Standard-ui.png" "dist/RefracDraft-Standard/UI-PREVIEW.png"
           }

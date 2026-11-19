@@ -8,7 +8,7 @@ import re
 
 import pymupdf
 from PySide6.QtCore import (
-    QEvent, QEventLoop, QRect, QSettings, QSignalBlocker, QStandardPaths, Qt, Signal,
+    QEvent, QEventLoop, QRect, QSettings, QSignalBlocker, QStandardPaths, Qt, QTimer, Signal,
 )
 from PySide6.QtGui import (
     QAction,
@@ -62,6 +62,8 @@ from refracdraft.domain.models import (
 from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import export_pdf
+from refracdraft.release import app_version
+from refracdraft.resources import application_directory
 from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.standard import (
     StandardAnchorValues,
@@ -73,6 +75,7 @@ from refracdraft.standard import (
     standard_anchor_values,
     standard_module_values,
 )
+from refracdraft.ui.about import AboutDialog
 from refracdraft.ui.main_window import DrawingPreview, MainWindow, PageSpinBox
 
 
@@ -364,7 +367,7 @@ class ParameterDelegate(QStyledItemDelegate):
             and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
         ):
             if editor.hasAcceptableInput():
-                self.parent()._commit_and_move_down(editor)
+                self.parent()._commit_and_move_right(editor)
             return True
         return super().eventFilter(editor, event)
 
@@ -483,14 +486,26 @@ class ParameterTable(QTableWidget):
                 self.clearSelection()
                 self.setCurrentCell(row, column)
                 self.setFocus()
+                self._queue_current_menu()
                 return
             row += row_step
             column += column_step
 
-    def _commit_and_move_down(self, editor: QLineEdit) -> None:
+    def _commit_and_move_right(self, editor: QLineEdit) -> None:
         self.commitData(editor)
         self.closeEditor(editor, QAbstractItemDelegate.EndEditHint.NoHint)
-        self._move_current_cell(1, 0)
+        self._move_current_cell(0, 1)
+
+    def _queue_current_menu(self) -> None:
+        index = self.currentIndex()
+        if not index.isValid() or not COLUMN_SPECS[index.column()].options:
+            return
+
+        def open_if_current():
+            if index == self.currentIndex() and self.state() != QAbstractItemView.State.EditingState:
+                self._show_cell_menu(index.row(), index.column())
+
+        QTimer.singleShot(0, self, open_if_current)
 
     def _show_cell_menu(self, row: int, column: int) -> None:
         item = self.item(row, column)
@@ -572,16 +587,10 @@ class ParameterTable(QTableWidget):
                     item.setCheckState(next_state)
                     event.accept()
                     return
-                if (
-                    item is not None
-                    and item.flags() & Qt.ItemFlag.ItemIsEnabled
-                    and spec.options
-                    and _preset_button_rect(self.visualRect(target)).contains(position)
-                ):
-                    self._show_cell_menu(target.row(), target.column())
-                    event.accept()
-                    return
         super().mousePressEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton and event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            if target.isValid() and target == self.currentIndex():
+                self._queue_current_menu()
 
     def mouseMoveEvent(self, event) -> None:
         if self._fill_dragging:
@@ -652,6 +661,10 @@ class ParameterTable(QTableWidget):
         self.changed.emit()
 
     def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._move_current_cell(0, 1)
+            event.accept()
+            return
         if (
             event.key() == Qt.Key.Key_Down
             and event.modifiers() == Qt.KeyboardModifier.AltModifier
@@ -763,7 +776,7 @@ class StandardWindow(MainWindow):
         super().__init__()
         self._history_ready = True
         self._reset_history()
-        self.setWindowTitle("RefracDraft Standard — 模块加工图生成器")
+        self.setWindowTitle(f"RefracDraft Standard v{app_version()} — 模块加工图生成器")
         self.statusBar().showMessage("修改参数后点击「预览」；可拖动选区右下角批量填充。")
 
     def _build_ui(self) -> None:
@@ -797,6 +810,10 @@ class StandardWindow(MainWindow):
         self.redo_action.setShortcuts([QKeySequence("Ctrl+Y"), QKeySequence("Ctrl+Shift+Z")])
         self.redo_action.triggered.connect(self.redo)
         toolbar.addAction(self.redo_action)
+        toolbar.addSeparator()
+        about = QAction("关于", self)
+        about.triggered.connect(self._show_about)
+        toolbar.addAction(about)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
 
@@ -884,20 +901,6 @@ class StandardWindow(MainWindow):
         self.output_filename_edit.setPlaceholderText("不含扩展名")
         output_layout.addWidget(self.output_filename_edit)
 
-        output_layout.addWidget(QLabel("PDF 字体"))
-        font_row = QHBoxLayout()
-        self.pdf_font_directory_edit = QLineEdit()
-        self.pdf_font_directory_edit.setPlaceholderText("内置字体，可选择外挂字体目录")
-        self.pdf_font_directory_edit.setToolTip(
-            "程序自动匹配所选目录中的 SHX 正文字体和大字体。"
-        )
-        self.browse_font_directory_button = QPushButton("选择")
-        self.browse_font_directory_button.setFixedWidth(58)
-        self.browse_font_directory_button.clicked.connect(self._choose_pdf_font_directory)
-        font_row.addWidget(self.pdf_font_directory_edit, 1)
-        font_row.addWidget(self.browse_font_directory_button)
-        output_layout.addLayout(font_row)
-
         self.output_path_label = QLabel()
         self.output_path_label.setProperty("role", "fieldLabel")
         self.output_path_label.setWordWrap(True)
@@ -964,13 +967,9 @@ class StandardWindow(MainWindow):
             else preferred_directory or str(Path.cwd())
         )
         self.output_directory_edit.setText(output_directory)
-        self.pdf_font_directory_edit.setText(
-            str(self._settings.value("pdf/font_directory", ""))
-        )
         self.output_directory_edit.textChanged.connect(self._update_output_preview)
         self.output_filename_edit.textChanged.connect(self._update_output_preview)
         self.output_directory_edit.editingFinished.connect(self._save_output_settings)
-        self.pdf_font_directory_edit.editingFinished.connect(self._save_output_settings)
         self._update_output_preview()
 
         self.setStyleSheet(
@@ -989,6 +988,11 @@ class StandardWindow(MainWindow):
     def _add_empty_rows(self) -> None:
         self._add_module()
 
+    def _show_about(self) -> None:
+        dialog = AboutDialog(self)
+        dialog.exec()
+        dialog.deleteLater()
+
     def _default_output_directory(self) -> Path:
         text = self.output_directory_edit.text().strip() if hasattr(self, "output_directory_edit") else ""
         if text:
@@ -1005,25 +1009,11 @@ class StandardWindow(MainWindow):
             self.output_directory_edit.setText(directory)
             self._save_output_settings()
 
-    def _choose_pdf_font_directory(self) -> None:
-        current = self.pdf_font_directory_edit.text().strip()
-        directory = QFileDialog.getExistingDirectory(
-            self,
-            "选择 PDF 外挂字体目录",
-            current if current and Path(current).is_dir() else str(self._default_output_directory()),
-        )
-        if directory:
-            self.pdf_font_directory_edit.setText(directory)
-            self._save_output_settings()
-
     def _save_output_settings(self, *_args) -> None:
         if not hasattr(self, "output_directory_edit"):
             return
         self._settings.setValue(
             "output/last_directory", self.output_directory_edit.text().strip()
-        )
-        self._settings.setValue(
-            "pdf/font_directory", self.pdf_font_directory_edit.text().strip()
         )
 
     def closeEvent(self, event) -> None:
@@ -1751,13 +1741,8 @@ class StandardWindow(MainWindow):
             self.preview.show_page_image(QPixmap.fromImage(image))
 
     def _pdf_font_directory(self) -> str | None:
-        value = self.pdf_font_directory_edit.text().strip()
-        if not value:
-            return None
-        directory = Path(value).expanduser().resolve()
-        if not directory.is_dir():
-            raise FileNotFoundError(f"PDF 字体目录不存在: {directory}")
-        return str(directory)
+        directory = application_directory() / "fonts"
+        return str(directory) if directory.is_dir() else None
 
     def _render_pdf(
         self, path: Path, font_directory: str | None, progress: OperationProgress
