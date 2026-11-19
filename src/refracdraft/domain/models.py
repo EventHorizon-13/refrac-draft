@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class GeometryType(StrEnum):
     NORMAL = "普通"
-    FRONT_TAPER = "正敲"
-    SIDE_TAPER = "侧敲"
+    FRONT_TAPER = "侧敲"
+    SIDE_TAPER = "正敲"
 
 
 class StructureType(StrEnum):
@@ -80,7 +80,7 @@ class ModuleParameters(BaseModel):
     custom_structure_label: str = ""
     geometry_type: GeometryType = GeometryType.NORMAL
 
-    # Front view. For 正敲, use the two end heights; for 普通 use front_height_mm.
+    # Front view. For 侧敲, use the two end heights; for 普通 use front_height_mm.
     front_width_mm: float = Field(gt=0)
     front_height_mm: float = Field(gt=0)
     # Uncompressed module length from the source dynamic blocks. The standard
@@ -89,7 +89,7 @@ class ModuleParameters(BaseModel):
     front_left_height_mm: float | None = Field(default=None, gt=0)
     front_right_height_mm: float | None = Field(default=None, gt=0)
 
-    # Side view. Used only by 侧敲; trapezoid is on the side face, not the front.
+    # Side view. Used only by 正敲.
     side_length_mm: float | None = Field(default=None, gt=0)
     side_left_height_mm: float | None = Field(default=None, gt=0)
     side_right_height_mm: float | None = Field(default=None, gt=0)
@@ -106,21 +106,35 @@ class ModuleParameters(BaseModel):
     production_quantity: int = Field(default=1, ge=1)
     source_note: str = ""
 
+    @model_validator(mode="before")
+    @classmethod
+    def preserve_saved_taper_geometry(cls, data):
+        # Older project files used the opposite labels. Their dimensions select the face.
+        if not isinstance(data, dict) or type(data.get("geometry_type")) is not str:
+            return data
+        if data["geometry_type"] not in (GeometryType.FRONT_TAPER, GeometryType.SIDE_TAPER):
+            return data
+        front = all(data.get(key) is not None for key in ("front_left_height_mm", "front_right_height_mm"))
+        side = all(data.get(key) is not None for key in ("side_length_mm", "side_left_height_mm", "side_right_height_mm"))
+        if front != side:
+            return {**data, "geometry_type": GeometryType.FRONT_TAPER if front else GeometryType.SIDE_TAPER}
+        return data
+
     @model_validator(mode="after")
     def validate_geometry(self) -> "ModuleParameters":
         if self.expansion_length_mm is None:
             self.expansion_length_mm = self.front_height_mm
         if self.front_outline and self.geometry_type == GeometryType.FRONT_TAPER:
-            raise ValueError("正敲正面异形组合尚未定义，不能忽略异形参数")
+            raise ValueError("侧敲正面异形组合尚未定义，不能忽略异形参数")
         if self.board_face_outline and self.board_face_template_id != "rectangular":
             raise ValueError("参数化夹板面轮廓不能与参考 DXF 模板同时指定")
         if self.geometry_type == GeometryType.FRONT_TAPER:
             if self.front_left_height_mm is None or self.front_right_height_mm is None:
-                raise ValueError("正敲模块必须输入正面两端高度 front_left_height_mm / front_right_height_mm")
+                raise ValueError("侧敲模块必须输入正面两端高度 front_left_height_mm / front_right_height_mm")
         if self.geometry_type == GeometryType.SIDE_TAPER:
             required = (self.side_length_mm, self.side_left_height_mm, self.side_right_height_mm)
             if any(v is None for v in required):
-                raise ValueError("侧敲模块必须输入侧面长度和侧面两端高度")
+                raise ValueError("正敲模块必须输入侧面长度和侧面两端高度")
         return self
 
 

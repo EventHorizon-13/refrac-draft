@@ -81,6 +81,7 @@ def main() -> None:
             if (
                 not window._cell_bool(row, "taper_enabled")
                 or window._cell_text(row, "big_head_mm") != "289"
+                or window._cell_text(row, "taper_type") != "侧敲"
             ):
                 raise ValueError("大小头参数未按 B2 示例载入")
             if not window._cell_bool(row, "anchor_enabled"):

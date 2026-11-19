@@ -44,7 +44,7 @@ def test_front_outline_is_computed_and_taper_is_not_silently_discarded():
     assert (260, 0) in module_front_outline(module).points
     drawing = DrawingGenerator().generate(Project(modules=[module])).pages[0].modules[0].drawing
     assert len(drawing.front_view.dimensions) == 4
-    with pytest.raises(ValueError, match="正敲正面异形组合尚未定义"):
+    with pytest.raises(ValueError, match="侧敲正面异形组合尚未定义"):
         ModuleParameters(
             module_id="I1", geometry_type=GeometryType.FRONT_TAPER,
             front_width_mm=300, front_height_mm=230,

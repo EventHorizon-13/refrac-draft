@@ -7,7 +7,7 @@ from typing import Any
 
 from openpyxl import load_workbook
 
-from refracdraft.domain.models import Project, ModuleParameters, BoardParameters, AnchorParameters
+from refracdraft.domain.models import Project, ModuleParameters, BoardParameters, AnchorParameters, GeometryType
 from refracdraft.standard_sheet import COLUMN_SPECS, DEFAULT_ROW, build_standard_row
 
 
@@ -172,12 +172,18 @@ def _normalize_row(row: dict[str, Any], group: str) -> dict[str, Any]:
         elif field in {"positions", "custom_opening"} and isinstance(value, str):
             value = json.loads(value) if value.strip().startswith("[") else value
         normalized[field] = value
-    if group == "modules" and normalized.get("geometry_type") == "侧敲":
-        for front_field, side_field in (
-            ("front_left_height_mm", "side_left_height_mm"),
-            ("front_right_height_mm", "side_right_height_mm"),
+    if group == "modules" and normalized.get("geometry_type") in (
+        GeometryType.FRONT_TAPER, GeometryType.SIDE_TAPER,
+    ) and (
+        normalized.get("geometry_type") == GeometryType.SIDE_TAPER
+        or "side_length_mm" in normalized
+    ):
+        header_names = {str(name).strip() for name in row}
+        for front_field, side_field, generic_headers in (
+            ("front_left_height_mm", "side_left_height_mm", {"大头", "大头高度", "长边"}),
+            ("front_right_height_mm", "side_right_height_mm", {"小头", "小头高度", "短边"}),
         ):
-            if side_field not in normalized and front_field in normalized:
+            if side_field not in normalized and front_field in normalized and header_names & generic_headers:
                 normalized[side_field] = normalized.pop(front_field)
     return normalized
 

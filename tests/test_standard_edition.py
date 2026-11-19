@@ -29,7 +29,7 @@ from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import PDF_FONT_CANDIDATES, _find_pdf_font, _render_page, _single_page_dxf
 from refracdraft.release import latest_portable_release
-from refracdraft.standard_sheet import COLUMN_SPECS
+from refracdraft.standard_sheet import COLUMN_SPECS, DEFAULT_ROW, build_standard_row
 from refracdraft.standard import (
     StandardAnchorValues,
     StandardModuleValues,
@@ -213,13 +213,30 @@ def test_standard_excel_aliases_accept_dynamic_block_terms():
 
 def test_standard_excel_generic_heads_move_to_side_for_side_taper():
     normalized = _normalize_row(
-        {"编号": "S1", "几何类型": "侧敲", "大头": 300, "小头": 200},
+        {"编号": "S1", "几何类型": "正敲", "大头": 300, "小头": 200},
         "modules",
     )
     assert normalized["side_left_height_mm"] == 300
     assert normalized["side_right_height_mm"] == 200
     assert "front_left_height_mm" not in normalized
     assert "front_right_height_mm" not in normalized
+
+
+@pytest.mark.parametrize(("label", "expected_type", "has_side_view"), [
+    ("正敲", GeometryType.SIDE_TAPER, True),
+    ("侧敲", GeometryType.FRONT_TAPER, False),
+])
+def test_standard_taper_labels_generate_the_correct_views(label, expected_type, has_side_view):
+    module, board, anchor = build_standard_row({
+        **DEFAULT_ROW, "taper_enabled": True, "taper_type": label,
+    })
+    assert module.geometry_type == expected_type
+    project = Project(modules=[module], boards=[board], anchors=[anchor])
+    view = DrawingGenerator().generate(project).pages[0].modules[0].drawing
+    assert (view.side_view is not None) == has_side_view
+    legacy = module.model_dump(mode="json")
+    legacy["geometry_type"] = "侧敲" if label == "正敲" else "正敲"
+    assert ModuleParameters.model_validate(legacy).geometry_type == expected_type
 
 
 @pytest.mark.parametrize(

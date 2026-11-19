@@ -106,7 +106,7 @@ DEFAULT_ROW = {
     "taper_enabled": False,
     "big_head_mm": "289",
     "small_head_mm": "220",
-    "taper_type": "正敲",
+    "taper_type": GeometryType.FRONT_TAPER.value,
     "board_exists": True,
     "board_material": "9厘",
     "anchor_enabled": False,
