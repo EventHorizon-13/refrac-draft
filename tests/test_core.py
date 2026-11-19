@@ -162,27 +162,32 @@ def test_stacked_no_anchor_uses_source_layer_marks():
     assert drawing.board_view.note == "夹板"
 
 
-def test_anchor_position_dimension_flags_are_explicit():
+@pytest.mark.parametrize("anchor_type", [AnchorType.SIDE_INSERT, AnchorType.QUICK_INSERT])
+def test_insert_anchor_views_follow_reference_and_keep_explicit_dimensions(anchor_type):
+    if not REF_DXF.exists():
+        pytest.skip("reference DXF not mounted")
     module = ModuleParameters(
-        module_id="B3", geometry_type=GeometryType.FRONT_TAPER,
-        front_width_mm=300, front_height_mm=289, front_left_height_mm=289, front_right_height_mm=220,
+        module_id="B3", geometry_type=GeometryType.SIDE_TAPER,
+        front_width_mm=300, front_height_mm=300,
+        side_length_mm=230, side_left_height_mm=300, side_right_height_mm=220,
         board_face_width_mm=300, board_face_height_mm=230,
     )
-    anchor = AnchorParameters(module_id="B3", anchor_type=AnchorType.QUICK_INSERT, count=1,
+    anchor = AnchorParameters(module_id="B3", anchor_type=anchor_type, count=1,
                               positions=[{"x_mm":150,"y_mm":180}], dimension_vertical=True)
-    drawing = DrawingGenerator(ReferenceLibrary(REF_DXF) if REF_DXF.exists() else None).generate(Project(modules=[module],anchors=[anchor])).pages[0].modules[0].drawing
+    project = Project(modules=[module], anchors=[anchor])
+    drawing = DrawingGenerator(ReferenceLibrary(REF_DXF)).build_module(project, module)
     labels = [d.label for d in drawing.board_view.dimensions]
     assert "50" in labels
     assert labels.count("150") == 0
-    if REF_DXF.exists():
-        assert len(drawing.board_view.cutouts) == 5
+    assert not drawing.board_view.cutouts
     assert drawing.board_view.anchor_points == ()
-    assert drawing.front_view.anchor_marker_style == "cross"
-    front_points = [point for line in drawing.front_view.anchor_symbols for point in line.points]
-    width = max(x for x, _ in front_points) - min(x for x, _ in front_points)
-    height = max(y for _, y in front_points) - min(y for _, y in front_points)
-    assert width == pytest.approx(18.35, abs=0.1)
-    assert height == pytest.approx(220.0, abs=0.2)
+    assert not drawing.front_view.anchor_points
+    for view, size in zip((drawing.front_view, drawing.side_view, drawing.board_view),
+                          ((110, 285), (100, 250), (110, 60))):
+        xs, ys = zip(*(point for line in view.anchor_symbols for point in line.flattened_points()))
+        assert (max(xs) - min(xs), max(ys) - min(ys)) == pytest.approx(size)
+    assert sum(line.bulges == (1.0, 1.0) for line in drawing.front_view.anchor_symbols) == 3
+    assert sum(line.bulges == (1.0, 1.0) for line in drawing.board_view.anchor_symbols) == 16
 
 
 def test_m_anchor_board_symbol_preserves_reference_colors_without_extra_center_marker():

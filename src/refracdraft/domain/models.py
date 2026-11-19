@@ -63,6 +63,32 @@ class OutlineSpec(BaseModel):
     mirror_x: bool = False
 
 
+class BoardFaceFeature(BaseModel):
+    """One perimeter cut from the illustrated board-face templates, in mm."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    type: Literal[1, 2, 3, 4]
+    a: float = Field(gt=0, allow_inf_nan=False)
+    b: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    c: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    d: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    rotation_deg: Literal[0, 90, 180, 270] = 0
+    mirror_x: bool = False
+
+    @model_validator(mode="after")
+    def validate_dimensions(self) -> "BoardFaceFeature":
+        required = {1: "ab", 2: "abcd", 3: "a", 4: "abc"}[self.type]
+        supplied = "".join(key for key in "abcd" if getattr(self, key) is not None)
+        if supplied != required:
+            raise ValueError(f"夹板面类型 {self.type} 需要尺寸 {', '.join(required)}")
+        return self
+
+
+class BoardFaceProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    features: tuple[BoardFaceFeature, ...] = Field(min_length=1)
+
+
 class Point2D(BaseModel):
     model_config = ConfigDict(frozen=True)
     x: float
@@ -99,7 +125,7 @@ class ModuleParameters(BaseModel):
     board_face_height_mm: float = Field(gt=0)
     board_face_template_id: str = "rectangular"
     front_outline: OutlineSpec | None = None
-    board_face_outline: OutlineSpec | None = None
+    board_face_outline: OutlineSpec | BoardFaceProfile | None = None
 
     material: str = ""
     density_kg_m3: float | None = Field(default=None, gt=0)

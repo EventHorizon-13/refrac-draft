@@ -12,6 +12,7 @@ REPOSITORY = "EventHorizon-13/refrac-draft"
 PROJECT_URL = f"https://github.com/{REPOSITORY}"
 RELEASES_API = f"https://api.github.com/repos/{REPOSITORY}/releases?per_page=100"
 _TAG = re.compile(r"standard-v(\d+)\.(\d+)\.(\d+)")
+_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(b\d+)?")
 
 
 def app_version() -> str:
@@ -46,6 +47,9 @@ def latest_portable_release(releases: list[dict]) -> tuple[str, str] | None:
     if not candidates:
         return None
     parts, tag, asset = max(candidates)
-    if parts <= tuple(map(int, app_version().split("."))):
+    current = _VERSION.fullmatch(app_version())
+    if current is not None and (
+        parts + (True,) <= tuple(map(int, current.groups()[:3])) + (current[4] is None,)
+    ):
         return None
     return tag.removeprefix("standard-v"), f"{PROJECT_URL}/releases/download/{tag}/{asset}"

@@ -1,9 +1,10 @@
 import pytest
 
 from refracdraft.domain.models import (
-    AnchorParameters, BoardParameters, GeometryType, ModuleParameters,
+    AnchorParameters, BoardFaceProfile, BoardParameters, GeometryType, ModuleParameters,
     OutlineKind, OutlineSpec, Project,
 )
+from refracdraft.drawing.board_profiles import build_board_profile
 from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.geometry.primitives import module_front_outline, parametric_outline
 
@@ -87,4 +88,41 @@ def test_no_board_retains_parametric_board_face():
     )).pages[0].modules[0].drawing
     assert drawing.board_view.note == "无夹板"
     assert (260, 30) in drawing.board_view.outline.points
+
+
+@pytest.mark.parametrize(("feature", "point", "labels"), [
+    ({"type": 1, "a": 250, "b": 42}, (250, 42), {"250", "42"}),
+    ({"type": 2, "a": 72, "b": 95, "c": 75, "d": 48}, (47, 147), {"72", "95", "75", "48"}),
+    ({"type": 3, "a": 250}, (50, 230), {"250"}),
+    ({"type": 4, "a": 100, "b": 85, "c": 145}, (215, 85), {"100", "85", "145"}),
+])
+def test_illustrated_board_profiles_use_the_annotated_dimensions(feature, point, labels):
+    profile = BoardFaceProfile.model_validate({"features": [feature]})
+    outline, dimensions = build_board_profile(300, 230, profile)
+    assert outline.closed and outline.bounds == (0, 0, 300, 230)
+    assert point in outline.points
+    assert {dimension.label for dimension in dimensions} == labels
+
+
+def test_board_profile_rotation_mirror_and_multiple_cuts():
+    profile = BoardFaceProfile.model_validate({"features": [
+        {"type": 1, "a": 85, "b": 35, "rotation_deg": 270},
+        {"type": 3, "a": 255, "mirror_x": True},
+    ]})
+    outline, dimensions = build_board_profile(300, 230, profile)
+    assert outline.bounds == (0, 0, 300, 230)
+    assert (35, 145) in outline.points
+    assert (255, 230) in outline.points
+    assert [(dim.label, dim.orientation) for dim in dimensions] == [
+        ("85", "vertical"), ("35", "horizontal"), ("255", "horizontal"),
+    ]
+
+
+def test_board_profile_rejects_overlapping_cuts():
+    profile = BoardFaceProfile.model_validate({"features": [
+        {"type": 1, "a": 85, "b": 35},
+        {"type": 3, "a": 250},
+    ]})
+    with pytest.raises(ValueError, match="同一段边缘"):
+        build_board_profile(300, 230, profile)
 

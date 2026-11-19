@@ -218,7 +218,7 @@ class DrawingPreview(QGraphicsView):
         aci_colors = {1: "#ff0000", 2: "#ffff00", 3: "#00ff00", 4: "#00ffff", 5: "#0000ff",
                       6: "#ff00ff", 7: "#111111", 8: "#808080", 9: "#c0c0c0"}
         for symbol_index, symbol in enumerate(view.anchor_symbols):
-            p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in symbol.points]
+            p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in symbol.flattened_points()]
             aci = view.anchor_symbol_colors[symbol_index] if symbol_index < len(view.anchor_symbol_colors) else 5
             lineweight = view.anchor_symbol_lineweights[symbol_index] if symbol_index < len(view.anchor_symbol_lineweights) else 22
             linetype = view.anchor_symbol_linetypes[symbol_index] if symbol_index < len(view.anchor_symbol_linetypes) else "CONTINUOUS"

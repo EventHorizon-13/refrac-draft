@@ -6,7 +6,7 @@ import sys
 def main() -> None:
     from pathlib import Path
 
-    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtCore import QEvent, QPointF, QTimer, Qt
     from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QKeyEvent, QMouseEvent
     from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QWidget
 
@@ -18,7 +18,8 @@ def main() -> None:
     from refracdraft.resources import resource_path
     from refracdraft.standard import ensure_standard_project
     from refracdraft.ui.about import AboutDialog
-    from refracdraft.ui.standard_window import COLUMN_INDEX, StandardWindow
+    from refracdraft.ui.board_face_dialog import BoardFaceDialog
+    from refracdraft.ui.standard_window import COLUMN_INDEX, PROFILE_COLUMN, StandardWindow
 
     smoke = "--smoke-test" in sys.argv
     trace = Path("RefracDraft-Standard-smoke-trace.txt")
@@ -146,6 +147,41 @@ def main() -> None:
                 raise ValueError("Ctrl+Y 重做未恢复参数")
             table.item(row, COLUMN_INDEX["length_mm"]).setText("300")
             trace.write_text("undo/redo passed\n", encoding="utf-8")
+
+            profile_button = table.cellWidget(row, PROFILE_COLUMN)
+            if profile_button is None:
+                raise ValueError("参数行缺少异形模块按钮")
+            dialog_errors = []
+
+            def edit_board_profile():
+                dialog = app.activeModalWidget()
+                try:
+                    if not isinstance(dialog, BoardFaceDialog):
+                        raise ValueError("异形模块按钮未打开编辑窗口")
+                    cut = dialog.cuts[0]
+                    initial_outline = dialog.preview.outline
+                    cut.dimensions["a"].setText("80")
+                    cut.rotate.click()
+                    cut.mirror.click()
+                    if not dialog.confirm.isEnabled() or dialog.preview.outline == initial_outline:
+                        raise ValueError("异形夹板面示意图未随切口参数改变")
+                    dialog.confirm.click()
+                except Exception as exc:
+                    dialog_errors.append(exc)
+                    if dialog is not None:
+                        dialog.reject()
+
+            QTimer.singleShot(0, edit_board_profile)
+            profile_button.click()
+            if dialog_errors:
+                raise dialog_errors[0]
+            profile = window._collect_project().modules[0].board_face_outline
+            if not profile or profile.features[0].rotation_deg != 90 or not profile.features[0].mirror_x:
+                raise ValueError("异形夹板面参数未进入项目数据")
+            window.undo()
+            if window._collect_project().modules[0].board_face_outline is not None:
+                raise ValueError("撤销未清除异形轮廓")
+            trace.write_text("board profile editor passed\n", encoding="utf-8")
 
             anchor_cell = table.item(row, COLUMN_INDEX["anchor_enabled"])
             anchor_cell.setCheckState(Qt.CheckState.Unchecked)

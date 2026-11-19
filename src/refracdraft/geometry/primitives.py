@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import hypot
+from math import degrees, hypot
 from typing import Iterable
+
+from ezdxf.math import ConstructionArc, bulge_to_arc
 
 from refracdraft.domain.models import GeometryType, ModuleParameters, OutlineKind, OutlineSpec, Point2D
 
@@ -11,6 +13,7 @@ from refracdraft.domain.models import GeometryType, ModuleParameters, OutlineKin
 class Polyline:
     points: tuple[tuple[float, float], ...]
     closed: bool = True
+    bulges: tuple[float, ...] = ()
 
     @property
     def bounds(self) -> tuple[float, float, float, float]:
@@ -19,7 +22,28 @@ class Polyline:
         return min(xs), min(ys), max(xs), max(ys)
 
     def transformed(self, sx: float = 1.0, sy: float = 1.0, tx: float = 0.0, ty: float = 0.0) -> "Polyline":
-        return Polyline(tuple((x * sx + tx, y * sy + ty) for x, y in self.points), self.closed)
+        bulges = self.bulges
+        if bulges and abs(sx) != abs(sy):
+            raise ValueError("圆弧轮廓不支持非等比缩放")
+        if sx * sy < 0:
+            bulges = tuple(-bulge for bulge in bulges)
+        return Polyline(tuple((x * sx + tx, y * sy + ty) for x, y in self.points), self.closed, bulges)
+
+    def flattened_points(self, sagitta: float = 0.2) -> tuple[tuple[float, float], ...]:
+        if not any(self.bulges):
+            return self.points
+        points = []
+        ends = self.points[1:] + (self.points[:1] if self.closed else ())
+        for start, end, bulge in zip(self.points, ends, self.bulges):
+            points.append(start)
+            if bulge:
+                center, first, last, radius = bulge_to_arc(start, end, bulge)
+                arc = ConstructionArc(center, radius, degrees(first), degrees(last))
+                interiors = tuple((p.x, p.y) for p in arc.flattening(sagitta))[1:-1]
+                points.extend(reversed(interiors) if bulge < 0 else interiors)
+        if not self.closed:
+            points.append(self.points[-1])
+        return tuple(points)
 
 
 def rectangle(width: float, height: float) -> Polyline:

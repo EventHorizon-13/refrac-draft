@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 
 from refracdraft.domain.models import (
-    AnchorParameters, AnchorType, BoardParameters, GeometryType, ModuleParameters, StructureType,
+    AnchorParameters, AnchorType, BoardFaceProfile, BoardParameters, GeometryType, ModuleParameters,
+    StructureType,
 )
 from refracdraft.standard import (
     StandardAnchorValues, StandardModuleValues, build_standard_anchor, build_standard_board,
@@ -129,7 +131,7 @@ def _number(value: str, label: str, module_id: str) -> float:
         parsed = float(value.strip().replace(",", ""))
     except (TypeError, ValueError):
         raise ValueError(f"{module_id or '未编号模块'}: {label}必须是数字") from None
-    if parsed <= 0:
+    if not isfinite(parsed) or parsed <= 0:
         raise ValueError(f"{module_id or '未编号模块'}: {label}必须大于 0")
     return parsed
 
@@ -188,9 +190,9 @@ def row_values_from_models(
     anchor_values = standard_anchor_values(anchor_model)
     return {
         "module_id": module_values.module_id,
-        "length_mm": f"{module_values.length_mm:g}",
+        "length_mm": str(module_values.length_mm).removesuffix(".0"),
         "expansion_length_mm": f"{module_values.expansion_length_mm:g}",
-        "thickness_mm": f"{module_values.thickness_mm:g}",
+        "thickness_mm": str(module_values.thickness_mm).removesuffix(".0"),
         "structure_type": module_values.custom_structure_label
         or STRUCTURE_LABEL_BY_TYPE.get(module_values.structure_type, "自定义"),
         "material": _without_suffix(module_values.material, "材质", "板材"),
@@ -228,26 +230,37 @@ def row_values_from_models(
         "source_note": module_values.source_note,
     }
 
+def standard_board_face_bounds(values: dict[str, str | bool]) -> tuple[float, float]:
+    module_id = str(values["module_id"]).strip()
+    return (
+        _number(str(values["length_mm"]), "长度", module_id),
+        _number(str(values["thickness_mm"]), "厚度", module_id),
+    )
+
+
 def build_standard_row(
     values: dict[str, str | bool],
     bases: tuple[ModuleParameters | None, BoardParameters | None, AnchorParameters | None] = (
         None, None, None,
     ),
+    *,
+    board_face_profile: BoardFaceProfile | None = None,
 ) -> tuple[ModuleParameters, BoardParameters, AnchorParameters]:
     module_id = str(values["module_id"]).strip()
     if not module_id:
         raise ValueError("模块编号不能为空")
+    length, thickness = standard_board_face_bounds(values)
     structure_label = str(values["structure_type"]).strip()
     tapered = bool(values["taper_enabled"])
     big_head = _number(str(values["big_head_mm"]), "大头", module_id) if tapered else None
     module_values = StandardModuleValues(
         module_id=module_id,
-        length_mm=_number(str(values["length_mm"]), "长度", module_id),
+        length_mm=length,
         expansion_length_mm=(
             big_head if big_head is not None
             else _number(str(values["expansion_length_mm"]), "膨胀长度", module_id)
         ),
-        thickness_mm=_number(str(values["thickness_mm"]), "厚度", module_id),
+        thickness_mm=thickness,
         structure_type=_structure_type(structure_label, module_id),
         custom_structure_label="" if structure_label == "自定义" else structure_label,
         taper_enabled=tapered,
@@ -264,6 +277,7 @@ def build_standard_row(
         board_material=_board_material_value(str(values["board_material"]).strip() or "9厘"),
         density_kg_m3=_optional_number(str(values["density_kg_m3"]), "容重", module_id),
         source_note=str(values["source_note"]).strip(),
+        board_face_profile=board_face_profile,
     )
     base_module, base_board, base_anchor = bases
     module = build_standard_module(base_module, module_values)

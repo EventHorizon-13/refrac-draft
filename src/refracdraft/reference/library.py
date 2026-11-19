@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-from math import hypot
+from math import hypot, radians, tan
 from pathlib import Path
 
 import ezdxf
@@ -37,6 +37,29 @@ ANCHOR_SYMBOL_BLOCKS: dict[str, str] = {
     "m-shaped": "动态模块-M形锚固件-夹板面",
     "diamond": "动态模块-菱形锚固件-夹板面",
 }
+
+INSERT_ANCHOR_NAMES = frozenset(("旁插", "快插"))
+
+
+def _anchor_polyline(entity) -> Polyline | None:
+    """Keep source circular edges editable as DXF polyline bulges."""
+    kind = entity.dxftype()
+    if kind == "LWPOLYLINE":
+        points = tuple((p.x, p.y) for p in entity.vertices_in_wcs())
+        sign = -1 if entity.dxf.extrusion.z < 0 else 1
+        bulges = tuple(sign * float(bulge) for (bulge,) in entity.get_points("b"))
+        return Polyline(points, entity.closed, bulges if any(bulges) else ())
+    if kind == "CIRCLE":
+        center = entity.ocs().to_wcs(entity.dxf.center)
+        radius = entity.dxf.radius
+        return Polyline(((center.x - radius, center.y), (center.x + radius, center.y)), True, (1.0, 1.0))
+    if kind == "ARC":
+        start, end = entity.start_point, entity.end_point
+        sweep = (entity.dxf.end_angle - entity.dxf.start_angle) % 360
+        sign = -1 if entity.dxf.extrusion.z < 0 else 1
+        bulge = sign * tan(radians(sweep) / 4)
+        return Polyline(((start.x, start.y), (end.x, end.y)), False, (bulge, 0.0))
+    return None
 
 
 @dataclass(frozen=True)
@@ -154,7 +177,9 @@ class ReferenceLibrary:
         return SymbolGeometry(normalized, tuple(colors), tuple(lineweights), tuple(linetypes))
 
 
-    def symbol_from_block(self, block_name: str) -> SymbolGeometry:
+    def symbol_from_block(
+        self, block_name: str, *, preserve_arcs: bool = False, rotate_left: bool = False,
+    ) -> SymbolGeometry:
         """Flatten a source block into reusable local polylines, centered at its bounds."""
         if block_name not in self.doc.blocks:
             raise KeyError(f"参考 DXF 中不存在图块: {block_name}")
@@ -165,16 +190,22 @@ class ReferenceLibrary:
         linetypes: list[str] = []
         for entity in entities:
             try:
-                path = make_path(entity)
-                pts = [(float(v.x), float(v.y)) for v in path.flattening(distance=0.35)]
-                if len(pts) >= 2:
+                polyline = _anchor_polyline(entity) if preserve_arcs else None
+                if polyline is None:
+                    path = make_path(entity)
+                    pts = [(float(v.x), float(v.y)) for v in path.flattening(distance=0.35)]
+                    if len(pts) < 2:
+                        continue
                     closed = len(pts) > 2 and hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1]) < 1e-4
-                    if closed:
-                        pts = pts[:-1]
-                    polylines.append(Polyline(tuple(pts), closed=closed))
-                    colors.append(self._entity_aci_color(entity))
-                    lineweights.append(self._entity_lineweight(entity))
-                    linetypes.append(self._entity_linetype(entity))
+                    polyline = Polyline(tuple(pts[:-1] if closed else pts), closed)
+                if rotate_left:
+                    polyline = Polyline(
+                        tuple((-y, x) for x, y in polyline.points), polyline.closed, polyline.bulges,
+                    )
+                polylines.append(polyline)
+                colors.append(self._entity_aci_color(entity))
+                lineweights.append(self._entity_lineweight(entity))
+                linetypes.append(self._entity_linetype(entity))
             except (TypeError, AttributeError, ValueError):
                 continue
         if not polylines:
@@ -241,24 +272,16 @@ class ReferenceLibrary:
         return tuple(result)
 
     def front_anchor_symbol(self, anchor_type: str) -> SymbolGeometry:
-        blocks = {"M型": "*U168", "菱形": "*U163", "快插": "快插锚固件-右视图"}
+        if anchor_type in INSERT_ANCHOR_NAMES:
+            return self.symbol_from_block("旁插锚固件3", preserve_arcs=True)
+        blocks = {"M型": "*U168", "菱形": "*U163"}
         if anchor_type not in blocks:
             raise KeyError(f"尚未确认 {anchor_type} 的正面锚固件图块")
-        symbol = self.symbol_from_block(blocks[anchor_type])
-        if anchor_type == "快插":
-            # The named source block's visible profile is 25 x 100 local units, while the accepted
-            # B3/B10/B11/B12 PDF profile measures about 18.35 x 220 mm. The sample's
-            # dynamic-block stretch is therefore anisotropic and must be reproduced here.
-            sx, sy = 18.35 / 25.0, 220.0 / 100.0
-            return SymbolGeometry(
-                tuple(line.transformed(sx=sx, sy=sy) for line in symbol.polylines),
-                symbol.colors,
-                symbol.lineweights,
-                symbol.linetypes,
-            )
-        return symbol
+        return self.symbol_from_block(blocks[anchor_type])
 
     def side_anchor_symbol(self, anchor_type: str) -> SymbolGeometry:
+        if anchor_type in INSERT_ANCHOR_NAMES:
+            return self.symbol_from_block("旁插锚固件-侧面", preserve_arcs=True, rotate_left=True)
         if anchor_type == "M型":
             # 动态模块-M形锚固件-膨胀面 uses *U324. The raw block is already in the
             # vertical expansion-face orientation, but the manufactured profile faces the
@@ -290,6 +313,9 @@ class ReferenceLibrary:
                 linetypes.append(linetype if is_center_axis else "CONTINUOUS")
             return SymbolGeometry(polylines, source.colors, source.lineweights, tuple(linetypes))
         raise KeyError(f"尚未确认 {anchor_type} 的膨胀面锚固件图块")
+
+    def insert_anchor_board_symbol(self) -> SymbolGeometry:
+        return self.symbol_from_block("旁插锚固件1", preserve_arcs=True)
 
 
     def standard_opening(self, anchor_type: str) -> tuple[Polyline, ...]:

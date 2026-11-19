@@ -17,6 +17,7 @@ from refracdraft.drawing.layout import (
 from refracdraft.domain.models import (
     AnchorParameters,
     AnchorType,
+    BoardFaceProfile,
     BoardParameters,
     GeometryType,
     LayoutMode,
@@ -69,6 +70,26 @@ def test_standard_edition_accepts_three_existing_geometry_types(geometry_type):
 def test_standard_edition_rejects_irregular_geometry_with_module_id(extra):
     with pytest.raises(ValueError, match="M1.*异形"):
         ensure_standard_project(Project(modules=[module(**extra)]))
+
+
+def test_standard_board_face_profile_round_trips_and_uses_table_bounds():
+    profile = BoardFaceProfile.model_validate({
+        "features": [{"type": 1, "a": 62, "b": 24, "rotation_deg": 90, "mirror_x": True}],
+    })
+    values = dict(DEFAULT_ROW, length_mm="345", thickness_mm="210", anchor_enabled=False)
+    part, board, anchor = build_standard_row(values, board_face_profile=profile)
+    project = Project(modules=[part], boards=[board], anchors=[anchor])
+    restored = Project.model_validate_json(project.model_dump_json())
+    ensure_standard_project(restored)
+    part = restored.modules[0]
+    assert part.board_face_outline == profile
+    assert (part.board_face_width_mm, part.board_face_height_mm) == (345, 210)
+    assert build_standard_module(part, standard_module_values(part, board)).board_face_outline == profile
+    drawing = DrawingGenerator().build_module(restored, part)
+    x, y = zip(*drawing.board_view.outline.points)
+    assert (max(x) - min(x), max(y) - min(y)) == (345, 210)
+    with pytest.raises(ValueError, match=r"M1.*类型 1"):
+        build_standard_row(dict(values, thickness_mm="60"), board_face_profile=profile)
 
 
 def test_welded_diamond_type_survives_unified_input_normalization():

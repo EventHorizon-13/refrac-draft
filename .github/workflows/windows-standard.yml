@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/standard-edition
+      - beta/standard-v*
     paths:
       - .github/workflows/windows-standard.yml
       - src/**
@@ -110,3 +111,36 @@ jobs:
           path: dist/RefracDraft-Standard/
           if-no-files-found: error
           retention-days: 30
+
+  publish-beta:
+    if: startsWith(github.ref, 'refs/heads/beta/standard-v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: RefracDraft-Standard-Windows-x64-portable
+          path: release/RefracDraft-Standard
+      - name: Publish verified Beta package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          TAG="standard-v$VERSION"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+b[0-9]+$ || "$GITHUB_REF_NAME" != "beta/$TAG" ]]; then
+            echo "Beta release branch must match package version $VERSION" >&2
+            exit 1
+          fi
+          ASSET="RefracDraft-Standard-Windows-x64-portable-v$VERSION.zip"
+          (cd release && zip -q -r "$GITHUB_WORKSPACE/$ASSET" RefracDraft-Standard)
+          gh release create "$TAG" \
+            "$ASSET" \
+            "examples/standard_example_6_modules.xlsx#模块加工图示例_6模块.xlsx" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --latest=false \
+            --title "RefracDraft Standard v$VERSION (Beta)" \
+            --notes-file "docs/releases/$TAG.md"
