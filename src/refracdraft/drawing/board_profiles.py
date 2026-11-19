@@ -30,7 +30,9 @@ def machining_dimensions(
             tuple(sorted((round(dim.start[axis], 6), round(dim.end[axis], 6)))) for dim in matches
         }
         for start, end in sorted(edges, key=lambda edge: abs(edge[1][axis] - edge[0][axis])):
-            a, b = sorted((round(start[axis], 6), round(end[axis], 6)))
+            if start[axis] > end[axis]:
+                start, end = end, start
+            a, b = round(start[axis], 6), round(end[axis], 6)
             if b - a <= EPSILON or b - a >= total - EPSILON or (a, b) in measured:
                 continue
 
@@ -38,10 +40,16 @@ def machining_dimensions(
                 low, high = sorted((dim.start[axis], dim.end[axis]))
                 return abs(lane - dim.line_position) < 44 and a < high - EPSILON and b > low + EPSILON
 
-            lane = next((candidate for candidate in lanes
-                         if not any(overlaps(dim, candidate) for dim in matches)), lanes[-1])
+            if axis == 0:
+                lane = next((candidate for candidate in lanes
+                             if not any(overlaps(dim, candidate) for dim in matches)), lanes[-1])
+                direction = 1
+            else:
+                on_left = (start[0] + end[0]) <= left + right
+                lane = lanes[0] if on_left else lanes[1]
+                direction = -1 if on_left else 1
             while any(overlaps(dim, lane) for dim in matches):
-                lane += 45
+                lane += direction * 45
             offset = lane - max(start[1], end[1]) if axis == 0 else min(start[0], end[0]) - lane
             dimension = Dimension(start, end, f"{b - a:g}", orientation, offset)
             added.append(dimension)
