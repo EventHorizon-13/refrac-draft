@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from refracdraft.domain.models import (
     AnchorParameters,
     AnchorType,
@@ -89,30 +91,22 @@ def _small_head_contour_lines(width: float, overall_height: float, small_height:
 
 
 def _details(module, board, anchor) -> tuple[str, ...]:
-    name = module.name or module.structure_type.value
+    name = module.custom_structure_label or module.name or module.structure_type.value
     display_name = name if module.module_id in name else f"{name}{module.module_id}"
     lines = [f"1、名称：{display_name}", f"2、材质：{module.material or '未填写'}"]
     if not anchor.exists or anchor.anchor_type == AnchorType.NONE:
         lines.extend(("3、锚固件：无", "4、锚固件长度：无"))
     else:
-        spec_parts = []
-        if anchor.thread_spec:
-            spec_parts.append(anchor.thread_spec)
+        spec = anchor.thread_spec
         if anchor.diameter_mm:
-            spec_parts.append(f"插针φ{anchor.diameter_mm:g}")
-        spec = "，".join(spec_parts)
+            spec += f"φ{anchor.diameter_mm:g}"
         anchor_name = {
             AnchorType.M_SHAPE: "M型", AnchorType.DIAMOND: "菱形", AnchorType.SIDE_INSERT: "旁插",
             AnchorType.QUICK_INSERT: "快插", AnchorType.WELDED_DIAMOND: "焊接菱形",
-            AnchorType.CUSTOM: "自定义",
+            AnchorType.CUSTOM: anchor.custom_type_label or "自定义",
         }.get(anchor.anchor_type, "")
-        embedment = (
-            f"，嵌入深度 {anchor.embedment_depth_mm:g}mm"
-            if anchor.anchor_type == AnchorType.DIAMOND and anchor.embedment_depth_mm
-            else ""
-        )
         material = anchor.material or "未填写材质"
-        lines.extend((f"3、锚固件：{material}{anchor_name}锚固件{spec}{embedment}",
+        lines.extend((f"3、锚固件：{material}{anchor_name}锚固件{spec}",
                       f"4、锚固件长度：{anchor.length_mm:g}mm" if anchor.length_mm else "4、锚固件长度：未填写"))
     lines.append(f"5、数量：{module.production_quantity} Pcs")
     lines.append(f"6、容重：{module.density_kg_m3:g} kg/m³" if module.density_kg_m3 else "6、容重：未填写")
@@ -314,9 +308,9 @@ class DrawingGenerator:
             symbol = self.reference_library.anchor_symbol(symbol_id)
         if symbol is not None and anchor.anchor_type == AnchorType.DIAMOND and anchor.embedment_depth_mm:
             symbol_ys = [point[1] for line in symbol.polylines for point in line.points]
-            symbol_half_height = (max(symbol_ys) - min(symbol_ys)) / 2.0 if symbol_ys else 0.0
+            symbol_top = max(symbol_ys, default=0.0)
             positions = [
-                (x, module.board_face_height_mm - anchor.embedment_depth_mm + symbol_half_height)
+                (x, module.board_face_height_mm - anchor.embedment_depth_mm - symbol_top)
                 for x, _y in positions
             ]
         for x, y in positions:
@@ -404,8 +398,17 @@ class DrawingGenerator:
             _details(module, board, anchor), front_view, side_view, board_view, tuple(warnings),
         )
 
-    def generate(self, project: Project) -> DrawingDocument:
-        drawings = [self.build_module(project, module) for module in project.modules]
+    def generate(
+        self,
+        project: Project,
+        *,
+        on_module_drawn: Callable[[int], None] | None = None,
+    ) -> DrawingDocument:
+        drawings = []
+        for count, module in enumerate(project.modules, start=1):
+            drawings.append(self.build_module(project, module))
+            if on_module_drawn is not None:
+                on_module_drawn(count)
         required_widths = [module_required_width(drawing) for drawing in drawings]
         pages: list[SheetPage] = []
         groups = _balanced_page_groups(required_widths)
@@ -444,31 +447,38 @@ def _balanced_page_groups(required_widths: list[float]) -> list[tuple[int, int]]
     count = len(required_widths)
     if count == 0:
         return []
-    # State: page count, highest page fill ratio, squared unused capacity, ranges.
-    best: list[tuple[int, float, float, tuple[tuple[int, int], ...]] | None] = [None] * (count + 1)
-    best[0] = (0, 0.0, 0.0, ())
+    # State: page count, highest fill ratio, squared unused capacity, page start.
+    best: list[tuple[int, float, float, int] | None] = [None] * (count + 1)
+    best[0] = (0, 0.0, 0.0, 0)
     prefix = [0.0]
     for width in required_widths:
         prefix.append(prefix[-1] + width)
     for end in range(1, count + 1):
-        for start in range(end):
+        for start in range(end - 1, -1, -1):
+            used = prefix[end] - prefix[start] + PANEL_GAP_MM * (end - start - 1)
+            if used > PAGE_CONTENT_WIDTH_MM + 1e-6:
+                break
             previous = best[start]
             if previous is None:
-                continue
-            items = end - start
-            used = prefix[end] - prefix[start] + PANEL_GAP_MM * max(0, items - 1)
-            if used > PAGE_CONTENT_WIDTH_MM + 1e-6:
                 continue
             fill = used / PAGE_CONTENT_WIDTH_MM
             candidate = (
                 previous[0] + 1,
                 max(previous[1], fill),
                 previous[2] + (1.0 - fill) ** 2,
-                previous[3] + ((start, end),),
+                start,
             )
-            if best[end] is None or candidate[:3] < best[end][:3]:
+            if best[end] is None or candidate < best[end]:
                 best[end] = candidate
-    if best[count] is None:
-        raise ValueError("模块宽度超出单页可用宽度")
-    return list(best[count][3])
+
+    groups = []
+    end = count
+    while end:
+        page = best[end]
+        if page is None:
+            raise ValueError("模块宽度超出单页可用宽度")
+        start = page[3]
+        groups.append((start, end))
+        end = start
+    return list(reversed(groups))
 

@@ -7,15 +7,25 @@ VIEW_SCALE = 0.0992
 SIDE_VIEW_GAP_MM = 14.0
 TOP_VIEW_BOTTOM_MM = 150.0
 BOARD_VIEW_BOTTOM_MM = 106.17
+PAGE_HEIGHT_MM = 210.0
 PAGE_LEFT_MM = 7.0
 PAGE_CONTENT_WIDTH_MM = 283.0
 PANEL_INNER_MARGIN_MM = 8.0
 PANEL_GAP_MM = 6.0
 PANEL_MIN_WIDTH_MM = 58.0
-DETAIL_TEXT_SIZE_MM = 4.20
-DETAIL_LINE_SPACING = 0.75
-DETAIL_PREVIEW_LINE_SPACING = 1.26
-DETAIL_BASELINES_MM = (83.00, 77.70, 72.40, 67.10, 61.80, 56.50, 51.20, 45.90)
+
+# A 200 mm model-space inset is 20 mm on the 1:10 A4 sheet.
+FRAME_INSET_MM = 7.0
+TITLE_BLOCK_TOP_MM = 37.0
+SEPARATOR_MARGIN_MM = 20.0
+SEPARATOR_TOP_MM = PAGE_HEIGHT_MM - FRAME_INSET_MM - SEPARATOR_MARGIN_MM
+SEPARATOR_BOTTOM_MM = TITLE_BLOCK_TOP_MM + SEPARATOR_MARGIN_MM
+
+DETAIL_TEXT_SIZE_MM = 5.20
+DIMENSION_TEXT_SIZE_MM = 4.0
+DETAIL_LINE_SPACING = 0.92
+DETAIL_PREVIEW_LINE_SPACING = 1.25
+DETAIL_BASELINES_MM = (88.00, 82.00, 76.00, 70.00, 64.00, 58.00, 52.00, 46.00)
 
 
 def outline_width(view) -> float:
@@ -32,12 +42,12 @@ def top_row_width(drawing: ModuleDrawing) -> float:
 
 def _detail_text_width(text: str, size_mm: float, horizontal_scale: float) -> float:
     # ReportLab's CJK font advances are narrower after the drawing's horizontal squeeze.
-    units = sum(0.32 if ord(char) < 128 else 0.58 for char in text)
+    units = sum(0.42 if ord(char) < 128 else 0.66 for char in text)
     return units * size_mm * horizontal_scale
 
 
 def details_width(drawing: ModuleDrawing) -> float:
-    widths = [_detail_text_width(line, DETAIL_TEXT_SIZE_MM, 0.67) for line in drawing.details]
+    widths = [_detail_text_width(line, DETAIL_TEXT_SIZE_MM, 0.72) for line in drawing.details]
     return max(widths, default=0.0)
 
 

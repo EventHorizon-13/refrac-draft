@@ -32,6 +32,7 @@ class StandardModuleValues:
     density_kg_m3: float | None = None
     source_note: str = ""
     structure_type: StructureType = StructureType.FOLDED
+    custom_structure_label: str = ""
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class StandardAnchorValues:
     pin_diameter_mm: float | None = 8.0
     hose_spec: str = "32胶管"
     length_mm: float | None = 230.0
+    custom_type_label: str = ""
 
 
 def _positive(value: float | None, label: str, module_id: str) -> float:
@@ -71,6 +73,15 @@ def _board_thickness(material: str, fallback: float | None) -> float | None:
     return fallback
 
 
+def _module_material(value: str) -> str:
+    text = value.strip()
+    for suffix in ("板材", "材质"):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)].strip()
+            break
+    return f"{text}材质" if text else ""
+
+
 def build_standard_module(
     base: ModuleParameters | None,
     values: StandardModuleValues,
@@ -84,11 +95,15 @@ def build_standard_module(
     data = base.model_dump(mode="python") if base else {}
     data.update(
         module_id=module_id,
-        material=values.material.strip(),
+        material=_module_material(values.material),
         density_kg_m3=values.density_kg_m3,
         source_note=values.source_note.strip(),
         production_quantity=max(1, int(values.production_quantity)),
         structure_type=values.structure_type,
+        custom_structure_label=(
+            values.custom_structure_label.strip()
+            if values.structure_type == StructureType.CUSTOM else ""
+        ),
         front_width_mm=length,
         expansion_length_mm=expansion,
         board_face_width_mm=length,
@@ -176,6 +191,10 @@ def build_standard_anchor(
         hose_spec=values.hose_spec.strip(),
         dimension_horizontal=True,
         dimension_vertical=False,
+        custom_type_label=(
+            values.custom_type_label.strip()
+            if values.enabled and values.anchor_type == AnchorType.CUSTOM else ""
+        ),
     )
     if not values.enabled:
         data.update(
@@ -248,6 +267,7 @@ def standard_module_values(
         density_kg_m3=module.density_kg_m3,
         source_note=module.source_note,
         structure_type=module.structure_type,
+        custom_structure_label=module.custom_structure_label,
     )
 
 
@@ -275,6 +295,7 @@ def standard_anchor_values(anchor: AnchorParameters) -> StandardAnchorValues:
         pin_diameter_mm=anchor.diameter_mm if anchor.diameter_mm is not None else 8.0,
         hose_spec=anchor.hose_spec or _default_hose_spec(anchor.thread_spec),
         length_mm=anchor.length_mm or 230.0,
+        custom_type_label=anchor.custom_type_label,
     )
 
 

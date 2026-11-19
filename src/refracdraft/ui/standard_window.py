@@ -5,8 +5,9 @@ from datetime import datetime
 from pathlib import Path
 import re
 
-from PySide6.QtCore import QRect, QSettings, QStandardPaths, Qt, Signal
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import (
+    QEventLoop, QRect, QSettings, QSignalBlocker, QStandardPaths, Qt, QTimer, Signal,
+)
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -29,10 +31,9 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
-    QProgressDialog,
+    QProgressBar,
     QPushButton,
     QSizePolicy,
-    QSpinBox,
     QSplitter,
     QStyledItemDelegate,
     QTableWidget,
@@ -67,7 +68,7 @@ from refracdraft.standard import (
     standard_anchor_values,
     standard_module_values,
 )
-from refracdraft.ui.main_window import DrawingPreview, MainWindow
+from refracdraft.ui.main_window import DrawingPreview, MainWindow, PageSpinBox
 
 
 LENGTH_PRESETS = ("200", "250", "300", "350", "400", "450", "500", "600")
@@ -92,7 +93,10 @@ SPACING_PRESETS = (
 EMBEDMENT_PRESETS = ("25", "30", "40", "50", "60", "70", "80", "100", "120")
 ANCHOR_LENGTH_PRESETS = ("180", "200", "220", "230", "250", "280", "300", "330", "350", "400")
 DENSITY_PRESETS = ("180", "200", "210", "220", "240", "260", "280", "300")
-MODULE_MATERIALS = ("1260", "1350", "1430")
+MODULE_MATERIALS = (
+    "1050", "1100", "1150", "1260", "1350", "1400", "1430", "1500", "1600",
+    "铬锆复合",
+)
 BOARD_TYPES = ("9厘", "8厘", "6厘")
 ANCHOR_MATERIALS = ("201", "304", "309", "310")
 THREAD_SPECS = ("M6", "M8", "M10", "M12", "M16")
@@ -260,20 +264,6 @@ def _without_suffix(value: str, *suffixes: str) -> str:
     return text
 
 
-def _module_material_value(value: str) -> str:
-    text = value.strip()
-    known = {
-        "1260": "1260材质",
-        "1350": "1350板材",
-        "1430": "1430材质",
-    }
-    if text in known:
-        return known[text]
-    if text.endswith(("材质", "板材")):
-        return text
-    return f"{text}材质" if text else ""
-
-
 def _board_material_value(value: str) -> str:
     text = value.strip()
     if not text or text == "无" or text.endswith(("夹板", "mm")):
@@ -301,6 +291,59 @@ def _short_rule() -> QFrame:
     return line
 
 
+class OperationProgress(QDialog):
+    def __init__(self, parent: QWidget, text: str, steps: int):
+        super().__init__(parent)
+        self.setWindowTitle("正在处理")
+        self.setWindowModality(Qt.WindowModality.WindowModal)
+        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+        self.setMinimumWidth(320)
+        layout = QVBoxLayout(self)
+        self.label = QLabel(text)
+        self.bar = QProgressBar()
+        self.bar.setRange(0, steps)
+        self.bar.setValue(0)
+        layout.addWidget(self.label)
+        layout.addWidget(self.bar)
+        self.show()
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+
+    def update_stage(self, text: str, completed: int) -> None:
+        self.label.setText(text)
+        self.bar.setValue(completed)
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+
+    def advance(self, text: str) -> None:
+        self.update_stage(text, self.bar.value() + 1)
+
+    def finish(self, text: str) -> None:
+        self.update_stage(text, self.bar.maximum())
+
+
+class ParameterEditor(QLineEdit):
+    """Single-cell editor that commits and moves when an untouched value is arrowed."""
+
+    navigationRequested = Signal(int, int)
+
+    def keyPressEvent(self, event) -> None:
+        directions = {
+            Qt.Key.Key_Left: (0, -1),
+            Qt.Key.Key_Right: (0, 1),
+            Qt.Key.Key_Up: (-1, 0),
+            Qt.Key.Key_Down: (1, 0),
+        }
+        if (
+            event.key() in directions
+            and event.modifiers() == Qt.KeyboardModifier.NoModifier
+            and self.hasSelectedText()
+        ):
+            row_step, column_step = directions[event.key()]
+            self.navigationRequested.emit(row_step, column_step)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 class ParameterDelegate(QStyledItemDelegate):
     """Editable preset editor used by the spreadsheet-style module table."""
 
@@ -311,7 +354,7 @@ class ParameterDelegate(QStyledItemDelegate):
         spec = COLUMN_SPECS[index.column()]
         if spec.kind == "check":
             return None
-        editor = QLineEdit(parent)
+        editor = ParameterEditor(parent)
         editor.setMaxLength(180)
         editor.setAutoFillBackground(True)
         editor.setStyleSheet(
@@ -326,6 +369,13 @@ class ParameterDelegate(QStyledItemDelegate):
         elif spec.kind == "integer":
             validator = QIntValidator(0, 1_000_000, editor)
             editor.setValidator(validator)
+        table = self.parent()
+        if hasattr(table, "_commit_and_navigate"):
+            editor.navigationRequested.connect(
+                lambda row_step, column_step, active=editor: table._commit_and_navigate(
+                    active, row_step, column_step
+                )
+            )
         return editor
 
     def setEditorData(self, editor, index) -> None:
@@ -418,6 +468,38 @@ class ParameterTable(QTableWidget):
             self.setCurrentIndex(index)
             self.edit(index)
 
+    def _move_current_cell(self, row_step: int, column_step: int) -> None:
+        row = self.currentRow()
+        column = self.currentColumn()
+        if row < 0 or column < 0:
+            return
+        row += row_step
+        column += column_step
+        while 0 <= row < self.rowCount() and 0 <= column < self.columnCount():
+            item = self.item(row, column)
+            if (
+                not self.isRowHidden(row)
+                and not self.isColumnHidden(column)
+                and item is not None
+                and item.flags() & Qt.ItemFlag.ItemIsEnabled
+            ):
+                self.clearSelection()
+                self.setCurrentCell(row, column)
+                self.setFocus()
+                return
+            row += row_step
+            column += column_step
+
+    def _commit_and_navigate(
+        self,
+        editor: ParameterEditor,
+        row_step: int,
+        column_step: int,
+    ) -> None:
+        self.commitData(editor)
+        self.closeEditor(editor, QAbstractItemView.EndEditHint.NoHint)
+        self._move_current_cell(row_step, column_step)
+
     def _show_cell_menu(self, row: int, column: int) -> None:
         item = self.item(row, column)
         if item is None or not (item.flags() & Qt.ItemFlag.ItemIsEnabled):
@@ -430,11 +512,13 @@ class ParameterTable(QTableWidget):
         menu = QMenu(self)
         current = item.text().strip()
         for option in spec.options:
+            if option == "自定义":
+                continue
             action = menu.addAction(option)
             action.setCheckable(True)
             action.setChecked(current == option)
         custom_action = None
-        if "自定义" not in spec.options:
+        if spec.kind != "enum" or "自定义" in spec.options:
             menu.addSeparator()
             custom_action = menu.addAction("自定义…")
             custom_action.setData("__custom__")
@@ -584,6 +668,21 @@ class ParameterTable(QTableWidget):
         self.changed.emit()
 
     def keyPressEvent(self, event) -> None:
+        directions = {
+            Qt.Key.Key_Left: (0, -1),
+            Qt.Key.Key_Right: (0, 1),
+            Qt.Key.Key_Up: (-1, 0),
+            Qt.Key.Key_Down: (1, 0),
+        }
+        if (
+            event.key() in directions
+            and event.modifiers() == Qt.KeyboardModifier.NoModifier
+            and self.state() != QAbstractItemView.State.EditingState
+        ):
+            row_step, column_step = directions[event.key()]
+            self._move_current_cell(row_step, column_step)
+            event.accept()
+            return
         if event.matches(QKeySequence.StandardKey.Paste):
             self._paste_clipboard()
             event.accept()
@@ -845,7 +944,7 @@ class StandardWindow(MainWindow):
         canvas_header.addStretch(1)
         page_row = QHBoxLayout()
         page_row.addWidget(QLabel("预览页"))
-        self.page_spin = QSpinBox()
+        self.page_spin = PageSpinBox()
         self.page_spin.setMinimum(1)
         self.page_spin.setMaximum(1)
         self.page_spin.valueChanged.connect(self._show_selected_page)
@@ -1078,7 +1177,8 @@ class StandardWindow(MainWindow):
             "length_mm": f"{module_values.length_mm:g}",
             "expansion_length_mm": f"{module_values.expansion_length_mm:g}",
             "thickness_mm": f"{module_values.thickness_mm:g}",
-            "structure_type": STRUCTURE_LABEL_BY_TYPE.get(module_values.structure_type, "自定义"),
+            "structure_type": module_values.custom_structure_label
+            or STRUCTURE_LABEL_BY_TYPE.get(module_values.structure_type, "自定义"),
             "material": _without_suffix(module_values.material, "材质", "板材"),
             "production_quantity": str(module_values.production_quantity),
             "taper_enabled": module_values.taper_enabled,
@@ -1091,7 +1191,8 @@ class StandardWindow(MainWindow):
             "anchor_position_mm": f"{anchor_values.position_mm:g}",
             "anchor_spacing_mm": f"{anchor_values.spacing_mm:g}",
             "anchor_count": str(anchor_values.count),
-            "anchor_type": ANCHOR_LABEL_BY_TYPE.get(anchor_values.anchor_type, "M型"),
+            "anchor_type": anchor_values.custom_type_label
+            or ANCHOR_LABEL_BY_TYPE.get(anchor_values.anchor_type, "M型"),
             "anchor_length_mm": f"{anchor_values.length_mm or 230.0:g}",
             "anchor_material": anchor_model.material or anchor_values.material,
             "thread_spec": anchor_model.thread_spec or anchor_values.thread_spec,
@@ -1525,12 +1626,14 @@ class StandardWindow(MainWindow):
         module_id = str(values["module_id"]).strip()
         if not module_id:
             raise ValueError("模块编号不能为空")
+        structure_label = str(values["structure_type"]).strip()
         module_values = StandardModuleValues(
             module_id=module_id,
             length_mm=_number(str(values["length_mm"]), "长度", module_id),
             expansion_length_mm=_number(str(values["expansion_length_mm"]), "膨胀长度", module_id),
             thickness_mm=_number(str(values["thickness_mm"]), "厚度", module_id),
-            structure_type=self._structure_type(str(values["structure_type"]), module_id),
+            structure_type=self._structure_type(structure_label, module_id),
+            custom_structure_label="" if structure_label == "自定义" else structure_label,
             taper_enabled=bool(values["taper_enabled"]),
             big_head_mm=(
                 _number(str(values["big_head_mm"]), "大头", module_id)
@@ -1544,7 +1647,7 @@ class StandardWindow(MainWindow):
             ),
             taper_type=self._geometry_type(str(values["taper_type"]), module_id),
             board_exists=bool(values["board_exists"]),
-            material=_module_material_value(str(values["material"])),
+            material=str(values["material"]),
             production_quantity=_integer(str(values["production_quantity"]), "模块数量", module_id),
             board_material=_board_material_value(str(values["board_material"]).strip() or "9厘"),
             density_kg_m3=_optional_number(str(values["density_kg_m3"]), "容重", module_id),
@@ -1588,9 +1691,9 @@ class StandardWindow(MainWindow):
                 return StructureType.HALF_FOLDED
             if label in {"层叠模块", "层叠"}:
                 return StructureType.STACKED
-            if label in {"自定义", "其他"}:
+            if label:
                 return StructureType.CUSTOM
-            raise ValueError(f"{module_id}: 折叠方式必须是折叠、半折叠、层叠或自定义") from None
+            raise ValueError(f"{module_id}: 折叠方式不能为空") from None
 
     def _anchor_values(self, values: dict[str, str | bool], module_id: str) -> StandardAnchorValues:
         enabled = bool(values["anchor_enabled"])
@@ -1613,6 +1716,8 @@ class StandardWindow(MainWindow):
             )
         if anchor_type == AnchorType.NONE:
             raise ValueError(f"{module_id}: 已勾选锚固件，必须选择锚固件类型")
+        if not type_label:
+            raise ValueError(f"{module_id}: 锚固件类型不能为空")
         embedment = None
         if anchor_type == AnchorType.DIAMOND:
             embedment = _number(str(values["embedment_depth_mm"]), "嵌入深度", module_id)
@@ -1628,6 +1733,7 @@ class StandardWindow(MainWindow):
             spacing_mm=_number(str(values["anchor_spacing_mm"]), "锚固件间距", module_id),
             count=_integer(str(values["anchor_count"]), "锚固件数量", module_id),
             anchor_type=anchor_type,
+            custom_type_label="" if type_label == "自定义" else type_label,
             embedment_depth_mm=embedment,
             material=str(values["anchor_material"]).strip() or "310",
             thread_spec=str(values["thread_spec"]).strip() or "M10",
@@ -1654,42 +1760,35 @@ class StandardWindow(MainWindow):
         ensure_standard_project(project)
         return project
 
-    def _show_busy(self, text: str) -> QProgressDialog:
-        dialog = QProgressDialog(text, "", 0, 0, self)
-        dialog.setWindowTitle("正在处理")
-        dialog.setCancelButton(None)
-        dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        dialog.setMinimumDuration(0)
-        dialog.setAutoClose(False)
-        dialog.setAutoReset(False)
-        dialog.show()
-        QApplication.processEvents()
-        return dialog
-
-    @staticmethod
-    def _set_busy_text(dialog: QProgressDialog, text: str) -> None:
-        dialog.setLabelText(text)
-        QApplication.processEvents()
-
     def generate(self) -> None:
-        progress = self._show_busy("正在整理参数…")
+        module_count = self.parameter_table.rowCount()
+        progress = OperationProgress(self, "正在整理参数…", module_count + 4)
         try:
-            self._set_busy_text(progress, "正在整理参数…")
             self.project = self._collect_project()
-            self._set_busy_text(progress, "正在计算视图和排版…")
+            progress.advance("正在读取参考图块…")
             library = ReferenceLibrary(self.reference_dxf) if self.reference_dxf.exists() else None
-            self.drawing_document = DrawingGenerator(library).generate(self.project)
-            self._set_busy_text(progress, "正在更新预览…")
-            self.page_spin.setMaximum(max(1, len(self.drawing_document.pages)))
-            self.page_spin.setValue(1)
+            progress.advance(f"正在生成模块视图 0/{module_count}…")
+            self.drawing_document = DrawingGenerator(library).generate(
+                self.project,
+                on_module_drawn=lambda count: progress.advance(
+                    f"正在生成模块视图 {count}/{module_count}…"
+                    if count < module_count else "正在排版…"
+                ),
+            )
+            progress.advance("正在更新预览…")
+            with QSignalBlocker(self.page_spin):
+                self.page_spin.setMaximum(max(1, len(self.drawing_document.pages)))
+                self.page_spin.setValue(1)
             self.preview.show_page(self.drawing_document, 0)
             warnings = "\n".join(self.drawing_document.warnings)
+            progress.finish("图纸已生成")
             self.statusBar().showMessage("图纸已生成" + (f"；警告：{warnings}" if warnings else ""))
         except Exception as exc:
-            progress.close()
+            progress.hide()
             QMessageBox.critical(self, "生成失败", str(exc))
         finally:
-            progress.close()
+            progress.hide()
+            progress.deleteLater()
 
     def export_dxf_file(self) -> None:
         if not self.drawing_document:
@@ -1699,17 +1798,19 @@ class StandardWindow(MainWindow):
         path = self._output_target(".dxf")
         if path is None:
             return
-        progress = self._show_busy("正在导出 DXF…")
+        progress = OperationProgress(self, "正在准备 DXF…", 2)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            self._set_busy_text(progress, "正在写入 DXF…")
+            progress.advance("正在写入 DXF…")
             export_dxf(self.drawing_document, path, self.reference_dxf)
+            progress.finish("DXF 已导出")
             self.statusBar().showMessage(f"DXF 已导出：{path}")
         except Exception as exc:
-            progress.close()
+            progress.hide()
             QMessageBox.critical(self, "DXF 导出失败", str(exc))
         finally:
-            progress.close()
+            progress.hide()
+            progress.deleteLater()
 
     def export_pdf_file(self) -> None:
         if not self.drawing_document:
@@ -1719,7 +1820,7 @@ class StandardWindow(MainWindow):
         path = self._output_target(".pdf")
         if path is None:
             return
-        progress = self._show_busy("正在准备 PDF…")
+        progress = OperationProgress(self, "正在准备 PDF…", len(self.drawing_document.pages) + 2)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             font_directory = self.pdf_font_directory_edit.text().strip() or None
@@ -1742,14 +1843,16 @@ class StandardWindow(MainWindow):
                     if self.pdf_shx_bigfont_combo.currentText() == "自动"
                     else self.pdf_shx_bigfont_combo.currentText()
                 ),
-                progress=lambda text: self._set_busy_text(progress, text),
+                progress=progress.advance,
             )
+            progress.finish("PDF 已导出")
             self.statusBar().showMessage(f"PDF 已导出：{path}")
         except Exception as exc:
-            progress.close()
+            progress.hide()
             QMessageBox.critical(self, "PDF 导出失败", str(exc))
         finally:
-            progress.close()
+            progress.hide()
+            progress.deleteLater()
 
     def _preview_page_step(self, step: int) -> None:
         if not self.drawing_document:

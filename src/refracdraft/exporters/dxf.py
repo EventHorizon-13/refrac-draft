@@ -9,7 +9,10 @@ from refracdraft.drawing.layout import (
     BOARD_VIEW_BOTTOM_MM,
     DETAIL_LINE_SPACING,
     DETAIL_TEXT_SIZE_MM,
+    PANEL_INNER_MARGIN_MM,
     SIDE_VIEW_GAP_MM,
+    SEPARATOR_BOTTOM_MM,
+    SEPARATOR_TOP_MM,
     TOP_VIEW_BOTTOM_MM,
     detail_baseline,
 )
@@ -29,12 +32,16 @@ TEXT_STYLE = "大字体"
 DIMENSION_STYLE = "_10"
 MODEL_SCALE = 10.0
 DETAIL_TEXT_HEIGHT = DETAIL_TEXT_SIZE_MM * MODEL_SCALE
-VALUE_TEXT_HEIGHT = 40.0
+VALUE_TEXT_HEIGHT = 48.0
 DIMENSION_OVERRIDE = {
     "dimtxsty": TEXT_STYLE,
     "dimclrd": 4,
     "dimclre": 4,
     "dimclrt": 3,
+    "dimtxt": 2.0,
+    "dimasz": 1.2,
+    "dimexo": 1.5,
+    "dimexe": 1.5,
 }
 DIMENSION_FALLBACK = {
     "dimscale": 20.0,
@@ -236,8 +243,8 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
                                     "订单编号": "", "项目单位": "", "图纸": "A4"})
         for placed in page.modules[1:]:
             msp.add_line(
-                (placed.x_mm * MODEL_SCALE, page_y + 7 * MODEL_SCALE),
-                (placed.x_mm * MODEL_SCALE, page_y + 203 * MODEL_SCALE),
+                (placed.x_mm * MODEL_SCALE, page_y + SEPARATOR_BOTTOM_MM * MODEL_SCALE),
+                (placed.x_mm * MODEL_SCALE, page_y + SEPARATOR_TOP_MM * MODEL_SCALE),
                 dxfattribs={"layer": "FRAME"},
             )
 
@@ -275,11 +282,15 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
                 top = (
                     detail_baseline(0) + DETAIL_TEXT_SIZE_MM * 1.34
                 ) * MODEL_SCALE
+                available_width = (
+                    placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM
+                ) * MODEL_SCALE - px
                 msp.add_mtext(
                     r"\P".join(drawing.details),
                     dxfattribs={
                         "insert": (px, page_y + top),
                         "char_height": DETAIL_TEXT_HEIGHT,
+                        "width": available_width,
                         "style": TEXT_STYLE,
                         "layer": "TEXT",
                         "attachment_point": 1,

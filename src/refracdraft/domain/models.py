@@ -77,6 +77,7 @@ class ModuleParameters(BaseModel):
     module_id: str = Field(min_length=1)
     name: str = ""
     structure_type: StructureType = StructureType.FOLDED
+    custom_structure_label: str = ""
     geometry_type: GeometryType = GeometryType.NORMAL
 
     # Front view. For 正敲, use the two end heights; for 普通 use front_height_mm.
@@ -158,6 +159,7 @@ class AnchorParameters(BaseModel):
     module_id: str = Field(min_length=1)
     exists: bool = True
     anchor_type: AnchorType = AnchorType.M_SHAPE
+    custom_type_label: str = ""
     material: str = "310"
     thread_spec: str = "M10"
     diameter_mm: float | None = Field(default=None, gt=0)

@@ -3,7 +3,13 @@ import ezdxf
 import pymupdf
 
 from refracdraft.drawing.generator import DrawingGenerator, _anchor_positions, _balanced_page_groups, _details
-from refracdraft.drawing.layout import PANEL_INNER_MARGIN_MM
+from refracdraft.drawing.layout import (
+    DETAIL_LINE_SPACING,
+    DETAIL_TEXT_SIZE_MM,
+    PANEL_INNER_MARGIN_MM,
+    SEPARATOR_BOTTOM_MM,
+    SEPARATOR_TOP_MM,
+)
 from refracdraft.domain.models import (
     AnchorParameters,
     AnchorType,
@@ -12,6 +18,7 @@ from refracdraft.domain.models import (
     LayoutMode,
     ModuleParameters,
     Project,
+    StructureType,
 )
 from refracdraft.importers.excel import _normalize_row
 from refracdraft.reference.library import ReferenceLibrary
@@ -251,13 +258,41 @@ def test_standard_details_include_new_manufacturing_fields():
         ),
     )
     text = "\n".join(_details(module, board, anchor))
-    assert "1350板材" in text
+    assert "1350材质" in text
     assert "304M型锚固件M8" in text
-    assert "插针φ8" in text
+    assert "304M型锚固件M8φ8" in text
+    assert "插针" not in text
     assert "数量：84 Pcs" in text
     assert "容重：220 kg/m³" in text
     assert "7、胶管/夹板：25胶管，12厘夹板" in text
     assert "8、备注：现场复核" in text
+
+
+def test_custom_type_labels_survive_project_json_and_appear_in_details():
+    module = build_standard_module(
+        None,
+        StandardModuleValues(
+            "M1", 300, 300, 230, structure_type=StructureType.CUSTOM,
+            custom_structure_label="定制折叠",
+        ),
+    )
+    board = build_standard_board(None, "M1", True)
+    anchor = build_standard_anchor(
+        None,
+        "M1",
+        300,
+        StandardAnchorValues(
+            enabled=True, anchor_type=AnchorType.CUSTOM, custom_type_label="定制型",
+        ),
+    )
+    project = Project(modules=[module], boards=[board], anchors=[anchor])
+    restored = Project.model_validate_json(project.model_dump_json())
+    module, board, anchor = restored.modules[0], restored.boards[0], restored.anchors[0]
+    assert standard_module_values(module, board).custom_structure_label == "定制折叠"
+    assert standard_anchor_values(anchor).custom_type_label == "定制型"
+    details = "\n".join(_details(module, board, anchor))
+    assert "定制折叠M1" in details
+    assert "定制型锚固件" in details
 
 
 def test_standard_anchor_length_round_trip_and_validation():
@@ -405,7 +440,7 @@ def test_standard_anchor_positions_are_dimensioned_on_board_face():
         for point in line.points
     ]
     symbol_y = [point[1] for point in symbol_points]
-    assert (min(symbol_y) + max(symbol_y)) / 2.0 == pytest.approx(180.0)
+    assert max(symbol_y) == pytest.approx(180.0)
 
 
 @pytest.mark.parametrize("depth", [50.0, 60.0])
@@ -422,9 +457,33 @@ def test_diamond_anchor_geometry_follows_real_embedment_depth(depth):
     drawing = DrawingGenerator(ReferenceLibrary("references/示例.dxf")).generate(project).pages[0].modules[0].drawing
     points = [point for line in drawing.board_view.anchor_symbols for point in line.points]
     ys = [point[1] for point in points]
-    assert (min(ys) + max(ys)) / 2.0 == pytest.approx(230.0 - depth)
+    assert max(ys) == pytest.approx(230.0 - depth)
     depth_dimensions = [dim for dim in drawing.board_view.dimensions if dim.label == f"{depth:g}"]
     assert depth_dimensions[0].end[1] == pytest.approx(230.0 - depth)
+
+
+def test_separator_lines_use_200_model_unit_top_and_title_block_insets(tmp_path):
+    modules = [
+        build_standard_module(None, StandardModuleValues(f"S{i}", 450, 300, 230))
+        for i in range(1, 3)
+    ]
+    boards = [build_standard_board(None, item.module_id, True) for item in modules]
+    anchors = [
+        build_standard_anchor(None, item.module_id, 450, StandardAnchorValues(False))
+        for item in modules
+    ]
+    document = DrawingGenerator().generate(Project(modules=modules, boards=boards, anchors=anchors))
+    output = export_dxf(document, tmp_path / "separator.dxf", "references/示例.dxf")
+    exported = ezdxf.readfile(output)
+    separators = [
+        line
+        for line in exported.modelspace().query("LINE")
+        if line.dxf.layer == "FRAME" and abs(line.dxf.start.x - line.dxf.end.x) < 0.01
+    ]
+    assert len(separators) == 1
+    ys = sorted((separators[0].dxf.start.y, separators[0].dxf.end.y))
+    assert ys[0] == pytest.approx(SEPARATOR_BOTTOM_MM * 10.0)
+    assert ys[1] == pytest.approx(SEPARATOR_TOP_MM * 10.0)
 
 
 def test_automatic_layout_keeps_panel_gaps_and_paginates():
@@ -469,6 +528,7 @@ def test_dxf_uses_reference_dimension_style_and_big_font(tmp_path):
     assert {entity.dxf.style for entity in exported.modelspace().query("TEXT MTEXT")} == {"大字体"}
     assert exported.dimstyles.get("_10").dxf.dimtxsty == "大字体"
     assert exported.dimstyles.get("_10").dxf.dimscale == 20
+    assert exported.dimstyles.get("_10").dxf.dimtxt == pytest.approx(2.0)
     frame_inserts = [entity for entity in exported.modelspace().query("INSERT") if entity.dxf.name == "图框-A4"]
     assert frame_inserts
     assert frame_inserts[0].dxf.xscale == pytest.approx(10.0)
@@ -477,9 +537,10 @@ def test_dxf_uses_reference_dimension_style_and_big_font(tmp_path):
     assert title_inserts[0].dxf.xscale == pytest.approx(1.02)
     detail_texts = list(exported.modelspace().query("MTEXT"))
     assert len(detail_texts) == 1
-    assert detail_texts[0].dxf.char_height == pytest.approx(42.0)
+    assert detail_texts[0].dxf.char_height == pytest.approx(DETAIL_TEXT_SIZE_MM * 10.0)
+    assert detail_texts[0].dxf.width > 0
     assert detail_texts[0].dxf.line_spacing_style == 2
-    assert detail_texts[0].dxf.line_spacing_factor == pytest.approx(0.75)
+    assert detail_texts[0].dxf.line_spacing_factor == pytest.approx(DETAIL_LINE_SPACING)
     assert "\\P" in detail_texts[0].text
     assert detail_texts[0].dxf.insert.y > 44 * 10
     for style_name in ("工程字", "大字体"):

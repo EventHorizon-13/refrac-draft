@@ -25,6 +25,7 @@ pip install -e ".[ui,dev]"
 
 # Desktop UI
 refrac-draft-gui
+refrac-draft-standard-gui
 
 # CLI: generate DXF + PDF from JSON or Excel
 refrac-draft generate examples/b2_positive_tap.json --outdir output
@@ -35,6 +36,17 @@ refrac-draft analyze-reference --dxf references/示例.dxf
 ```
 
 If PySide6 is not installed, the CLI engine still works. The desktop UI is an optional dependency.
+
+## Source layout
+
+| Location | Responsibility |
+| --- | --- |
+| `src/refracdraft/ui/standard_window.py` | Standard table editor, validation, preview and export actions |
+| `src/refracdraft/standard.py` | Conversion between Standard editor rows and the three project parameter groups |
+| `src/refracdraft/domain/`, `importers/` | Project schema and Excel import |
+| `src/refracdraft/drawing/`, `geometry/`, `reference/` | View construction, dimension placement, pagination and reference geometry |
+| `src/refracdraft/exporters/` | Editable DXF and PDF rendering from the generated DXF |
+| `tests/`, `references/`, `examples/` | Regression cases, source drawings and sample projects |
 
 ## Input model
 
@@ -71,7 +83,7 @@ The examples are the output standard. Do not modernize, simplify, or redesign th
 - Dynamic-block visibility/action metadata is proprietary; the current extractor uses visible block geometry and does not claim to recover every AutoCAD dynamic state.
 - Quick-insert standard board-opening geometry remains unresolved.
 - Page grouping currently follows the observed sample pattern (4 standard-width modules, 3 when an oversized/three-view group requires it); the general packing rules need more sample jobs.
-- The initial UI provides editable parameter tables, Excel/JSON import, generate-on-click preview, and export actions. The Standard editor adds a fill handle and multi-cell paste; undo/redo remains planned.
+- The initial UI provides editable parameter tables, Excel/JSON import, generate-on-click preview, and export actions. The Standard editor also supports a fill handle, multi-cell paste and undo/redo.
 
 ## Standard edition branch
 

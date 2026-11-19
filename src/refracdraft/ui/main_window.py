@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QBrush, QPen, QPainter, QPalette
+from PySide6.QtGui import QAction, QColor, QBrush, QPen, QPainter, QPalette, QTextOption
 from PySide6.QtWidgets import (
     QFileDialog, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QMainWindow,
     QMessageBox, QPushButton, QSpinBox, QSplitter, QTabWidget, QTableWidget,
@@ -17,6 +17,11 @@ from refracdraft.drawing.layout import (
     BOARD_VIEW_BOTTOM_MM,
     DETAIL_PREVIEW_LINE_SPACING,
     DETAIL_TEXT_SIZE_MM,
+    DIMENSION_TEXT_SIZE_MM,
+    PANEL_INNER_MARGIN_MM,
+    PAGE_HEIGHT_MM,
+    SEPARATOR_BOTTOM_MM,
+    SEPARATOR_TOP_MM,
     SIDE_VIEW_GAP_MM,
     TOP_VIEW_BOTTOM_MM,
     VIEW_SCALE,
@@ -51,6 +56,23 @@ ANCHOR_LABELS = ["模块编号", "有无锚固件", "锚固件类型", "锚固�
                  "标注水平定位尺寸", "标注垂直定位尺寸", "备注"]
 
 
+class PageSpinBox(QSpinBox):
+    """Page selector whose step buttons follow document order from top to bottom."""
+
+    def stepBy(self, steps: int) -> None:
+        super().stepBy(-steps)
+
+    def stepEnabled(self):
+        native = super().stepEnabled()
+        flags = QSpinBox.StepEnabledFlag
+        enabled = flags.StepNone
+        if native & flags.StepUpEnabled:
+            enabled |= flags.StepDownEnabled
+        if native & flags.StepDownEnabled:
+            enabled |= flags.StepUpEnabled
+        return enabled
+
+
 class DrawingPreview(QGraphicsView):
     page_step_requested = Signal(int)
     zoom_requested = Signal(float)
@@ -71,11 +93,15 @@ class DrawingPreview(QGraphicsView):
         super().changeEvent(event)
 
     def wheelEvent(self, event) -> None:
+        delta = event.angleDelta().y() or event.pixelDelta().y()
+        if not delta:
+            event.ignore()
+            return
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            factor = 1.1 if event.angleDelta().y() > 0 else 0.9
+            factor = 1.1 if delta > 0 else 0.9
             self.zoom_requested.emit(factor)
         else:
-            step = 1 if event.angleDelta().y() > 0 else -1
+            step = -1 if delta > 0 else 1
             self.page_step_requested.emit(step)
         event.accept()
 
@@ -89,7 +115,13 @@ class DrawingPreview(QGraphicsView):
         scene.addRect(0, 0, 297, 210, QPen(Qt.PenStyle.NoPen), QBrush(QColor("#ffffff")))
         scene.addRect(7, 7, 283, 196, QPen(QColor("#111111"), 0.25), QBrush(Qt.BrushStyle.NoBrush))
         for placed in page.modules[1:]:
-            scene.addLine(placed.x_mm, 7, placed.x_mm, 173, QPen(QColor("#222222"), 0.2))
+            scene.addLine(
+                placed.x_mm,
+                PAGE_HEIGHT_MM - SEPARATOR_TOP_MM,
+                placed.x_mm,
+                PAGE_HEIGHT_MM - SEPARATOR_BOTTOM_MM,
+                QPen(QColor("#222222"), 0.2),
+            )
         scene.addRect(168.5, 172, 121.5, 31, QPen(QColor("#111111"), 0.2), QBrush(Qt.BrushStyle.NoBrush))
         for placed in page.modules:
             drawing, px = placed.drawing, placed.content_x_mm
@@ -113,6 +145,9 @@ class DrawingPreview(QGraphicsView):
                 VIEW_SCALE,
             )
             if drawing.details:
+                available_width = (
+                    placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM - px
+                )
                 self._add_multiline_text(
                     scene,
                     "\n".join(drawing.details),
@@ -120,6 +155,7 @@ class DrawingPreview(QGraphicsView):
                     detail_baseline(0),
                     DETAIL_TEXT_SIZE_MM,
                     "#111111",
+                    available_width,
                 )
         self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
@@ -129,10 +165,14 @@ class DrawingPreview(QGraphicsView):
         item.setScale(size / 10.0)
         item.setPos(x, 210 - y - size)
 
-    def _add_multiline_text(self, scene, text, x, first_baseline, size, color):
+    def _add_multiline_text(self, scene, text, x, first_baseline, size, color, max_width):
         item = scene.addText(text)
         item.setDefaultTextColor(QColor(color))
         item.document().setDocumentMargin(0)
+        options = item.document().defaultTextOption()
+        options.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        item.document().setDefaultTextOption(options)
+        item.setTextWidth(max_width * 10.0 / size)
         item.setScale(size / 10.0)
         item.setPos(x, 210 - first_baseline - size * (DETAIL_PREVIEW_LINE_SPACING + 0.08))
 
@@ -204,12 +244,16 @@ class DrawingPreview(QGraphicsView):
             direction = 1.0 if x2 >= x1 else -1.0
             arrow(x1, y1, -direction, 0)
             arrow(x2, y2, direction, 0)
-            self._add_text(scene, label, (x1 + x2) / 2 - 2, y1 + 1.5, 2.5, "#00ff00")
+            self._add_text(
+                scene, label, (x1 + x2) / 2 - 2, y1 + 1.5, DIMENSION_TEXT_SIZE_MM, "#00ff00"
+            )
         else:
             direction = 1.0 if y2 >= y1 else -1.0
             arrow(x1, y1, 0, -direction)
             arrow(x2, y2, 0, direction)
-            self._add_text(scene, label, x1 - 2, (y1 + y2) / 2, 2.5, "#00ff00")
+            self._add_text(
+                scene, label, x1 - 2, (y1 + y2) / 2, DIMENSION_TEXT_SIZE_MM, "#00ff00"
+            )
 
 
 class MainWindow(QMainWindow):
@@ -270,7 +314,7 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right)
         page_row = QHBoxLayout()
         page_row.addWidget(QLabel("预览页"))
-        self.page_spin = QSpinBox()
+        self.page_spin = PageSpinBox()
         self.page_spin.setMinimum(1)
         self.page_spin.setMaximum(1)
         self.page_spin.valueChanged.connect(self._show_selected_page)
@@ -381,7 +425,22 @@ class MainWindow(QMainWindow):
             self.project = self._collect_project()
             path, _ = QFileDialog.getSaveFileName(self, "保存项目", "project.json", "RefracDraft 项目 (*.json)")
             if path:
-                Path(path).write_text(self.project.model_dump_json(indent=2), encoding="utf-8")
+                # Keep ordinary projects readable by versions predating custom labels.
+                excluded = {
+                    "modules": {
+                        index: {"custom_structure_label"}
+                        for index, module in enumerate(self.project.modules)
+                        if not module.custom_structure_label
+                    },
+                    "anchors": {
+                        index: {"custom_type_label"}
+                        for index, anchor in enumerate(self.project.anchors)
+                        if not anchor.custom_type_label
+                    },
+                }
+                Path(path).write_text(
+                    self.project.model_dump_json(indent=2, exclude=excluded), encoding="utf-8"
+                )
                 self.statusBar().showMessage(f"项目已保存：{path}")
         except Exception as exc:
             QMessageBox.critical(self, "保存失败", str(exc))
