@@ -24,6 +24,7 @@ SEPARATOR_BOTTOM_MM = TITLE_BLOCK_TOP_MM + SEPARATOR_MARGIN_MM
 
 DETAIL_TEXT_SIZE_MM = 4.5
 DIMENSION_TEXT_SIZE_MM = 3.2
+DIMENSION_ARROW_SIZE_MM = 1.3
 DETAIL_LINE_SPACING = 0.76
 DETAIL_LINE_HEIGHT_MM = DETAIL_TEXT_SIZE_MM * (5 / 3) * DETAIL_LINE_SPACING
 DETAIL_TOP_MM = 94.0
@@ -57,16 +58,23 @@ def geometry_width(drawing: ModuleDrawing) -> float:
     return max(top_row_width(drawing), outline_width(drawing.board_view))
 
 
+def _panel_inner_margin(drawing: ModuleDrawing) -> float:
+    left, _, right, _ = drawing.board_view.outline.bounds
+    positions = [dim.line_position for dim in drawing.board_view.dimensions if dim.orientation == "vertical"]
+    outside = max(left - min(positions, default=left), max(positions, default=right) - right)
+    return max(PANEL_INNER_MARGIN_MM, outside * VIEW_SCALE + DIMENSION_TEXT_SIZE_MM + 0.5)
+
+
 def panel_content_left(drawing: ModuleDrawing, panel_width: float, content_width: float) -> float:
     left, _, right, _ = drawing.front_view.outline.bounds
     if right - left > CENTERED_MODULE_MAX_LENGTH_MM:
         content_width = max(geometry_width(drawing), details_width(drawing))
-    return max(PANEL_INNER_MARGIN_MM, (panel_width - content_width) / 2)
+    return max(_panel_inner_margin(drawing), (panel_width - content_width) / 2)
 
 
 def module_required_width(drawing: ModuleDrawing) -> float:
     content_width = max(geometry_width(drawing), details_width(drawing))
-    return max(PANEL_MIN_WIDTH_MM, content_width + PANEL_INNER_MARGIN_MM * 2.0)
+    return max(PANEL_MIN_WIDTH_MM, content_width + _panel_inner_margin(drawing) * 2.0)
 
 
 def detail_box(placed: PlacedModule) -> tuple[float, float]:

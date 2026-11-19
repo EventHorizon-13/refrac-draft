@@ -21,6 +21,7 @@ from refracdraft.drawing.layout import (
     DETAIL_LINE_HEIGHT_MM,
     DETAIL_TEXT_SIZE_MM,
     DETAIL_TOP_MM,
+    DIMENSION_ARROW_SIZE_MM,
     DIMENSION_TEXT_SIZE_MM,
     PAGE_HEIGHT_MM,
     SEPARATOR_BOTTOM_MM,
@@ -202,10 +203,10 @@ class DrawingPreview(QGraphicsView):
             x1, y1 = ox + dim.start[0] * scale, oy + dim.start[1] * scale
             x2, y2 = ox + dim.end[0] * scale, oy + dim.end[1] * scale
             if dim.orientation == "horizontal":
-                y = max(y1, y2) + dim.offset * scale
+                y = oy + dim.line_position * scale
                 self._dim_line(scene, x1, y, x2, y, dim.label, True)
             else:
-                x = x1 - dim.offset * scale
+                x = ox + dim.line_position * scale
                 self._dim_line(scene, x, y1, x, y2, dim.label, False)
         for cutout in view.cutouts:
             p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in cutout.points]
@@ -215,6 +216,12 @@ class DrawingPreview(QGraphicsView):
             p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in line.points]
             for a, b in zip(p, p[1:]):
                 scene.addLine(a[0], a[1], b[0], b[1], QPen(QColor("#111111"), 0.22))
+        hidden_pen = QPen(QColor("#111111"), 0.13, Qt.PenStyle.DashLine)
+        hidden_pen.setDashPattern([9.2, 4.6])
+        for line in view.hidden_lines:
+            (x1, y1), (x2, y2) = line.points
+            scene.addLine(ox + x1 * scale, 210 - oy - y1 * scale,
+                          ox + x2 * scale, 210 - oy - y2 * scale, hidden_pen)
         aci_colors = {1: "#ff0000", 2: "#ffff00", 3: "#00ff00", 4: "#00ffff", 5: "#0000ff",
                       6: "#ff00ff", 7: "#111111", 8: "#808080", 9: "#c0c0c0"}
         for symbol_index, symbol in enumerate(view.anchor_symbols):
@@ -251,7 +258,7 @@ class DrawingPreview(QGraphicsView):
         scene.addLine(x1, 210 - y1, x2, 210 - y2, pen)
 
         def arrow(x, y, ux, uy):
-            length, half_width = 1.6, 0.25
+            length, half_width = DIMENSION_ARROW_SIZE_MM, 0.20
             bx, by = x - ux * length, y - uy * length
             px, py = -uy * half_width, ux * half_width
             tip = (x, 210 - y)

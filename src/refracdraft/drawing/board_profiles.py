@@ -23,16 +23,19 @@ def _cut_path(
         if a >= width or b >= height:
             raise ValueError("类型 1 要求 a < 长度、b < 厚度")
         return ((0, b), (a, b), (a, 0)), (
-            ((0, b), (a, b), -34), ((0, 0), (0, b), 25),
+            ((0, b), (a, b), -b - 62), ((0, 0), (0, b), 25),
         )
     if feature.type == 2:
         assert b is not None and c is not None and d is not None
         if a + c >= height or b >= width or d > b:
             raise ValueError("类型 2 要求 a + c < 厚度、b < 长度、d ≤ b")
         upper = b - d
+        notch_center_x = upper / 2 if upper >= 32 else -26
+        shoulder_offset = height - (a + c) + 12
         return ((upper, height), (upper, a + c), (b, a + c), (b, a), (0, a)), (
-            ((0, 0), (0, a), 25), ((0, a), (b, a), -52),
-            ((b, a), (b, a + c), 30), ((upper, a + c), (b, a + c), 24),
+            ((0, 0), (0, a), 26), ((0, a), (b, a), -a - 62),
+            ((b, a), (b, a + c), b - notch_center_x),
+            ((upper, a + c), (b, a + c), shoulder_offset),
         )
     if feature.type == 3:
         if a >= width:
@@ -44,7 +47,7 @@ def _cut_path(
     if a + b >= width or c >= height:
         raise ValueError("类型 4 要求 a + b < 长度、c < 厚度")
     return ((a, 0), (width - b, height - c), (width, height - c)), (
-        ((0, 0), (a, 0), -34), ((width - b, height - c), (width, height - c), -30),
+        ((0, 0), (a, 0), -62), ((width - b, height - c), (width, height - c), c - height - 62),
         ((width, height - c), (width, height), -26),
     )
 

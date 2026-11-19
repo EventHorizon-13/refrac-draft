@@ -126,3 +126,24 @@ def test_board_profile_rejects_overlapping_cuts():
     with pytest.raises(ValueError, match="同一段边缘"):
         build_board_profile(300, 230, profile)
 
+
+def test_board_profile_hidden_projection_and_dimension_lanes():
+    profile = BoardFaceProfile.model_validate({"features": [
+        {"type": 2, "a": 69, "b": 90, "c": 69, "d": 45},
+    ]})
+    module = ModuleParameters(
+        module_id="M1", front_width_mm=300, front_height_mm=300,
+        board_face_width_mm=300, board_face_height_mm=230, board_face_outline=profile,
+    )
+    drawing = DrawingGenerator().build_module(Project(modules=[module]), module)
+    assert [line.points for line in drawing.front_view.hidden_lines] == [
+        ((45, 0), (45, 300)), ((90, 0), (90, 300)),
+    ]
+    overall_width, overall_height, lower_step, notch_width, notch_height, shoulder = (
+        drawing.board_view.dimensions
+    )
+    assert overall_width.line_position < notch_width.line_position < 0
+    assert overall_height.line_position < lower_step.line_position < 0
+    assert 0 < notch_height.line_position < 45
+    assert shoulder.line_position > 230
+

@@ -13,6 +13,12 @@ class Dimension:
     orientation: str = "horizontal"
     offset: float = 8.0
 
+    @property
+    def line_position(self) -> float:
+        if self.orientation == "horizontal":
+            return max(self.start[1], self.end[1]) + self.offset
+        return min(self.start[0], self.end[0]) - self.offset
+
 
 @dataclass(frozen=True)
 class ViewDrawing:
@@ -32,6 +38,7 @@ class ViewDrawing:
     # Source-DXF linetype for each corresponding anchor polyline.
     anchor_symbol_linetypes: tuple[str, ...] = ()
     anchor_marker_style: str = "target"
+    hidden_lines: tuple[Polyline, ...] = ()
 
 
 @dataclass(frozen=True)

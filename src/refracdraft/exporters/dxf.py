@@ -11,6 +11,7 @@ from refracdraft.drawing.layout import (
     DETAIL_LINE_SPACING,
     DETAIL_TEXT_SIZE_MM,
     DETAIL_TOP_MM,
+    DIMENSION_ARROW_SIZE_MM,
     DIMENSION_TEXT_SIZE_MM,
     SIDE_VIEW_GAP_MM,
     SEPARATOR_BOTTOM_MM,
@@ -24,6 +25,7 @@ from refracdraft.drawing.model import DrawingDocument, ViewDrawing
 LAYER_COLORS = {
     "OUTLINE": 7,
     "DIMENSIONS": 4,
+    "HIDDEN": 7,
     "ANCHORS": 5,
     "CENTER": 1,
     "TEXT": 7,
@@ -40,16 +42,9 @@ DIMENSION_OVERRIDE = {
     "dimclrd": 4,
     "dimclre": 4,
     "dimclrt": 3,
-    "dimasz": 1.2,
-    "dimexo": 1.5,
-    "dimexe": 1.5,
 }
 DIMENSION_FALLBACK = {
     "dimscale": 20.0,
-    "dimasz": 0.8,
-    "dimexo": 1.0,
-    "dimexe": 1.0,
-    "dimgap": 1.0,
     "dimtad": 1,
 }
 
@@ -77,7 +72,12 @@ def _ensure_dimension_style(doc, source=None) -> None:
             attributes.update(DIMENSION_OVERRIDE)
         except (KeyError, ValueError):
             pass
-    attributes["dimtxt"] = DIMENSION_TEXT_SIZE_MM * MODEL_SCALE / (attributes["dimscale"] or 1)
+    scale = attributes["dimscale"] or 1
+    attributes["dimtxt"] = DIMENSION_TEXT_SIZE_MM * MODEL_SCALE / scale
+    attributes["dimasz"] = DIMENSION_ARROW_SIZE_MM * MODEL_SCALE / scale
+    attributes["dimgap"] = 0.6 * MODEL_SCALE / scale
+    attributes["dimexo"] = 0.9 * MODEL_SCALE / scale
+    attributes["dimexe"] = 0.8 * MODEL_SCALE / scale
     if DIMENSION_STYLE in doc.dimstyles:
         style = doc.dimstyles.get(DIMENSION_STYLE)
         for key, value in attributes.items():
@@ -128,6 +128,7 @@ def _ensure_anchor_linetypes(doc) -> None:
         "CENTER2": [28.575, 19.05, -3.175, 3.175, -3.175],
         "CENTER": [50.8, 31.75, -6.35, 6.35, -6.35],
         "DASHED": [6.35, 3.175, -3.175],
+        "HIDDEN": [18.0, 12.0, -6.0],
     }
     for name, pattern in patterns.items():
         if name not in doc.linetypes:
@@ -171,6 +172,9 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
     for line in view.internal_lines:
         pts = [(ox + x * scale, oy + y * scale) for x, y in line.points]
         _add_polyline(msp, pts, line.closed, "OUTLINE")
+    for line in view.hidden_lines:
+        pts = [(ox + x * scale, oy + y * scale) for x, y in line.points]
+        _add_polyline(msp, pts, line.closed, "HIDDEN", lineweight=13, linetype="HIDDEN")
     for symbol_index, symbol in enumerate(view.anchor_symbols):
         pts = [(ox + x * scale, oy + y * scale) for x, y in symbol.points]
         aci = view.anchor_symbol_colors[symbol_index] if symbol_index < len(view.anchor_symbol_colors) else None

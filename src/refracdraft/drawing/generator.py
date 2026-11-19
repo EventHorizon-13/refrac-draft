@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 
 from refracdraft.domain.models import (
     AnchorParameters,
@@ -94,6 +95,25 @@ def _small_head_contour_lines(width: float, overall_height: float, small_height:
         Polyline(((0.0, bottom), (width, bottom)), closed=False),
         Polyline(((0.0, top), (width, top)), closed=False),
     )
+
+
+def _board_hidden_lines(front: Polyline, board: Polyline) -> tuple[Polyline, ...]:
+    left, _, right, _ = front.bounds
+    board_left, _, board_right, _ = board.bounds
+    front_edges = tuple(zip(front.points, front.points[1:] + front.points[:1]))
+    stations = {x for x, _ in board.points if board_left < x < board_right}
+    lines = []
+    for station in sorted(stations):
+        x = left + (station - board_left) * (right - left) / (board_right - board_left)
+        intersections = sorted({
+            y1 + (y2 - y1) * (x - x1) / (x2 - x1)
+            for (x1, y1), (x2, y2) in front_edges
+            if x1 != x2 and min(x1, x2) <= x <= max(x1, x2)
+        })
+        for bottom, top in zip(intersections, intersections[1:]):
+            if top - bottom > 1e-6 and point_in_outline(front, (x, (bottom + top) / 2)):
+                lines.append(Polyline(((x, bottom), (x, top)), closed=False))
+    return tuple(lines)
 
 
 def _details(module, board, anchor) -> tuple[str, ...]:
@@ -310,6 +330,9 @@ class DrawingGenerator:
             warnings.append(f"未加载参考 DXF，夹板面模板 {module.board_face_template_id} 暂以矩形代替")
             board_outline = rectangle(module.board_face_width_mm, module.board_face_height_mm)
 
+        if module.board_face_outline is not None:
+            front_view = replace(front_view, hidden_lines=_board_hidden_lines(front, board_outline))
+
         symbol_lines: list[Polyline] = []
         symbol_colors: list[int] = []
         symbol_lineweights: list[int] = []
@@ -357,19 +380,31 @@ class DrawingGenerator:
         elif board.exists and board.opening_mode == OpeningMode.STANDARD:
             warnings.append(f"尚未建立 {anchor.anchor_type.value} 锚固件的标准夹板开口模板。")
 
+        left_cut_dim = min(
+            (dim.line_position for dim in profile_dimensions if dim.orientation == "vertical"),
+            default=0.0,
+        )
         board_dims = [
-            Dimension((0, 0), (module.board_face_width_mm, 0), f"{module.board_face_width_mm:g}", "horizontal", -68),
-            Dimension((0, 0), (0, module.board_face_height_mm), f"{module.board_face_height_mm:g}", "vertical", 40),
+            Dimension((0, 0), (module.board_face_width_mm, 0), f"{module.board_face_width_mm:g}",
+                      "horizontal", -102 if profile_dimensions else -68),
+            Dimension((0, 0), (0, module.board_face_height_mm), f"{module.board_face_height_mm:g}", "vertical",
+                      max(70, -left_cut_dim + 44) if profile_dimensions else 40),
         ]
         board_dims.extend(profile_dimensions)
         if anchor.dimension_horizontal:
             xs = sorted(p[0] for p in positions)
+            top = module.board_face_height_mm
+            cut_dim_top = max(
+                (dim.line_position for dim in profile_dimensions if dim.orientation == "horizontal"),
+                default=top,
+            )
+            chain_offset = max(35.0, cut_dim_top - top + 62) if cut_dim_top > top else 35.0
             chain = [0.0, *xs, module.board_face_width_mm]
             for start_x, end_x in zip(chain, chain[1:]):
                 if end_x - start_x > 0.01:
                     board_dims.append(Dimension((start_x, module.board_face_height_mm),
                                                 (end_x, module.board_face_height_mm),
-                                                f"{end_x - start_x:g}", "horizontal", 35))
+                                                f"{end_x - start_x:g}", "horizontal", chain_offset))
         if anchor.dimension_vertical:
             seen_offsets: set[float] = set()
             for x, y in positions:
