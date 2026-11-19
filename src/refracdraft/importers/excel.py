@@ -8,6 +8,7 @@ from typing import Any
 from openpyxl import load_workbook
 
 from refracdraft.domain.models import Project, ModuleParameters, BoardParameters, AnchorParameters
+from refracdraft.standard_sheet import COLUMN_SPECS, DEFAULT_ROW, build_standard_row
 
 
 SHEET_ALIASES = {
@@ -181,8 +182,39 @@ def _normalize_row(row: dict[str, Any], group: str) -> dict[str, Any]:
     return normalized
 
 
-def import_project_xlsx(path: str | Path) -> Project:
-    wb = load_workbook(path, data_only=True, read_only=True)
+def _import_standard_sheet(ws, headers: list[str]) -> Project:
+    columns = {label: index for index, label in enumerate(headers)}
+    if len(columns) != len(COLUMN_SPECS) or set(columns) != {spec.label for spec in COLUMN_SPECS}:
+        raise ValueError("「标准版」表头不完整或有重复列，请使用程序附带的示例")
+    modules = []
+    boards = []
+    anchors = []
+    for number, cells in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        if not any(value is not None and value != "" for value in cells):
+            continue
+        values = DEFAULT_ROW.copy()
+        for spec in COLUMN_SPECS:
+            value = cells[columns[spec.label]]
+            if spec.kind == "check":
+                parsed = False if value is None else _bool(value)
+                if not isinstance(parsed, bool):
+                    raise ValueError(f"Excel 第 {number} 行「{spec.label}」应填 TRUE/FALSE 或是/否")
+                values[spec.key] = parsed
+            else:
+                values[spec.key] = "" if value is None else str(value).strip()
+        try:
+            module, board, anchor = build_standard_row(values)
+        except ValueError as exc:
+            raise ValueError(f"Excel 第 {number} 行：{exc}") from exc
+        modules.append(module)
+        boards.append(board)
+        anchors.append(anchor)
+    if not modules:
+        raise ValueError("「标准版」工作表没有模块数据")
+    return Project(modules=modules, boards=boards, anchors=anchors)
+
+
+def _import_legacy_sheets(wb) -> Project:
     found: dict[str, list[dict[str, Any]]] = {"modules": [], "boards": [], "anchors": []}
     for ws in wb.worksheets:
         name = ws.title.strip().lower()
@@ -196,4 +228,20 @@ def import_project_xlsx(path: str | Path) -> Project:
     boards = [BoardParameters.model_validate(row) for row in found["boards"]]
     anchors = [AnchorParameters.model_validate(row) for row in found["anchors"]]
     return Project(modules=modules, boards=boards, anchors=anchors)
+
+
+def import_project_xlsx(path: str | Path) -> Project:
+    wb = load_workbook(path, data_only=True, read_only=True)
+    try:
+        labels = {spec.label for spec in COLUMN_SPECS}
+        for ws in wb.worksheets:
+            row = next(ws.iter_rows(max_row=1, values_only=True), ())
+            headers = [str(value).strip() if value is not None else "" for value in row]
+            while headers and not headers[-1]:
+                headers.pop()
+            if ws.title.strip() == "标准版" or set(headers) == labels:
+                return _import_standard_sheet(ws, headers)
+        return _import_legacy_sheets(wb)
+    finally:
+        wb.close()
 

@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 import ezdxf
 import pymupdf
+from openpyxl import Workbook, load_workbook
 
 from refracdraft.drawing.generator import DrawingGenerator, _anchor_positions, _balanced_page_groups, _details
 from refracdraft.drawing.layout import (
@@ -23,11 +24,12 @@ from refracdraft.domain.models import (
     Project,
     StructureType,
 )
-from refracdraft.importers.excel import _normalize_row
+from refracdraft.importers.excel import _normalize_row, import_project_xlsx
 from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import PDF_FONT_CANDIDATES, _find_pdf_font, _render_page, _single_page_dxf
 from refracdraft.release import latest_portable_release
+from refracdraft.standard_sheet import COLUMN_SPECS
 from refracdraft.standard import (
     StandardAnchorValues,
     StandardModuleValues,
@@ -603,6 +605,42 @@ def test_dxf_uses_reference_dimension_style_and_big_font(tmp_path):
         style = exported.styles.get(style_name)
         assert style.dxf.font.lower() == "gbenor.shx"
         assert style.dxf.bigfont.lower() == "gbcbig.shx"
+
+
+def test_standard_example_excel_headers_follow_parameter_table():
+    path = Path("examples/standard_example_6_modules.xlsx")
+    workbook = load_workbook(path, read_only=True)
+    try:
+        assert workbook.sheetnames == ["标准版"]
+        assert next(workbook.active.values) == tuple(spec.label for spec in COLUMN_SPECS)
+    finally:
+        workbook.close()
+    project = import_project_xlsx(path)
+    assert [module.module_id for module in project.modules] == [f"M{i}" for i in range(1, 7)]
+    assert len(project.boards) == len(project.anchors) == 6
+    assert project.modules[3].custom_structure_label == "自定义折叠"
+    assert project.modules[-1].geometry_type == GeometryType.SIDE_TAPER
+    assert project.anchors[-1].embedment_depth_mm == 50
+
+
+def test_import_accepts_legacy_excel_groups(tmp_path):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "模块参数"
+    sheet.append(["模块编号", "正面宽度", "正面高度", "夹板面宽度", "夹板面高度"])
+    sheet.append(["M1", 300, 300, 300, 230])
+    board = workbook.create_sheet("夹板参数")
+    board.append(["模块编号", "是否有夹板"])
+    board.append(["M1", "是"])
+    anchor = workbook.create_sheet("锚固件参数")
+    anchor.append(["模块编号", "是否有锚固件", "锚固件类型", "锚固件数量"])
+    anchor.append(["M1", "否", "无", 0])
+    path = tmp_path / "legacy.xlsx"
+    workbook.save(path)
+    project = import_project_xlsx(path)
+    assert project.modules[0].module_id == "M1"
+    assert project.boards[0].exists
+    assert not project.anchors[0].exists
 
 
 def test_pdf_plot_uses_one_font_in_title_and_nested_logo_without_changing_source(tmp_path):

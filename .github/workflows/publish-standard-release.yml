@@ -67,9 +67,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BUILD_RUN_ID: ${{ steps.build.outputs.build_run_id }}
         run: |
+          NOTES_FILE="docs/releases/$GITHUB_REF_NAME.md"
+          if [[ -f "$NOTES_FILE" ]]; then
+            NOTES_ARGS=(--notes-file "$NOTES_FILE")
+          else
+            NOTES_ARGS=(--notes "Windows x64 便携版。打包冒烟验证：GitHub Actions run $BUILD_RUN_ID。示例 Excel 随包提供。")
+          fi
           gh release create "$GITHUB_REF_NAME" \
             "$GITHUB_WORKSPACE/$ASSET_NAME" \
             "examples/standard_example_6_modules.xlsx#模块加工图示例_6模块.xlsx" \
             --repo "$GITHUB_REPOSITORY" \
             --title "RefracDraft Standard ${GITHUB_REF_NAME#standard-}" \
-            --notes "Windows x64 便携版。构建与打包版冒烟验证：GitHub Actions run $BUILD_RUN_ID。示例 Excel 已单独附上，包内 examples/standard_example_6_modules.xlsx 也可直接使用。"
+            "${NOTES_ARGS[@]}"

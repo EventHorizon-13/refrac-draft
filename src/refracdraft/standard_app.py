@@ -13,6 +13,7 @@ def main() -> None:
     from refracdraft.app import _smoke_test
     from refracdraft.domain.models import Project
     from refracdraft.exporters.pdf import _find_pdf_font
+    from refracdraft.importers.excel import import_project_xlsx
     from refracdraft.resources import resource_path
     from refracdraft.standard import ensure_standard_project
     from refracdraft.ui.standard_window import COLUMN_INDEX, StandardWindow
@@ -39,6 +40,9 @@ def main() -> None:
                 raise ValueError("便携版缺少可加载的程序图标")
             if _find_pdf_font() != resource_path("assets/fonts/SourceHanSerifSC-Regular.otf"):
                 raise ValueError("缺省 PDF 字体未使用随包思源宋体")
+            example_excel = import_project_xlsx(resource_path("examples/standard_example_6_modules.xlsx"))
+            if len(example_excel.modules) != 6:
+                raise ValueError("随包标准版 Excel 示例无法导入六个模块")
             sample = Project.model_validate_json(
                 resource_path("examples/b2_positive_tap.json").read_text(encoding="utf-8")
             )
