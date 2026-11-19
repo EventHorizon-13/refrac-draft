@@ -7,8 +7,8 @@ def main() -> None:
     from pathlib import Path
 
     from PySide6.QtCore import QEvent, QPointF, Qt
-    from PySide6.QtGui import QFont, QFontDatabase, QKeyEvent, QMouseEvent
-    from PySide6.QtWidgets import QApplication, QLineEdit
+    from PySide6.QtGui import QFont, QFontDatabase, QIcon, QKeyEvent, QMouseEvent
+    from PySide6.QtWidgets import QApplication, QLineEdit, QWidget
 
     from refracdraft.app import _smoke_test
     from refracdraft.domain.models import Project
@@ -23,6 +23,7 @@ def main() -> None:
     app = QApplication([sys.argv[0]] if smoke else sys.argv)
     app.setOrganizationName("EventHorizon")
     app.setApplicationName("RefracDraft Standard")
+    app.setWindowIcon(QIcon(str(resource_path("assets/RefracDraft.ico"))))
     app_font_path = resource_path("assets/fonts/SourceHanSansSC-Regular.otf")
     if app_font_path.is_file():
         font_id = QFontDatabase.addApplicationFont(str(app_font_path))
@@ -33,6 +34,8 @@ def main() -> None:
     if smoke:
         trace.write_text("window created\n", encoding="utf-8")
         try:
+            if window.windowIcon().pixmap(32, 32).isNull():
+                raise ValueError("便携版缺少可加载的程序图标")
             sample = Project.model_validate_json(
                 resource_path("examples/b2_positive_tap.json").read_text(encoding="utf-8")
             )
@@ -194,6 +197,27 @@ def main() -> None:
                 ))
             if not table._preset_list.isVisible() or not table.hasFocus():
                 raise ValueError("预设下拉菜单抢占表格焦点或未显示")
+            presets = table._preset_list
+            underlay = QWidget(table.viewport())
+            underlay.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+            underlay.setGeometry(presets.geometry())
+            underlay.show()
+
+            def capture_preset_area(color):
+                underlay.setStyleSheet(f"background-color: {color};")
+                return table.viewport().grab(presets.geometry()).toImage()
+
+            try:
+                presets.hide()
+                if capture_preset_area("#ff00ff") == capture_preset_area("#00ffff"):
+                    raise ValueError("下拉菜单背景测试无法绘制对比底层")
+                presets.show()
+                presets.raise_()
+                if capture_preset_area("#ff00ff") != capture_preset_area("#00ffff"):
+                    raise ValueError("预设下拉菜单透出了底层表格")
+            finally:
+                underlay.hide()
+                underlay.deleteLater()
             QApplication.sendEvent(table, QKeyEvent(
                 QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
             ))

@@ -57,6 +57,7 @@ jobs:
         run: >
           python -m PyInstaller --noconfirm --clean --onedir --windowed
           --name RefracDraft-Standard --paths src
+          --icon assets/RefracDraft.ico
           --add-data "references:references"
           --add-data "assets:assets"
           --add-data "examples/b2_positive_tap.json:examples"

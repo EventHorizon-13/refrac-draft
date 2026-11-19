@@ -453,6 +453,7 @@ class ParameterTable(QTableWidget):
         self.viewport().setMouseTracking(True)
         self._preset_list = QListWidget(self.viewport())
         self._preset_list.setObjectName("parameterPresetList")
+        self._preset_list.viewport().setAutoFillBackground(True)
         self._preset_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._preset_list.setMouseTracking(True)
         self._preset_list.hide()
@@ -1032,9 +1033,12 @@ class StandardWindow(MainWindow):
             " background: palette(window); color: palette(window-text);"
             " border: 1px solid palette(mid); border-radius: 4px; margin: 5px; }"
             "QLabel#previewTitle { padding: 4px 7px; }"
-            "QListWidget#parameterPresetList { border: 1px solid palette(mid); }"
-            "QListWidget#parameterPresetList::item { padding: 4px 7px; }"
-            "QListWidget#parameterPresetList::item:hover {"
+            "QListWidget#parameterPresetList {"
+            " background-color: palette(base); color: palette(text);"
+            " border: 1px solid palette(mid); }"
+            "QListWidget#parameterPresetList::item {"
+            " background-color: palette(base); color: palette(text); padding: 4px 7px; }"
+            "QListWidget#parameterPresetList::item:hover, QListWidget#parameterPresetList::item:selected {"
             " background: palette(highlight); color: palette(highlighted-text); }"
             "QPushButton[primary='true'] { background: #2f6fde; color: white;"
             " border: 1px solid #245bb8; border-radius: 4px; padding: 6px 10px; }"
