@@ -4,7 +4,10 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QBrush, QPen, QPainter, QPalette, QTextOption
+from PySide6.QtGui import (
+    QAction, QColor, QBrush, QFont, QFontMetricsF, QPen, QPainter, QPalette, QPixmap,
+    QTextBlockFormat, QTextCursor, QTextOption,
+)
 from PySide6.QtWidgets import (
     QFileDialog, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QMainWindow,
     QMessageBox, QPushButton, QSpinBox, QSplitter, QTabWidget, QTableWidget,
@@ -15,17 +18,17 @@ from refracdraft.domain.models import Project
 from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.drawing.layout import (
     BOARD_VIEW_BOTTOM_MM,
-    DETAIL_PREVIEW_LINE_SPACING,
+    DETAIL_LINE_HEIGHT_MM,
     DETAIL_TEXT_SIZE_MM,
+    DETAIL_TOP_MM,
     DIMENSION_TEXT_SIZE_MM,
-    PANEL_INNER_MARGIN_MM,
     PAGE_HEIGHT_MM,
     SEPARATOR_BOTTOM_MM,
     SEPARATOR_TOP_MM,
     SIDE_VIEW_GAP_MM,
     TOP_VIEW_BOTTOM_MM,
     VIEW_SCALE,
-    detail_baseline,
+    detail_box,
     outline_width,
 )
 from refracdraft.exporters.dxf import export_dxf
@@ -145,18 +148,21 @@ class DrawingPreview(QGraphicsView):
                 VIEW_SCALE,
             )
             if drawing.details:
-                available_width = (
-                    placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM - px
-                )
+                left, available_width = detail_box(placed)
                 self._add_multiline_text(
                     scene,
                     "\n".join(drawing.details),
-                    px,
-                    detail_baseline(0),
-                    DETAIL_TEXT_SIZE_MM,
-                    "#111111",
+                    left,
                     available_width,
                 )
+        self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def show_page_image(self, pixmap: QPixmap) -> None:
+        scene = self.scene()
+        scene.clear()
+        item = scene.addPixmap(pixmap)
+        item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+        scene.setSceneRect(item.boundingRect())
         self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def _add_text(self, scene, text, x, y, size, color):
@@ -165,16 +171,25 @@ class DrawingPreview(QGraphicsView):
         item.setScale(size / 10.0)
         item.setPos(x, 210 - y - size)
 
-    def _add_multiline_text(self, scene, text, x, first_baseline, size, color, max_width):
+    def _add_multiline_text(self, scene, text, x, max_width):
         item = scene.addText(text)
-        item.setDefaultTextColor(QColor(color))
+        font = QFont(self.font())
+        font.setPixelSize(100)
+        item.setFont(font)
+        scale = DETAIL_TEXT_SIZE_MM / QFontMetricsF(font).capHeight()
+        item.setDefaultTextColor(QColor("#111111"))
         item.document().setDocumentMargin(0)
         options = item.document().defaultTextOption()
         options.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         item.document().setDefaultTextOption(options)
-        item.setTextWidth(max_width * 10.0 / size)
-        item.setScale(size / 10.0)
-        item.setPos(x, 210 - first_baseline - size * (DETAIL_PREVIEW_LINE_SPACING + 0.08))
+        cursor = item.textCursor()
+        cursor.select(QTextCursor.SelectionType.Document)
+        block = QTextBlockFormat()
+        block.setLineHeight(DETAIL_LINE_HEIGHT_MM / scale, QTextBlockFormat.LineHeightTypes.FixedHeight.value)
+        cursor.mergeBlockFormat(block)
+        item.setTextWidth(max_width / scale)
+        item.setScale(scale)
+        item.setPos(x, PAGE_HEIGHT_MM - DETAIL_TOP_MM)
 
     def _draw_view(self, scene, view, origin, module_id, scale):
         ox, oy = origin

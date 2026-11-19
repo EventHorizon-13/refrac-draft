@@ -6,9 +6,9 @@ import sys
 def main() -> None:
     from pathlib import Path
 
-    from PySide6.QtCore import Qt
-    from PySide6.QtGui import QFont, QFontDatabase
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QFont, QFontDatabase, QKeyEvent
+    from PySide6.QtWidgets import QApplication, QLineEdit
 
     from refracdraft.app import _smoke_test
     from refracdraft.domain.models import Project
@@ -41,6 +41,8 @@ def main() -> None:
             window.project = sample
             window._populate_tables()
             window.generate()
+            if window._preview_pdf is None:
+                raise ValueError("标准版未生成与导出同源的 PDF 预览")
             window.resize(1500, 900)
             window.show()
             app.processEvents()
@@ -154,6 +156,31 @@ def main() -> None:
 
             added = window._add_module()
             length_column = COLUMN_INDEX["length_mm"]
+            table.setFocus()
+            table.setCurrentCell(row, length_column)
+            QApplication.sendEvent(table, QKeyEvent(
+                QEvent.Type.KeyPress, Qt.Key.Key_Down, Qt.KeyboardModifier.NoModifier
+            ))
+            if table.currentRow() != added:
+                raise ValueError("选中单元格后方向键未切换到下一行")
+            table.setCurrentCell(row, length_column)
+            QApplication.sendEvent(table, QKeyEvent(
+                QEvent.Type.KeyPress, Qt.Key.Key_4, Qt.KeyboardModifier.NoModifier, "4"
+            ))
+            editor = table.focusWidget()
+            if not isinstance(editor, QLineEdit) or editor.text() != "4":
+                raise ValueError("按键未进入编辑并替换原值")
+            editor.setText("456")
+            QApplication.sendEvent(editor, QKeyEvent(
+                QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
+            ))
+            if (
+                table.currentRow() != added
+                or table.currentColumn() != length_column
+                or window._cell_text(row, "length_mm") != "456"
+            ):
+                raise ValueError("回车未提交并切换到下一行的同列")
+            trace.write_text("table keyboard editing passed\n", encoding="utf-8")
             table.item(0, length_column).setText("456")
             table.item(added, length_column).setText("300")
             table._apply_fill((0, length_column, 0, length_column), (added, length_column))

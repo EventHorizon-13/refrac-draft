@@ -9,12 +9,13 @@ from refracdraft.drawing.layout import (
     BOARD_VIEW_BOTTOM_MM,
     DETAIL_LINE_SPACING,
     DETAIL_TEXT_SIZE_MM,
-    PANEL_INNER_MARGIN_MM,
+    DETAIL_TOP_MM,
+    DIMENSION_TEXT_SIZE_MM,
     SIDE_VIEW_GAP_MM,
     SEPARATOR_BOTTOM_MM,
     SEPARATOR_TOP_MM,
     TOP_VIEW_BOTTOM_MM,
-    detail_baseline,
+    detail_box,
 )
 from refracdraft.drawing.model import DrawingDocument, ViewDrawing
 
@@ -32,20 +33,18 @@ TEXT_STYLE = "大字体"
 DIMENSION_STYLE = "_10"
 MODEL_SCALE = 10.0
 DETAIL_TEXT_HEIGHT = DETAIL_TEXT_SIZE_MM * MODEL_SCALE
-VALUE_TEXT_HEIGHT = 48.0
+VALUE_TEXT_HEIGHT = 40.0
 DIMENSION_OVERRIDE = {
     "dimtxsty": TEXT_STYLE,
     "dimclrd": 4,
     "dimclre": 4,
     "dimclrt": 3,
-    "dimtxt": 2.0,
     "dimasz": 1.2,
     "dimexo": 1.5,
     "dimexe": 1.5,
 }
 DIMENSION_FALLBACK = {
     "dimscale": 20.0,
-    "dimtxt": 1.5,
     "dimasz": 0.8,
     "dimexo": 1.0,
     "dimexe": 1.0,
@@ -77,6 +76,7 @@ def _ensure_dimension_style(doc, source=None) -> None:
             attributes.update(DIMENSION_OVERRIDE)
         except (KeyError, ValueError):
             pass
+    attributes["dimtxt"] = DIMENSION_TEXT_SIZE_MM * MODEL_SCALE / (attributes["dimscale"] or 1)
     if DIMENSION_STYLE in doc.dimstyles:
         style = doc.dimstyles.get(DIMENSION_STYLE)
         for key, value in attributes.items():
@@ -279,18 +279,13 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
                 scale,
             )
             if drawing.details:
-                top = (
-                    detail_baseline(0) + DETAIL_TEXT_SIZE_MM * 1.34
-                ) * MODEL_SCALE
-                available_width = (
-                    placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM
-                ) * MODEL_SCALE - px
+                left, available_width = detail_box(placed)
                 msp.add_mtext(
                     r"\P".join(drawing.details),
                     dxfattribs={
-                        "insert": (px, page_y + top),
+                        "insert": (left * MODEL_SCALE, page_y + DETAIL_TOP_MM * MODEL_SCALE),
                         "char_height": DETAIL_TEXT_HEIGHT,
-                        "width": available_width,
+                        "width": available_width * MODEL_SCALE,
                         "style": TEXT_STYLE,
                         "layer": "TEXT",
                         "attachment_point": 1,

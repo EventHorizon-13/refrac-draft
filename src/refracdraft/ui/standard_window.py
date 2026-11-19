@@ -3,24 +3,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import re
 
+import pymupdf
 from PySide6.QtCore import (
-    QEventLoop, QRect, QSettings, QSignalBlocker, QStandardPaths, Qt, QTimer, Signal,
+    QEvent, QEventLoop, QRect, QSettings, QSignalBlocker, QStandardPaths, Qt, Signal,
 )
 from PySide6.QtGui import (
     QAction,
     QColor,
     QDoubleValidator,
+    QImage,
     QIntValidator,
     QKeySequence,
     QPainter,
     QPen,
+    QPixmap,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
-    QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
@@ -39,6 +42,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QStyle,
+    QStyleOption,
     QStyleOptionButton,
     QToolBar,
     QVBoxLayout,
@@ -56,7 +60,7 @@ from refracdraft.domain.models import (
 )
 from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.exporters.dxf import export_dxf
-from refracdraft.exporters.pdf import export_pdf, list_shx_fonts
+from refracdraft.exporters.pdf import export_pdf
 from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.standard import (
     StandardAnchorValues,
@@ -99,7 +103,7 @@ MODULE_MATERIALS = (
 )
 BOARD_TYPES = ("9厘", "8厘", "6厘")
 ANCHOR_MATERIALS = ("201", "304", "309", "310")
-THREAD_SPECS = ("M6", "M8", "M10", "M12", "M16")
+THREAD_SPECS = ("M8", "M10")
 PIN_DIAMETERS = ("8", "6", "5")
 HOSE_SPECS = ("25", "32")
 QUANTITY_PRESETS = ("1", "2", "5", "10", "20", "50", "100")
@@ -178,7 +182,7 @@ COLUMN_SPECS = (
     ),
     ColumnSpec("anchor_length_mm", "锚固件长度", "number", (), 72, "anchor"),
     ColumnSpec("anchor_material", "材质", "combo", ANCHOR_MATERIALS, 60, "anchor"),
-    ColumnSpec("thread_spec", "螺栓", "text", (), 60, "anchor"),
+    ColumnSpec("thread_spec", "螺栓", "combo", THREAD_SPECS, 60, "anchor"),
     ColumnSpec("pin_diameter_mm", "插针", "number", PIN_DIAMETERS, 54, "anchor"),
     ColumnSpec("hose_spec", "胶管", "combo", HOSE_SPECS, 54, "anchor"),
     ColumnSpec("embedment_depth_mm", "嵌入深度", "number", (), 62, "anchor"),
@@ -320,28 +324,8 @@ class OperationProgress(QDialog):
         self.update_stage(text, self.bar.maximum())
 
 
-class ParameterEditor(QLineEdit):
-    """Single-cell editor that commits and moves when an untouched value is arrowed."""
-
-    navigationRequested = Signal(int, int)
-
-    def keyPressEvent(self, event) -> None:
-        directions = {
-            Qt.Key.Key_Left: (0, -1),
-            Qt.Key.Key_Right: (0, 1),
-            Qt.Key.Key_Up: (-1, 0),
-            Qt.Key.Key_Down: (1, 0),
-        }
-        if (
-            event.key() in directions
-            and event.modifiers() == Qt.KeyboardModifier.NoModifier
-            and self.hasSelectedText()
-        ):
-            row_step, column_step = directions[event.key()]
-            self.navigationRequested.emit(row_step, column_step)
-            event.accept()
-            return
-        super().keyPressEvent(event)
+def _preset_button_rect(cell_rect: QRect) -> QRect:
+    return QRect(cell_rect.right() - 15, cell_rect.top(), 16, cell_rect.height() - 7)
 
 
 class ParameterDelegate(QStyledItemDelegate):
@@ -352,9 +336,10 @@ class ParameterDelegate(QStyledItemDelegate):
 
     def createEditor(self, parent: QWidget, option, index):
         spec = COLUMN_SPECS[index.column()]
-        if spec.kind == "check":
+        if spec.kind == "check" or (spec.kind == "enum" and "自定义" not in spec.options):
             return None
-        editor = ParameterEditor(parent)
+        editor = QLineEdit(parent)
+        editor.setAlignment(Qt.AlignmentFlag.AlignCenter)
         editor.setMaxLength(180)
         editor.setAutoFillBackground(True)
         editor.setStyleSheet(
@@ -369,14 +354,18 @@ class ParameterDelegate(QStyledItemDelegate):
         elif spec.kind == "integer":
             validator = QIntValidator(0, 1_000_000, editor)
             editor.setValidator(validator)
-        table = self.parent()
-        if hasattr(table, "_commit_and_navigate"):
-            editor.navigationRequested.connect(
-                lambda row_step, column_step, active=editor: table._commit_and_navigate(
-                    active, row_step, column_step
-                )
-            )
         return editor
+
+    def eventFilter(self, editor, event) -> bool:
+        if (
+            isinstance(editor, QLineEdit)
+            and event.type() == QEvent.Type.KeyPress
+            and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+        ):
+            if editor.hasAcceptableInput():
+                self.parent()._commit_and_move_down(editor)
+            return True
+        return super().eventFilter(editor, event)
 
     def setEditorData(self, editor, index) -> None:
         value = index.data(Qt.ItemDataRole.DisplayRole) or ""
@@ -429,6 +418,13 @@ class ParameterDelegate(QStyledItemDelegate):
             painter.restore()
             return
         super().paint(painter, option, index)
+        if spec.options:
+            button = QStyleOption()
+            button.initFrom(self.parent())
+            button.rect = _preset_button_rect(option.rect).adjusted(4, 0, -4, 0)
+            self.parent().style().drawPrimitive(
+                QStyle.PrimitiveElement.PE_IndicatorArrowDown, button, painter, self.parent()
+            )
 
 
 class ParameterTable(QTableWidget):
@@ -460,7 +456,7 @@ class ParameterTable(QTableWidget):
             return QRect()
         top, left, bottom, right = selected
         corner = self.visualRect(self.model().index(bottom, right))
-        return QRect(corner.right() - 3, corner.bottom() - 3, 7, 7)
+        return QRect(corner.right() - 5, corner.bottom() - 5, 6, 6)
 
     def _edit_cell(self, row: int, column: int) -> None:
         index = self.model().index(row, column)
@@ -490,15 +486,10 @@ class ParameterTable(QTableWidget):
             row += row_step
             column += column_step
 
-    def _commit_and_navigate(
-        self,
-        editor: ParameterEditor,
-        row_step: int,
-        column_step: int,
-    ) -> None:
+    def _commit_and_move_down(self, editor: QLineEdit) -> None:
         self.commitData(editor)
         self.closeEditor(editor, QAbstractItemView.EndEditHint.NoHint)
-        self._move_current_cell(row_step, column_step)
+        self._move_current_cell(1, 0)
 
     def _show_cell_menu(self, row: int, column: int) -> None:
         item = self.item(row, column)
@@ -506,7 +497,6 @@ class ParameterTable(QTableWidget):
             return
         spec = COLUMN_SPECS[column]
         if not spec.options:
-            self._edit_cell(row, column)
             return
         self.setCurrentCell(row, column)
         menu = QMenu(self)
@@ -527,7 +517,7 @@ class ParameterTable(QTableWidget):
         if chosen is None:
             return
         if custom_action is not None and chosen.data() == "__custom__":
-            QTimer.singleShot(0, lambda: self._edit_cell(row, column))
+            self._edit_cell(row, column)
             return
         item.setText(chosen.text())
 
@@ -560,7 +550,8 @@ class ParameterTable(QTableWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             position = event.position().toPoint()
             target = self.indexAt(position)
-            if self._handle_rect().adjusted(-2, -2, 2, 2).contains(position):
+            handle = self._handle_rect()
+            if not handle.isEmpty() and handle.contains(position):
                 self._fill_source = self._visible_selected_range()
                 self._fill_target = (target.row(), target.column()) if target.isValid() else None
                 self._fill_dragging = self._fill_source is not None
@@ -580,24 +571,16 @@ class ParameterTable(QTableWidget):
                     item.setCheckState(next_state)
                     event.accept()
                     return
+                if (
+                    item is not None
+                    and item.flags() & Qt.ItemFlag.ItemIsEnabled
+                    and spec.options
+                    and _preset_button_rect(self.visualRect(target)).contains(position)
+                ):
+                    self._show_cell_menu(target.row(), target.column())
+                    event.accept()
+                    return
         super().mousePressEvent(event)
-        if event.button() == Qt.MouseButton.LeftButton:
-            target = self.indexAt(event.position().toPoint())
-            if target.isValid():
-                item = self.item(target.row(), target.column())
-                spec = COLUMN_SPECS[target.column()]
-                if item is None or not (item.flags() & Qt.ItemFlag.ItemIsEnabled):
-                    return
-                if spec.options:
-                    QTimer.singleShot(
-                        0,
-                        lambda r=target.row(), c=target.column(): self._show_cell_menu(r, c),
-                    )
-                    return
-                QTimer.singleShot(
-                    0,
-                    lambda r=target.row(), c=target.column(): self._edit_cell(r, c),
-                )
 
     def mouseMoveEvent(self, event) -> None:
         if self._fill_dragging:
@@ -668,6 +651,14 @@ class ParameterTable(QTableWidget):
         self.changed.emit()
 
     def keyPressEvent(self, event) -> None:
+        if (
+            event.key() == Qt.Key.Key_Down
+            and event.modifiers() == Qt.KeyboardModifier.AltModifier
+            and self.currentIndex().isValid()
+        ):
+            self._show_cell_menu(self.currentRow(), self.currentColumn())
+            event.accept()
+            return
         directions = {
             Qt.Key.Key_Left: (0, -1),
             Qt.Key.Key_Right: (0, 1),
@@ -761,6 +752,7 @@ class ParameterTable(QTableWidget):
 
 class StandardWindow(MainWindow):
     def __init__(self):
+        self._preview_pdf: tuple[str | None, bytes] | None = None
         self._settings = QSettings("EventHorizon", "RefracDraft Standard")
         self._history_ready = False
         self._history_restoring = False
@@ -837,11 +829,7 @@ class StandardWindow(MainWindow):
         table.setShowGrid(True)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        table.setEditTriggers(
-            QAbstractItemView.EditTrigger.DoubleClicked
-            | QAbstractItemView.EditTrigger.EditKeyPressed
-            | QAbstractItemView.EditTrigger.AnyKeyPressed
-        )
+        table.setEditTriggers(QAbstractItemView.EditTrigger.AnyKeyPressed)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         table.horizontalHeader().setStretchLastSection(False)
         table.horizontalHeader().setMinimumSectionSize(44)
@@ -900,7 +888,7 @@ class StandardWindow(MainWindow):
         self.pdf_font_directory_edit = QLineEdit()
         self.pdf_font_directory_edit.setPlaceholderText("内置字体，可选择外挂字体目录")
         self.pdf_font_directory_edit.setToolTip(
-            "可选择任意 .shx 字体目录；下方可分别指定正文字体和大字体。"
+            "程序自动匹配所选目录中的 SHX 正文字体和大字体。"
         )
         self.browse_font_directory_button = QPushButton("选择")
         self.browse_font_directory_button.setFixedWidth(58)
@@ -908,13 +896,6 @@ class StandardWindow(MainWindow):
         font_row.addWidget(self.pdf_font_directory_edit, 1)
         font_row.addWidget(self.browse_font_directory_button)
         output_layout.addLayout(font_row)
-
-        self.pdf_shx_font_combo = QComboBox()
-        self.pdf_shx_font_combo.setToolTip("任意 SHX 可作为正文字体；自动优先 gbenor.shx")
-        output_layout.addWidget(self.pdf_shx_font_combo)
-        self.pdf_shx_bigfont_combo = QComboBox()
-        self.pdf_shx_bigfont_combo.setToolTip("任意 SHX 可作为大字体；自动优先 gbcbig.shx")
-        output_layout.addWidget(self.pdf_shx_bigfont_combo)
 
         self.output_path_label = QLabel()
         self.output_path_label.setProperty("role", "fieldLabel")
@@ -985,17 +966,10 @@ class StandardWindow(MainWindow):
         self.pdf_font_directory_edit.setText(
             str(self._settings.value("pdf/font_directory", ""))
         )
-        self._refresh_shx_choices(
-            str(self._settings.value("pdf/shx_font", "自动")),
-            str(self._settings.value("pdf/shx_bigfont", "自动")),
-        )
         self.output_directory_edit.textChanged.connect(self._update_output_preview)
         self.output_filename_edit.textChanged.connect(self._update_output_preview)
         self.output_directory_edit.editingFinished.connect(self._save_output_settings)
         self.pdf_font_directory_edit.editingFinished.connect(self._save_output_settings)
-        self.pdf_font_directory_edit.editingFinished.connect(self._refresh_shx_choices)
-        self.pdf_shx_font_combo.currentTextChanged.connect(self._save_output_settings)
-        self.pdf_shx_bigfont_combo.currentTextChanged.connect(self._save_output_settings)
         self._update_output_preview()
 
         self.setStyleSheet(
@@ -1039,46 +1013,7 @@ class StandardWindow(MainWindow):
         )
         if directory:
             self.pdf_font_directory_edit.setText(directory)
-            self._refresh_shx_choices()
             self._save_output_settings()
-
-    def _refresh_shx_choices(self, preferred_font: str = "", preferred_bigfont: str = "") -> None:
-        if not hasattr(self, "pdf_shx_font_combo"):
-            return
-        directory = self.pdf_font_directory_edit.text().strip()
-        infos = list_shx_fonts(directory)
-        names = [info.name for info in infos]
-        current_font = preferred_font or self.pdf_shx_font_combo.currentText() or "自动"
-        current_bigfont = preferred_bigfont or self.pdf_shx_bigfont_combo.currentText() or "自动"
-
-        self.pdf_shx_font_combo.blockSignals(True)
-        self.pdf_shx_bigfont_combo.blockSignals(True)
-        try:
-            self.pdf_shx_font_combo.clear()
-            self.pdf_shx_font_combo.addItem("自动")
-            self.pdf_shx_font_combo.addItems(names)
-            if current_font in names:
-                self.pdf_shx_font_combo.setCurrentText(current_font)
-            elif "gbenor.shx" in names:
-                self.pdf_shx_font_combo.setCurrentText("gbenor.shx")
-            else:
-                self.pdf_shx_font_combo.setCurrentText("自动")
-
-            self.pdf_shx_bigfont_combo.clear()
-            self.pdf_shx_bigfont_combo.addItem("无")
-            self.pdf_shx_bigfont_combo.addItem("自动")
-            self.pdf_shx_bigfont_combo.addItems(names)
-            if current_bigfont in names:
-                self.pdf_shx_bigfont_combo.setCurrentText(current_bigfont)
-            elif "gbcbig.shx" in names:
-                self.pdf_shx_bigfont_combo.setCurrentText("gbcbig.shx")
-            elif any(info.is_bigfont for info in infos):
-                self.pdf_shx_bigfont_combo.setCurrentText("自动")
-            else:
-                self.pdf_shx_bigfont_combo.setCurrentText("无")
-        finally:
-            self.pdf_shx_font_combo.blockSignals(False)
-            self.pdf_shx_bigfont_combo.blockSignals(False)
 
     def _save_output_settings(self, *_args) -> None:
         if not hasattr(self, "output_directory_edit"):
@@ -1089,8 +1024,6 @@ class StandardWindow(MainWindow):
         self._settings.setValue(
             "pdf/font_directory", self.pdf_font_directory_edit.text().strip()
         )
-        self._settings.setValue("pdf/shx_font", self.pdf_shx_font_combo.currentText())
-        self._settings.setValue("pdf/shx_bigfont", self.pdf_shx_bigfont_combo.currentText())
 
     def closeEvent(self, event) -> None:
         self._save_output_settings()
@@ -1597,6 +1530,8 @@ class StandardWindow(MainWindow):
 
     def _populate_tables(self) -> None:
         ensure_standard_project(self.project)
+        self.drawing_document = None
+        self._preview_pdf = None
         self._clear_rows()
         for module in self.project.modules:
             self._add_module((
@@ -1613,6 +1548,7 @@ class StandardWindow(MainWindow):
     def new_project(self) -> None:
         self.project = Project()
         self.drawing_document = None
+        self._preview_pdf = None
         self.preview.scene().clear()
         self.page_spin.setMaximum(1)
         self._clear_rows()
@@ -1775,20 +1711,63 @@ class StandardWindow(MainWindow):
                     if count < module_count else "正在排版…"
                 ),
             )
-            progress.advance("正在更新预览…")
+            self._preview_pdf = None
+            progress.bar.setMaximum(module_count + len(self.drawing_document.pages) + 5)
+            progress.advance("正在准备 PDF 预览…")
             with QSignalBlocker(self.page_spin):
                 self.page_spin.setMaximum(max(1, len(self.drawing_document.pages)))
                 self.page_spin.setValue(1)
-            self.preview.show_page(self.drawing_document, 0)
-            warnings = "\n".join(self.drawing_document.warnings)
+            warnings = list(self.drawing_document.warnings)
+            try:
+                font_directory = self._pdf_font_directory()
+                with TemporaryDirectory(prefix="refracdraft-preview-") as directory:
+                    path = self._render_pdf(Path(directory) / "preview.pdf", font_directory, progress)
+                    self._preview_pdf = (font_directory, path.read_bytes())
+                self._show_selected_page(1)
+            except Exception as exc:
+                self._preview_pdf = None
+                self._show_selected_page(1)
+                warnings.append(f"暂用绘图预览，PDF 预览生成失败：{exc}")
             progress.finish("图纸已生成")
-            self.statusBar().showMessage("图纸已生成" + (f"；警告：{warnings}" if warnings else ""))
+            self.statusBar().showMessage("图纸已生成" + ("；" + "；".join(warnings) if warnings else ""))
         except Exception as exc:
             progress.hide()
             QMessageBox.critical(self, "生成失败", str(exc))
         finally:
             progress.hide()
             progress.deleteLater()
+
+    def _show_selected_page(self, value: int) -> None:
+        if self._preview_pdf is None:
+            super()._show_selected_page(value)
+            return
+        with pymupdf.open(stream=self._preview_pdf[1], filetype="pdf") as pdf:
+            page = pdf[value - 1].get_pixmap(dpi=180, alpha=False)
+            samples = page.samples
+            image = QImage(
+                samples, page.width, page.height, page.stride, QImage.Format.Format_RGB888
+            )
+            self.preview.show_page_image(QPixmap.fromImage(image))
+
+    def _pdf_font_directory(self) -> str | None:
+        value = self.pdf_font_directory_edit.text().strip()
+        if not value:
+            return None
+        directory = Path(value).expanduser().resolve()
+        if not directory.is_dir():
+            raise FileNotFoundError(f"PDF 字体目录不存在: {directory}")
+        return str(directory)
+
+    def _render_pdf(
+        self, path: Path, font_directory: str | None, progress: OperationProgress
+    ) -> Path:
+        return export_pdf(
+            self.drawing_document,
+            path,
+            reference_dxf=self.reference_dxf,
+            font_directory=font_directory,
+            progress=progress.advance,
+        )
 
     def export_dxf_file(self) -> None:
         if not self.drawing_document:
@@ -1823,28 +1802,17 @@ class StandardWindow(MainWindow):
         progress = OperationProgress(self, "正在准备 PDF…", len(self.drawing_document.pages) + 2)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            font_directory = self.pdf_font_directory_edit.text().strip() or None
-            if font_directory and not Path(font_directory).expanduser().is_dir():
-                raise FileNotFoundError(f"PDF 字体目录不存在: {font_directory}")
-            export_pdf(
-                self.drawing_document,
-                path,
-                reference_dxf=self.reference_dxf,
-                font_directory=font_directory,
-                shx_font=(
-                    self.pdf_shx_font_combo.currentText()
-                    if self.pdf_shx_font_combo.currentText() != "自动"
-                    else None
-                ),
-                shx_bigfont=(
-                    ""
-                    if self.pdf_shx_bigfont_combo.currentText() == "无"
-                    else None
-                    if self.pdf_shx_bigfont_combo.currentText() == "自动"
-                    else self.pdf_shx_bigfont_combo.currentText()
-                ),
-                progress=progress.advance,
-            )
+            font_directory = self._pdf_font_directory()
+            if self._preview_pdf is not None and self._preview_pdf[0] == font_directory:
+                progress.update_stage("正在保存预览 PDF…", progress.bar.maximum() - 1)
+                with TemporaryDirectory(prefix="refracdraft-save-", dir=path.parent) as directory:
+                    staged = Path(directory) / "drawing.pdf"
+                    staged.write_bytes(self._preview_pdf[1])
+                    staged.replace(path)
+            else:
+                self._render_pdf(path, font_directory, progress)
+                self._preview_pdf = (font_directory, path.read_bytes())
+                self._show_selected_page(self.page_spin.value())
             progress.finish("PDF 已导出")
             self.statusBar().showMessage(f"PDF 已导出：{path}")
         except Exception as exc:

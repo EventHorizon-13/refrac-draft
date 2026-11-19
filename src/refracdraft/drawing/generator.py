@@ -17,7 +17,7 @@ from refracdraft.drawing.layout import (
     PAGE_LEFT_MM,
     PANEL_GAP_MM,
     PANEL_INNER_MARGIN_MM,
-    module_content_width,
+    geometry_width,
     module_required_width,
 )
 from refracdraft.geometry.primitives import Polyline, equal_anchor_positions, module_front_outline, module_side_outline, parametric_outline, point_in_outline, rectangle, scale_template
@@ -93,7 +93,8 @@ def _small_head_contour_lines(width: float, overall_height: float, small_height:
 def _details(module, board, anchor) -> tuple[str, ...]:
     name = module.custom_structure_label or module.name or module.structure_type.value
     display_name = name if module.module_id in name else f"{name}{module.module_id}"
-    lines = [f"1、名称：{display_name}", f"2、材质：{module.material or '未填写'}"]
+    material = module.material.strip().removesuffix("材质").strip()
+    lines = [f"1、名称：{display_name}", f"2、材质：{material or '未填写'}"]
     if not anchor.exists or anchor.anchor_type == AnchorType.NONE:
         lines.extend(("3、锚固件：无", "4、锚固件长度：无"))
     else:
@@ -106,13 +107,13 @@ def _details(module, board, anchor) -> tuple[str, ...]:
             AnchorType.CUSTOM: anchor.custom_type_label or "自定义",
         }.get(anchor.anchor_type, "")
         material = anchor.material or "未填写材质"
-        lines.extend((f"3、锚固件：{material}{anchor_name}锚固件{spec}",
+        lines.extend((f"3、锚固件：{material}{anchor_name.removesuffix('锚固件')}{spec}",
                       f"4、锚固件长度：{anchor.length_mm:g}mm" if anchor.length_mm else "4、锚固件长度：未填写"))
     lines.append(f"5、数量：{module.production_quantity} Pcs")
     lines.append(f"6、容重：{module.density_kg_m3:g} kg/m³" if module.density_kg_m3 else "6、容重：未填写")
     hose = anchor.hose_spec if anchor.exists else "无胶管"
     board_text = board.material if board.exists else "无夹板"
-    lines.append(f"7、胶管/夹板：{hose or '未填写胶管'}，{board_text}")
+    lines.append(f"7、{hose or '未填写胶管'}，{board_text}")
     if module.source_note:
         lines.append(f"8、备注：{module.source_note}")
     return tuple(lines)
@@ -425,7 +426,7 @@ class DrawingGenerator:
                 panel_width = required + extra_each
                 content_x = panel_x + max(
                     PANEL_INNER_MARGIN_MM,
-                    (panel_width - module_content_width(drawing)) / 2.0,
+                    (panel_width - geometry_width(drawing)) / 2.0,
                 )
                 placed.append(
                     PlacedModule(

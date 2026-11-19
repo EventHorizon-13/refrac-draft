@@ -51,7 +51,7 @@ class PlacedModule:
     x_mm: float
     panel_width_mm: float
     panel_index: int
-    # Shared left edge for the front view, board-face view and detail text.
+    # Shared left edge of the front and board-face views.
     content_x_mm: float = 0.0
 
 
