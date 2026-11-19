@@ -7,16 +7,24 @@ from openpyxl import Workbook, load_workbook
 
 from refracdraft.drawing.generator import DrawingGenerator, _anchor_positions, _balanced_page_groups, _details
 from refracdraft.drawing.layout import (
+    BOARD_VIEW_BOTTOM_MM,
     DETAIL_LINE_SPACING,
     DETAIL_TEXT_SIZE_MM,
     DIMENSION_TEXT_SIZE_MM,
     PANEL_INNER_MARGIN_MM,
+    TOP_VIEW_BOTTOM_MM,
+    VIEW_SCALE,
+    VIEW_VERTICAL_GAP_MM,
     detail_box,
     details_width,
+    top_view_bottom_mm,
+    view_visual_bounds,
 )
+from refracdraft.drawing.model import linetype_role
 from refracdraft.domain.models import (
     AnchorParameters,
     AnchorType,
+    BoardFaceProfile,
     BoardParameters,
     GeometryType,
     LayoutMode,
@@ -69,6 +77,26 @@ def test_standard_edition_accepts_three_existing_geometry_types(geometry_type):
 def test_standard_edition_rejects_irregular_geometry_with_module_id(extra):
     with pytest.raises(ValueError, match="M1.*异形"):
         ensure_standard_project(Project(modules=[module(**extra)]))
+
+
+def test_standard_board_face_profile_round_trips_and_uses_table_bounds():
+    profile = BoardFaceProfile.model_validate({
+        "features": [{"type": 1, "a": 62, "b": 24, "rotation_deg": 90, "mirror_x": True}],
+    })
+    values = dict(DEFAULT_ROW, length_mm="345", thickness_mm="210", anchor_enabled=False)
+    part, board, anchor = build_standard_row(values, board_face_profile=profile)
+    project = Project(modules=[part], boards=[board], anchors=[anchor])
+    restored = Project.model_validate_json(project.model_dump_json())
+    ensure_standard_project(restored)
+    part = restored.modules[0]
+    assert part.board_face_outline == profile
+    assert (part.board_face_width_mm, part.board_face_height_mm) == (345, 210)
+    assert build_standard_module(part, standard_module_values(part, board)).board_face_outline == profile
+    drawing = DrawingGenerator().build_module(restored, part)
+    x, y = zip(*drawing.board_view.outline.points)
+    assert (max(x) - min(x), max(y) - min(y)) == (345, 210)
+    with pytest.raises(ValueError, match=r"M1.*类型 1"):
+        build_standard_row(dict(values, thickness_mm="60"), board_face_profile=profile)
 
 
 def test_welded_diamond_type_survives_unified_input_normalization():
@@ -288,7 +316,8 @@ def test_standard_details_include_new_manufacturing_fields():
     assert "数量：84 Pcs" in text
     assert "容重：220 kg/m³" in text
     assert "7、25胶管，12厘夹板" in text
-    assert "8、备注：现场复核" in text
+    assert "8、现场复核" in text
+    assert "备注：" not in text
 
 
 def test_custom_type_labels_survive_project_json_and_appear_in_details():
@@ -551,6 +580,35 @@ def test_long_module_details_line_up_with_geometry_on_the_left():
     document = DrawingGenerator().generate(Project(modules=[item]))
     placed, = document.pages[0].modules
     assert detail_box(placed)[0] == pytest.approx(placed.content_x_mm)
+
+
+def test_tall_board_face_keeps_first_angle_clearance_from_upper_views():
+    item = build_standard_module(None, StandardModuleValues("M1", 300, 300, 450))
+    board = build_standard_board(None, item.module_id, True)
+    drawing = DrawingGenerator().generate(
+        Project(modules=[item], boards=[board])
+    ).pages[0].modules[0].drawing
+
+    top_bottom = top_view_bottom_mm(drawing)
+    front_bounds = view_visual_bounds(drawing.front_view)
+    board_bounds = view_visual_bounds(drawing.board_view)
+    upper_low = top_bottom + front_bounds[1] * VIEW_SCALE
+    lower_high = BOARD_VIEW_BOTTOM_MM + board_bounds[3] * VIEW_SCALE
+
+    assert top_bottom > TOP_VIEW_BOTTOM_MM
+    assert upper_low - lower_high >= VIEW_VERTICAL_GAP_MM
+
+
+@pytest.mark.parametrize(("source", "role"), [
+    ("CENTER2", "center"),
+    ("SLD-中心线", "center"),
+    ("DASHDOT", "center"),
+    ("DASHED", "hidden"),
+    ("HIDDEN2", "hidden"),
+    ("CONTINUOUS", "continuous"),
+])
+def test_anchor_linetype_roles_are_distinct(source, role):
+    assert linetype_role(source) == role
 
 
 @pytest.mark.parametrize(("board_exists", "label"), [(True, "夹板"), (False, "无夹板")])

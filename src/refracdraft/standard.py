@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 import re
 
 from refracdraft.domain.models import (
     AnchorParameters,
     AnchorType,
+    BoardFaceProfile,
     BoardParameters,
     GeometryType,
     LayoutMode,
@@ -13,6 +15,7 @@ from refracdraft.domain.models import (
     Project,
     StructureType,
 )
+from refracdraft.drawing.board_profiles import build_board_profile
 
 
 @dataclass(frozen=True)
@@ -33,6 +36,7 @@ class StandardModuleValues:
     source_note: str = ""
     structure_type: StructureType = StructureType.FOLDED
     custom_structure_label: str = ""
+    board_face_profile: BoardFaceProfile | None = None
 
 
 @dataclass(frozen=True)
@@ -52,7 +56,7 @@ class StandardAnchorValues:
 
 
 def _positive(value: float | None, label: str, module_id: str) -> float:
-    if value is None or value <= 0:
+    if value is None or not isfinite(value) or value <= 0:
         raise ValueError(f"{module_id}: {label}必须大于 0")
     return float(value)
 
@@ -92,6 +96,11 @@ def build_standard_module(
     length = _positive(values.length_mm, "长度", module_id)
     expansion = _positive(values.expansion_length_mm, "膨胀长度", module_id)
     thickness = _positive(values.thickness_mm, "厚度", module_id)
+    if values.board_face_profile is not None:
+        try:
+            build_board_profile(length, thickness, values.board_face_profile)
+        except ValueError as exc:
+            raise ValueError(f"{module_id}: {exc}") from exc
     data = base.model_dump(mode="python") if base else {}
     data.update(
         module_id=module_id,
@@ -110,7 +119,7 @@ def build_standard_module(
         board_face_height_mm=thickness,
         board_face_template_id="rectangular",
         front_outline=None,
-        board_face_outline=None,
+        board_face_outline=values.board_face_profile,
     )
     if not values.taper_enabled:
         data.update(
@@ -253,7 +262,10 @@ def standard_module_values(
         big = small = None
     return StandardModuleValues(
         module_id=module.module_id,
-        length_mm=module.front_width_mm,
+        length_mm=(
+            module.board_face_width_mm
+            if isinstance(module.board_face_outline, BoardFaceProfile) else module.front_width_mm
+        ),
         expansion_length_mm=(big if taper else module.expansion_length_mm or module.front_height_mm),
         thickness_mm=module.board_face_height_mm,
         taper_enabled=taper,
@@ -268,6 +280,9 @@ def standard_module_values(
         source_note=module.source_note,
         structure_type=module.structure_type,
         custom_structure_label=module.custom_structure_label,
+        board_face_profile=(
+            module.board_face_outline if isinstance(module.board_face_outline, BoardFaceProfile) else None
+        ),
     )
 
 
@@ -300,15 +315,17 @@ def standard_anchor_values(anchor: AnchorParameters) -> StandardAnchorValues:
 
 
 def ensure_standard_project(project: Project) -> None:
-    """Reject irregular module outlines in the Standard edition."""
+    """Accept parameterized board cuts and the supported front and side views."""
     for module in project.modules:
         if (
             module.front_outline is not None
-            or module.board_face_outline is not None
+            or (
+                module.board_face_outline is not None
+                and not isinstance(module.board_face_outline, BoardFaceProfile)
+            )
             or module.board_face_template_id != "rectangular"
         ):
             raise ValueError(
-                f"{module.module_id}: 标准版只支持普通矩形、正敲和侧敲；"
-                "不接受异形轮廓或异形夹板面模板"
+                f"{module.module_id}: 标准版仅支持「异形模块」中的夹板面异形预设"
             )
 

@@ -15,10 +15,10 @@ from refracdraft.drawing.layout import (
     SIDE_VIEW_GAP_MM,
     SEPARATOR_BOTTOM_MM,
     SEPARATOR_TOP_MM,
-    TOP_VIEW_BOTTOM_MM,
     detail_box,
+    top_view_bottom_mm,
 )
-from refracdraft.drawing.model import DrawingDocument, ViewDrawing
+from refracdraft.drawing.model import DrawingDocument, ViewDrawing, linetype_role
 
 
 LAYER_COLORS = {
@@ -94,15 +94,16 @@ def _resolve_linetype(doc, linetype: str | None) -> str | None:
         return None
     if name in doc.linetypes:
         return name
-    if "CENTER" in name or "中心" in name:
+    role = linetype_role(name)
+    if role == "center":
         return "CENTER2"
-    if "DASH" in name or "虚线" in name:
+    if role == "hidden":
         return "DASHED"
     return None
 
 
 def _add_polyline(msp, points, closed=True, layer="OUTLINE", color=None, lineweight=None,
-                  linetype=None, linetype_scale=None):
+                  linetype=None, linetype_scale=None, bulges=()):
     if len(points) >= 2:
         attrs = {"layer": layer}
         if color is not None:
@@ -114,7 +115,13 @@ def _add_polyline(msp, points, closed=True, layer="OUTLINE", color=None, linewei
             attrs["linetype"] = resolved_linetype
             if linetype_scale is not None:
                 attrs["ltscale"] = float(linetype_scale)
-        msp.add_lwpolyline(points, close=closed, dxfattribs=attrs)
+        if any(bulges):
+            msp.add_lwpolyline(
+                [(x, y, bulge) for (x, y), bulge in zip(points, bulges)],
+                format="xyb", close=closed, dxfattribs=attrs,
+            )
+        else:
+            msp.add_lwpolyline(points, close=closed, dxfattribs=attrs)
 
 
 def _ensure_anchor_linetypes(doc) -> None:
@@ -171,7 +178,7 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
         lineweight = view.anchor_symbol_lineweights[symbol_index] if symbol_index < len(view.anchor_symbol_lineweights) else 22
         linetype = view.anchor_symbol_linetypes[symbol_index] if symbol_index < len(view.anchor_symbol_linetypes) else None
         _add_polyline(msp, pts, symbol.closed, "ANCHORS", color=aci, lineweight=lineweight,
-                      linetype=linetype, linetype_scale=1.0)
+                      linetype=linetype, linetype_scale=1.0, bulges=symbol.bulges)
     for x, y in view.anchor_points:
         cx, cy = ox + x * scale, oy + y * scale
         if view.anchor_marker_style == "target":
@@ -255,9 +262,10 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
             drawing = placed.drawing
             px = placed.content_x_mm * MODEL_SCALE
             scale = 1.0
+            top_bottom = top_view_bottom_mm(drawing) * MODEL_SCALE
             if drawing.side_view:
                 front_w = drawing.front_view.outline.bounds[2] - drawing.front_view.outline.bounds[0]
-                front_y = page_y + TOP_VIEW_BOTTOM_MM * MODEL_SCALE
+                front_y = page_y + top_bottom
                 _add_view(msp, drawing.front_view, (px, front_y), drawing.module_id, scale)
                 _add_view(
                     msp,
@@ -270,7 +278,7 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
                 _add_view(
                     msp,
                     drawing.front_view,
-                    (px, page_y + TOP_VIEW_BOTTOM_MM * MODEL_SCALE),
+                    (px, page_y + top_bottom),
                     drawing.module_id,
                     scale,
                 )

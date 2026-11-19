@@ -26,12 +26,13 @@ from refracdraft.drawing.layout import (
     SEPARATOR_BOTTOM_MM,
     SEPARATOR_TOP_MM,
     SIDE_VIEW_GAP_MM,
-    TOP_VIEW_BOTTOM_MM,
     VIEW_SCALE,
     detail_box,
     outline_width,
+    top_view_bottom_mm,
 )
 from refracdraft.exporters.dxf import export_dxf
+from refracdraft.drawing.model import linetype_role
 from refracdraft.exporters.pdf import export_pdf
 from refracdraft.importers.excel import import_project_xlsx
 from refracdraft.reference.library import ReferenceLibrary
@@ -128,18 +129,19 @@ class DrawingPreview(QGraphicsView):
         scene.addRect(168.5, 172, 121.5, 31, QPen(QColor("#111111"), 0.2), QBrush(Qt.BrushStyle.NoBrush))
         for placed in page.modules:
             drawing, px = placed.drawing, placed.content_x_mm
+            top_bottom = top_view_bottom_mm(drawing)
             if drawing.side_view:
                 fw = outline_width(drawing.front_view)
-                self._draw_view(scene, drawing.front_view, (px, TOP_VIEW_BOTTOM_MM), drawing.module_id, VIEW_SCALE)
+                self._draw_view(scene, drawing.front_view, (px, top_bottom), drawing.module_id, VIEW_SCALE)
                 self._draw_view(
                     scene,
                     drawing.side_view,
-                    (px + fw + SIDE_VIEW_GAP_MM, TOP_VIEW_BOTTOM_MM),
+                    (px + fw + SIDE_VIEW_GAP_MM, top_bottom),
                     drawing.module_id,
                     VIEW_SCALE,
                 )
             else:
-                self._draw_view(scene, drawing.front_view, (px, TOP_VIEW_BOTTOM_MM), drawing.module_id, VIEW_SCALE)
+                self._draw_view(scene, drawing.front_view, (px, top_bottom), drawing.module_id, VIEW_SCALE)
             self._draw_view(
                 scene,
                 drawing.board_view,
@@ -218,13 +220,16 @@ class DrawingPreview(QGraphicsView):
         aci_colors = {1: "#ff0000", 2: "#ffff00", 3: "#00ff00", 4: "#00ffff", 5: "#0000ff",
                       6: "#ff00ff", 7: "#111111", 8: "#808080", 9: "#c0c0c0"}
         for symbol_index, symbol in enumerate(view.anchor_symbols):
-            p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in symbol.points]
+            p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in symbol.flattened_points()]
             aci = view.anchor_symbol_colors[symbol_index] if symbol_index < len(view.anchor_symbol_colors) else 5
             lineweight = view.anchor_symbol_lineweights[symbol_index] if symbol_index < len(view.anchor_symbol_lineweights) else 22
             linetype = view.anchor_symbol_linetypes[symbol_index] if symbol_index < len(view.anchor_symbol_linetypes) else "CONTINUOUS"
             pen = QPen(QColor(aci_colors.get(aci, "#111111")), lineweight / 100.0)
-            if any(token in linetype.upper() for token in ("CENTER", "DASH", "HIDDEN")):
-                pen.setDashPattern([16.0, 3.0, 3.0, 3.0])
+            role = linetype_role(linetype)
+            if role == "center":
+                pen.setDashPattern([9.0, 2.0, 1.0, 2.0])
+            elif role == "hidden":
+                pen.setDashPattern([5.0, 2.5])
             for a, b in zip(p, p[1:] + ([p[0]] if symbol.closed else [])):
                 scene.addLine(a[0], a[1], b[0], b[1], pen)
         for x, y in view.anchor_points:

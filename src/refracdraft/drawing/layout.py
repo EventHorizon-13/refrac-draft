@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from refracdraft.drawing.model import ModuleDrawing, PlacedModule
+from refracdraft.drawing.model import ModuleDrawing, PlacedModule, ViewDrawing
 
 
 VIEW_SCALE = 0.0992
 SIDE_VIEW_GAP_MM = 14.0
 TOP_VIEW_BOTTOM_MM = 150.0
 BOARD_VIEW_BOTTOM_MM = 106.17
+VIEW_VERTICAL_GAP_MM = 10.0
+VIEW_ANNOTATION_PADDING_MM = 1.5
 PAGE_HEIGHT_MM = 210.0
 PAGE_LEFT_MM = 7.0
 PAGE_CONTENT_WIDTH_MM = 283.0
@@ -27,6 +29,55 @@ DIMENSION_TEXT_SIZE_MM = 3.2
 DETAIL_LINE_SPACING = 0.76
 DETAIL_LINE_HEIGHT_MM = DETAIL_TEXT_SIZE_MM * (5 / 3) * DETAIL_LINE_SPACING
 DETAIL_TOP_MM = 94.0
+def view_visual_bounds(view: ViewDrawing) -> tuple[float, float, float, float]:
+    """Return local model-space bounds including visible linework and dimensions."""
+    min_x, min_y, max_x, max_y = view.outline.bounds
+
+    def include(points) -> None:
+        nonlocal min_x, min_y, max_x, max_y
+        for x, y in points:
+            min_x = min(min_x, x)
+            min_y = min(min_y, y)
+            max_x = max(max_x, x)
+            max_y = max(max_y, y)
+
+    for line in (*view.internal_lines, *view.cutouts, *view.anchor_symbols):
+        include(line.flattened_points())
+
+    for dimension in view.dimensions:
+        x1, y1 = dimension.start
+        x2, y2 = dimension.end
+        include(((x1, y1), (x2, y2)))
+        if dimension.orientation == "horizontal":
+            dimension_y = max(y1, y2) + dimension.offset
+            include(((x1, dimension_y), (x2, dimension_y)))
+        else:
+            dimension_x = min(x1, x2) - dimension.offset
+            include(((dimension_x, y1), (dimension_x, y2)))
+    return min_x, min_y, max_x, max_y
+
+
+def top_view_bottom_mm(drawing: ModuleDrawing) -> float:
+    """Place the first-angle upper views with clear space above the board face."""
+    top_views = (drawing.front_view,) if drawing.side_view is None else (
+        drawing.front_view,
+        drawing.side_view,
+    )
+    top_bounds = tuple(view_visual_bounds(view) for view in top_views)
+    top_min_y = min(bounds[1] for bounds in top_bounds)
+    top_max_y = max(bounds[3] for bounds in top_bounds)
+    board_top = BOARD_VIEW_BOTTOM_MM + view_visual_bounds(drawing.board_view)[3] * VIEW_SCALE
+    required_bottom = (
+        board_top
+        + VIEW_VERTICAL_GAP_MM
+        + VIEW_ANNOTATION_PADDING_MM * 2.0
+        - top_min_y * VIEW_SCALE
+    )
+    bottom = max(TOP_VIEW_BOTTOM_MM, required_bottom)
+    upper_limit = PAGE_HEIGHT_MM - FRAME_INSET_MM
+    if bottom + top_max_y * VIEW_SCALE + VIEW_ANNOTATION_PADDING_MM > upper_limit:
+        raise ValueError(f"{drawing.module_id}: 第一角法视图超出 A4 图框，请增大图幅或减小模块高度")
+    return bottom
 
 
 def outline_width(view) -> float:

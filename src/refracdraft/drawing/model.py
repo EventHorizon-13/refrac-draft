@@ -5,6 +5,16 @@ from dataclasses import dataclass, field
 from refracdraft.geometry.primitives import Polyline
 
 
+def linetype_role(value: str | None) -> str:
+    """Classify source linetypes into continuous, hidden and centre linework."""
+    name = (value or "").upper()
+    if any(token in name for token in ("DASHDOT", "CENTER", "中心", "点划")):
+        return "center"
+    if any(token in name for token in ("DASH", "HIDDEN", "隐藏", "虚线")):
+        return "hidden"
+    return "continuous"
+
+
 @dataclass(frozen=True)
 class Dimension:
     start: tuple[float, float]

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,7 +8,7 @@ import re
 
 import pymupdf
 from PySide6.QtCore import (
-    QEvent, QEventLoop, QRect, QRegularExpression, QSettings, QSignalBlocker,
+    QEvent, QEventLoop, QPersistentModelIndex, QRect, QRegularExpression, QSettings, QSignalBlocker,
     QStandardPaths, Qt, Signal,
 )
 from PySide6.QtGui import (
@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
 from refracdraft.domain.models import (
     AnchorParameters,
     AnchorType,
+    BoardFaceProfile,
     BoardParameters,
     ModuleParameters,
     Project,
@@ -68,18 +69,30 @@ from refracdraft.release import app_version
 from refracdraft.resources import application_directory
 from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.standard import ensure_standard_project
-from refracdraft.standard_sheet import COLUMN_SPECS, DEFAULT_ROW, build_standard_row, row_values_from_models
+from refracdraft.standard_sheet import (
+    COLUMN_SPECS, DEFAULT_ROW, build_standard_row, row_values_from_models, standard_board_face_bounds,
+)
 from refracdraft.ui.about import AboutDialog
+from refracdraft.ui.board_face_dialog import BoardFaceDialog
 from refracdraft.ui.main_window import DrawingPreview, MainWindow, PageSpinBox
+
+
+@dataclass(frozen=True)
+class RowBase:
+    models: tuple[ModuleParameters | None, BoardParameters | None, AnchorParameters | None] = (
+        None, None, None,
+    )
+    profile: BoardFaceProfile | None = None
 
 
 @dataclass(frozen=True)
 class TableState:
     rows: tuple[dict[str, str | bool], ...]
-    bases: tuple[object, ...]
+    bases: tuple[RowBase, ...]
 
 
 COLUMN_INDEX = {spec.key: index for index, spec in enumerate(COLUMN_SPECS)}
+PROFILE_COLUMN = len(COLUMN_SPECS)
 COLUMN_BY_KEY = {spec.key: spec for spec in COLUMN_SPECS}
 TAPER_SETTING_KEYS = ("big_head_mm", "small_head_mm", "taper_type")
 ANCHOR_SETTING_KEYS = (
@@ -148,6 +161,8 @@ class ParameterDelegate(QStyledItemDelegate):
         super().__init__(parent)
 
     def createEditor(self, parent: QWidget, option, index):
+        if index.column() == PROFILE_COLUMN:
+            return None
         spec = COLUMN_SPECS[index.column()]
         if spec.kind == "check":
             return None
@@ -197,6 +212,9 @@ class ParameterDelegate(QStyledItemDelegate):
         editor.setGeometry(option.rect)
 
     def paint(self, painter, option, index):
+        if index.column() == PROFILE_COLUMN:
+            super().paint(painter, option, index)
+            return
         spec = COLUMN_SPECS[index.column()]
         item = self.parent().item(index.row(), index.column())
         background = (
@@ -250,7 +268,7 @@ class ParameterTable(QTableWidget):
     rowsRequired = Signal(int)
 
     def __init__(self, parent: QWidget | None = None):
-        super().__init__(0, len(COLUMN_SPECS), parent)
+        super().__init__(0, PROFILE_COLUMN + 1, parent)
         self._fill_source: tuple[int, int, int, int] | None = None
         self._fill_target: tuple[int, int] | None = None
         self._fill_dragging = False
@@ -269,7 +287,7 @@ class ParameterTable(QTableWidget):
 
     def _visible_selected_range(self) -> tuple[int, int, int, int] | None:
         indexes = [index for index in self.selectionModel().selectedIndexes()
-                   if not self.isColumnHidden(index.column())]
+                   if index.column() != PROFILE_COLUMN and not self.isColumnHidden(index.column())]
         if not indexes:
             return None
         rows = [index.row() for index in indexes]
@@ -323,7 +341,7 @@ class ParameterTable(QTableWidget):
     def _show_cell_menu(self, row: int, column: int) -> None:
         self._preset_list.hide()
         item = self.item(row, column)
-        if item is None or not (item.flags() & Qt.ItemFlag.ItemIsEnabled):
+        if column == PROFILE_COLUMN or item is None or not (item.flags() & Qt.ItemFlag.ItemIsEnabled):
             return
         spec = COLUMN_SPECS[column]
         if not spec.options:
@@ -405,7 +423,7 @@ class ParameterTable(QTableWidget):
                 self.viewport().setCursor(Qt.CursorShape.SizeFDiagCursor)
                 event.accept()
                 return
-            if target.isValid():
+            if target.isValid() and target.column() != PROFILE_COLUMN:
                 item = self.item(target.row(), target.column())
                 spec = COLUMN_SPECS[target.column()]
                 if item is not None and item.flags() & Qt.ItemFlag.ItemIsEnabled and spec.kind == "check":
@@ -425,7 +443,10 @@ class ParameterTable(QTableWidget):
 
     def mouseDoubleClickEvent(self, event) -> None:
         target = self.indexAt(event.position().toPoint())
-        if event.button() == Qt.MouseButton.LeftButton and target.isValid():
+        if (
+            event.button() == Qt.MouseButton.LeftButton and target.isValid()
+            and target.column() != PROFILE_COLUMN
+        ):
             spec = COLUMN_SPECS[target.column()]
             item = self.item(target.row(), target.column())
             if spec.options and item is not None and item.flags() & Qt.ItemFlag.ItemIsEditable:
@@ -441,7 +462,7 @@ class ParameterTable(QTableWidget):
     def mouseMoveEvent(self, event) -> None:
         if self._fill_dragging:
             target = self.indexAt(event.position().toPoint())
-            if target.isValid() and not self.isColumnHidden(target.column()):
+            if target.isValid() and target.column() != PROFILE_COLUMN and not self.isColumnHidden(target.column()):
                 self._fill_target = (target.row(), target.column())
                 self.viewport().update()
             event.accept()
@@ -456,7 +477,7 @@ class ParameterTable(QTableWidget):
         if self._fill_dragging and event.button() == Qt.MouseButton.LeftButton:
             if self._fill_source and self._fill_target:
                 target = self.indexAt(event.position().toPoint())
-                if target.isValid():
+                if target.isValid() and target.column() != PROFILE_COLUMN:
                     self._fill_target = (target.row(), target.column())
                     self._apply_fill(self._fill_source, self._fill_target)
             self._fill_dragging = False
@@ -569,9 +590,9 @@ class ParameterTable(QTableWidget):
             return
         start_row = max(0, self.currentRow())
         start_column = max(0, self.currentColumn())
-        while start_column < self.columnCount() and self.isColumnHidden(start_column):
+        while start_column < PROFILE_COLUMN and self.isColumnHidden(start_column):
             start_column += 1
-        if start_column >= self.columnCount():
+        if start_column >= PROFILE_COLUMN:
             return
         missing_rows = start_row + len(matrix) - self.rowCount()
         if missing_rows > 0:
@@ -584,10 +605,10 @@ class ParameterTable(QTableWidget):
                     break
                 visible_columns = [
                     column
-                    for column in range(start_column, self.columnCount())
+                    for column in range(start_column, PROFILE_COLUMN)
                     if not self.isColumnHidden(column)
                 ]
-                all_columns = list(range(start_column, self.columnCount()))
+                all_columns = list(range(start_column, PROFILE_COLUMN))
                 columns = all_columns if len(values) > len(visible_columns) else visible_columns
                 column_index = 0
                 for value in values:
@@ -614,6 +635,7 @@ class ParameterTable(QTableWidget):
 class StandardWindow(MainWindow):
     def __init__(self):
         self._preview_pdf: tuple[str | None, bytes] | None = None
+        self._drawing_dirty = False
         self._settings = QSettings("EventHorizon", "RefracDraft Standard")
         self._history_ready = False
         self._history_restoring = False
@@ -627,9 +649,7 @@ class StandardWindow(MainWindow):
         self.statusBar().showMessage("修改参数后点击「预览」；可拖动选区右下角批量填充。")
 
     def _build_ui(self) -> None:
-        self._row_bases: list[
-            tuple[ModuleParameters | None, BoardParameters | None, AnchorParameters | None]
-        ] = []
+        self._row_bases: list[RowBase] = []
         self._updating_table = False
 
         toolbar = QToolBar("主工具栏")
@@ -687,7 +707,9 @@ class StandardWindow(MainWindow):
         self.tables = {"modules": self.parameter_table}
         table = self.parameter_table
         table.setObjectName("moduleParameterTable")
-        table.setHorizontalHeaderLabels([spec.label for spec in COLUMN_SPECS])
+        table.setHorizontalHeaderLabels([spec.label for spec in COLUMN_SPECS] + ["夹板面轮廓"])
+        table.setColumnWidth(PROFILE_COLUMN, 111)
+        table.horizontalHeader().moveSection(PROFILE_COLUMN, COLUMN_INDEX["thickness_mm"] + 1)
         table.setItemDelegate(ParameterDelegate(table))
         table.setAlternatingRowColors(True)
         table.setWordWrap(False)
@@ -947,7 +969,7 @@ class StandardWindow(MainWindow):
             candidate = f"{base}-{index}"
         return candidate
 
-    def _write_row(self, row: int, values: dict[str, str | bool]) -> None:
+    def _write_row(self, row: int, values: dict[str, str | bool], profile: BoardFaceProfile | None) -> None:
         table = self.parameter_table
         for column, spec in enumerate(COLUMN_SPECS):
             value = values.get(spec.key, DEFAULT_ROW.get(spec.key, ""))
@@ -974,6 +996,38 @@ class StandardWindow(MainWindow):
                 )
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             table.setItem(row, column, item)
+        button = QPushButton()
+        button.setObjectName("boardFaceProfileButton")
+        self._set_profile_button(button, profile)
+        index = QPersistentModelIndex(table.model().index(row, PROFILE_COLUMN))
+        button.clicked.connect(lambda: self._edit_board_face(index.row(), button))
+        table.setCellWidget(row, PROFILE_COLUMN, button)
+
+    @staticmethod
+    def _set_profile_button(button: QPushButton, profile: BoardFaceProfile | None) -> None:
+        button.setText("异形模块 ✓" if profile is not None else "异形模块…")
+        button.setToolTip("编辑夹板面轮廓")
+
+    def _edit_board_face(self, row: int, button: QPushButton) -> None:
+        if not 0 <= row < len(self._row_bases):
+            return
+        self.parameter_table.setCurrentCell(row, COLUMN_INDEX["module_id"])
+        values = self._sheet_values(row)
+        try:
+            width, height = standard_board_face_bounds(values)
+        except ValueError as exc:
+            QMessageBox.warning(self, "请先填写有效的外尺寸", str(exc))
+            return
+        base = self._row_bases[row]
+        dialog = BoardFaceDialog(str(values["module_id"]) or f"第 {row + 1} 行", width, height, base.profile, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.profile != base.profile:
+            self._row_bases[row] = replace(base, profile=dialog.profile)
+            self._set_profile_button(button, dialog.profile)
+            self._record_history()
+            self.statusBar().showMessage("夹板面轮廓已修改，点击「预览」更新图纸。")
+        dialog.deleteLater()
+        self.activateWindow()
+        self.parameter_table.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _sheet_values(self, row: int) -> dict[str, str | bool]:
         values: dict[str, str | bool] = {}
@@ -992,11 +1046,11 @@ class StandardWindow(MainWindow):
         source: tuple[ModuleParameters, BoardParameters, AnchorParameters] | None = None,
     ) -> int:
         table = self.parameter_table
-        base: tuple[ModuleParameters | None, BoardParameters | None, AnchorParameters | None]
         if source is not None:
             module, board, anchor = source
             values = row_values_from_models(module, board, anchor)
-            base = source
+            profile = module.board_face_outline
+            base = RowBase(source, profile if isinstance(profile, BoardFaceProfile) else None)
         elif table.rowCount():
             values = self._sheet_values(table.rowCount() - 1)
             used = {
@@ -1005,17 +1059,17 @@ class StandardWindow(MainWindow):
             }
             base_id = str(values.get("module_id", "M1")).strip() or "M1"
             values["module_id"] = self._next_unique_module_id(base_id, used)
-            base = (None, None, None)
+            base = RowBase(profile=self._row_bases[-1].profile)
         else:
             values = dict(DEFAULT_ROW)
-            base = (None, None, None)
+            base = RowBase()
 
         row = table.rowCount()
         self._updating_table = True
         table.blockSignals(True)
         try:
             table.insertRow(row)
-            self._write_row(row, values)
+            self._write_row(row, values, base.profile)
             self._row_bases.append(base)
         finally:
             table.blockSignals(False)
@@ -1149,7 +1203,7 @@ class StandardWindow(MainWindow):
         rows = tuple(self._sheet_values(row) for row in range(self.parameter_table.rowCount()))
         bases = list(self._row_bases[: self.parameter_table.rowCount()])
         while len(bases) < len(rows):
-            bases.append((None, None, None))
+            bases.append(RowBase())
         return TableState(rows=rows, bases=tuple(bases))
 
     def _reset_history(self) -> None:
@@ -1167,6 +1221,7 @@ class StandardWindow(MainWindow):
             return
         if current == self._history_state:
             return
+        self._drawing_dirty = True
         self._undo_stack.append(self._history_state)
         if len(self._undo_stack) > 100:
             self._undo_stack.pop(0)
@@ -1190,8 +1245,8 @@ class StandardWindow(MainWindow):
             self._row_bases.clear()
             for row, values in enumerate(state.rows):
                 table.insertRow(row)
-                self._write_row(row, values)
-                base = state.bases[row] if row < len(state.bases) else (None, None, None)
+                base = state.bases[row]
+                self._write_row(row, values, base.profile)
                 self._row_bases.append(base)
         finally:
             table.blockSignals(False)
@@ -1200,6 +1255,7 @@ class StandardWindow(MainWindow):
         self._update_row_count()
         self._update_conditional_states()
         self._history_state = state
+        self._drawing_dirty = True
         self._refresh_history_actions()
 
     def undo(self) -> None:
@@ -1356,7 +1412,8 @@ class StandardWindow(MainWindow):
         self._reset_history()
 
     def _build_project_row(self, row: int) -> tuple[ModuleParameters, BoardParameters, AnchorParameters]:
-        return build_standard_row(self._sheet_values(row), self._row_bases[row])
+        base = self._row_bases[row]
+        return build_standard_row(self._sheet_values(row), base.models, board_face_profile=base.profile)
 
     def _collect_project(self) -> Project:
         modules: list[ModuleParameters] = []
@@ -1391,6 +1448,7 @@ class StandardWindow(MainWindow):
                     if count < module_count else "正在排版…"
                 ),
             )
+            self._drawing_dirty = False
             self._preview_pdf = None
             progress.bar.setMaximum(module_count + len(self.drawing_document.pages) + 5)
             progress.advance("正在准备 PDF 预览…")
@@ -1445,9 +1503,9 @@ class StandardWindow(MainWindow):
         )
 
     def export_dxf_file(self) -> None:
-        if not self.drawing_document:
+        if self._drawing_dirty or not self.drawing_document:
             self.generate()
-        if not self.drawing_document:
+        if self._drawing_dirty or not self.drawing_document:
             return
         path = self._output_target(".dxf")
         if path is None:
@@ -1467,9 +1525,9 @@ class StandardWindow(MainWindow):
             progress.deleteLater()
 
     def export_pdf_file(self) -> None:
-        if not self.drawing_document:
+        if self._drawing_dirty or not self.drawing_document:
             self.generate()
-        if not self.drawing_document:
+        if self._drawing_dirty or not self.drawing_document:
             return
         path = self._output_target(".pdf")
         if path is None:
