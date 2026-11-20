@@ -477,6 +477,8 @@ class MainWindow(QMainWindow):
                         if not anchor.custom_type_label
                     },
                 }
+                if not project.standard_auto_fields:
+                    excluded["standard_auto_fields"] = True
                 path.parent.mkdir(parents=True, exist_ok=True)
                 data = project.model_dump_json(indent=2, exclude=excluded).encode("utf-8")
                 output = QSaveFile(str(path))

@@ -23,7 +23,10 @@ def export_standard_excel(project: Project, path: Path) -> None:
     ws.freeze_panes = "B2"
     profile_sheet = None
     for module in project.modules:
-        row = row_values_from_models(module, project.board_for(module.module_id), project.anchor_for(module.module_id))
+        row = row_values_from_models(
+            module, project.board_for(module.module_id), project.anchor_for(module.module_id),
+            automatic=project.standard_auto_fields.get(module.module_id, ()),
+        )
         ws.append([row[spec.key] for spec in COLUMN_SPECS])
         for cell in ws[ws.max_row]:
             if cell.data_type == "f":
@@ -63,7 +66,8 @@ def export_complete_project(
         stage = Path(directory)
         files = project_output_paths(stage / base_path.name)
         progress("正在写入 JSON 和 Excel…")
-        files["json"].write_text(project.model_dump_json(indent=2), encoding="utf-8")
+        excluded = {"standard_auto_fields"} if not project.standard_auto_fields else None
+        files["json"].write_text(project.model_dump_json(indent=2, exclude=excluded), encoding="utf-8")
         export_standard_excel(project, files["xlsx"])
         progress("正在生成 DXF…")
         export_dxf(drawing, files["dxf"], reference_dxf)

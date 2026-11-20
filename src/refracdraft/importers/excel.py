@@ -10,7 +10,9 @@ from openpyxl import load_workbook
 from refracdraft.domain.models import (
     AnchorParameters, BoardFaceFeature, BoardFaceProfile, BoardParameters, GeometryType, ModuleParameters, Project,
 )
-from refracdraft.standard_sheet import COLUMN_SPECS, DEFAULT_ROW, PROFILE_COLUMNS, PROFILE_SHEET, build_standard_row
+from refracdraft.standard_sheet import (
+    COLUMN_SPECS, DEFAULT_ROW, PROFILE_COLUMNS, PROFILE_SHEET, automatic_fields, build_standard_row,
+)
 
 
 SHEET_ALIASES = {
@@ -212,6 +214,7 @@ def _import_standard_sheet(ws, headers: list[str], profiles: dict[str, BoardFace
     modules = []
     boards = []
     anchors = []
+    auto_fields = {}
     for number, cells in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
         if not any(value is not None and value != "" for value in cells):
             continue
@@ -232,12 +235,15 @@ def _import_standard_sheet(ws, headers: list[str], profiles: dict[str, BoardFace
         modules.append(module)
         boards.append(board)
         anchors.append(anchor)
+        fields = automatic_fields(values)
+        if fields:
+            auto_fields[module.module_id] = fields
     if not modules:
         raise ValueError("「标准版」工作表没有模块数据")
     missing = profiles.keys() - {module.module_id for module in modules}
     if missing:
         raise ValueError(f"「{PROFILE_SHEET}」包含未知模块：{'，'.join(sorted(missing))}")
-    return Project(modules=modules, boards=boards, anchors=anchors)
+    return Project(modules=modules, boards=boards, anchors=anchors, standard_auto_fields=auto_fields)
 
 
 def _import_legacy_sheets(wb) -> Project:

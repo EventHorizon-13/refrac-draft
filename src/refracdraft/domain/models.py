@@ -247,6 +247,7 @@ class Project(BaseModel):
     modules: list[ModuleParameters] = Field(default_factory=list)
     boards: list[BoardParameters] = Field(default_factory=list)
     anchors: list[AnchorParameters] = Field(default_factory=list)
+    standard_auto_fields: dict[str, list[str]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_relations(self) -> "Project":

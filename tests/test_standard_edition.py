@@ -6,6 +6,7 @@ import pymupdf
 from openpyxl import Workbook, load_workbook
 
 from refracdraft.drawing.generator import DrawingGenerator, _anchor_positions, _balanced_page_groups, _details
+from refracdraft.drawing.model import DrawingDocument
 from refracdraft.drawing.layout import (
     DETAIL_LINE_SPACING,
     DETAIL_TEXT_SIZE_MM,
@@ -54,7 +55,9 @@ from refracdraft.exporters.pdf import (
 )
 from refracdraft.exporters.project import export_standard_excel
 from refracdraft.release import latest_portable_release
-from refracdraft.standard_sheet import COLUMN_SPECS, DEFAULT_ROW, build_standard_row
+from refracdraft.standard_sheet import (
+    AUTOMATIC, AUTOMATIC_FIELDS, COLUMN_SPECS, DEFAULT_ROW, build_standard_row,
+)
 from refracdraft.standard import (
     StandardAnchorValues,
     StandardModuleValues,
@@ -615,7 +618,9 @@ def test_1120_pair_uses_balanced_below_view_details_when_full_stack_fits(tmp_pat
         build_standard_row(
             dict(DEFAULT_ROW, module_id=f"M{index}", length_mm=str(length), thickness_mm="300",
                  expansion_length_mm=str(height), anchor_enabled=True, anchor_count=str(index),
-                 anchor_position_mm="150", anchor_spacing_mm="300", source_note="普通模块示例"),
+                 anchor_position_mm="150", anchor_spacing_mm="300",
+                 anchor_type="旁插" if index == 1 else "M型", thread_spec="M8" if index == 1 else "M10",
+                 source_note="" if index == 1 else "普通模块示例"),
             board_face_profile=BoardFaceProfile.model_validate({"features": [feature]}),
         )
         for index, length, height, feature in (
@@ -624,10 +629,18 @@ def test_1120_pair_uses_balanced_below_view_details_when_full_stack_fits(tmp_pat
         )
     ]
     modules, boards, anchors = map(list, zip(*rows))
-    document = DrawingGenerator().generate(Project(modules=modules, boards=boards, anchors=anchors))
-    page, = document.pages
+    remaining = import_project_xlsx("examples/standard_example_6_modules.xlsx")
+    document = DrawingGenerator().generate(Project(
+        modules=modules + remaining.modules[2:], boards=boards + remaining.boards[2:],
+        anchors=anchors + remaining.anchors[2:],
+    ))
+    assert [[placed.drawing.module_id for placed in page.modules] for page in document.pages] == [
+        ["M1", "M2"], ["M3", "M4"], ["M5", "M6"],
+    ]
+    page = document.pages[0]
     assert [placed.drawing.module_id for placed in page.modules] == ["M1", "M2"]
-    output = export_dxf(document, tmp_path / "below-view-details.dxf")
+    assert "木板开口" in page.modules[0].drawing.details[-1]
+    output = export_dxf(DrawingDocument(document.project_name, (page,)), tmp_path / "below-view-details.dxf")
     details = list(ezdxf.readfile(output).modelspace().query("MTEXT"))
     ceiling = PAGE_HEIGHT_MM - FRAME_INSET_MM - 2
     floor = TITLE_BLOCK_TOP_MM + DETAIL_TITLE_CLEARANCE_MM
@@ -648,6 +661,51 @@ def test_1120_pair_uses_balanced_below_view_details_when_full_stack_fits(tmp_pat
         assert text_bottom >= floor
         assert ceiling - (layout.top_y + front_top) == pytest.approx(text_bottom - floor)
     assert detail_box(page.modules[1])[0] == pytest.approx(page.modules[1].content_x_mm)
+
+
+@pytest.mark.parametrize(
+    ("length", "density", "thread", "fold", "board_mm", "hose"),
+    [(600, 192, "M8", StructureType.FOLDED, 8, "25胶管"),
+     (601, 193, "M10", StructureType.HALF_FOLDED, 9, "32胶管")],
+)
+def test_standard_associations_keep_manual_choices_and_roundtrip(
+    tmp_path, length, density, thread, fold, board_mm, hose,
+):
+    values = dict(DEFAULT_ROW, **dict.fromkeys(AUTOMATIC_FIELDS, AUTOMATIC))
+    values.update(length_mm=str(length), density_kg_m3=str(density), material="1430",
+                  thread_spec=thread, anchor_enabled=True, expansion_length_mm="300")
+    module, board, anchor = build_standard_row(values)
+    assert (module.structure_type, board.thickness_mm, anchor.material, anchor.hose_spec, anchor.length_mm) == (
+        fold, board_mm, "310", hose, 240,
+    )
+    values.update(structure_type="层叠", board_material="12厘", anchor_material="309", hose_spec="40",
+                  anchor_length_mm="233.5")
+    manual_module, manual_board, manual_anchor = build_standard_row(values)
+    assert (manual_module.structure_type, manual_board.thickness_mm, manual_anchor.material,
+            manual_anchor.hose_spec, manual_anchor.length_mm) == (StructureType.STACKED, 12, "309", "40胶管", 233.5)
+    project = Project(modules=[module], boards=[board], anchors=[anchor],
+                      standard_auto_fields={"M1": list(AUTOMATIC_FIELDS)})
+    path = tmp_path / "standard-auto.xlsx"
+    export_standard_excel(project, path)
+    restored = import_project_xlsx(path)
+    assert restored.standard_auto_fields == project.standard_auto_fields
+    assert restored.modules[0].structure_type == fold
+    assert restored.anchors[0].length_mm == 240
+    assert Project.model_validate_json(project.model_dump_json()).standard_auto_fields == project.standard_auto_fields
+
+
+@pytest.mark.parametrize(
+    ("anchor_type", "taper", "height", "expected"),
+    [("M型", "侧敲", 320, 182), ("M型", "正敲", 310, 255), ("M型", "", 350, 295),
+     ("旁插", "侧敲", 320, 180), ("快插", "", 460, 410), ("快插", "", 400, 350)],
+)
+def test_standard_automatic_anchor_lengths_use_installation_height(anchor_type, taper, height, expected):
+    values = dict(DEFAULT_ROW, length_mm="600", expansion_length_mm=str(height), taper_enabled=bool(taper),
+                  taper_type=taper, big_head_mm=str(height), small_head_mm="190", anchor_enabled=True,
+                  anchor_type=anchor_type, anchor_position_mm="60", anchor_spacing_mm="300",
+                  anchor_count="2", anchor_length_mm=AUTOMATIC)
+    _, _, anchor = build_standard_row(values)
+    assert anchor.length_mm == pytest.approx(expected)
 
 
 def test_tall_1120_style_pair_bottom_aligns_details_beside_the_views(tmp_path):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from math import isfinite
 
@@ -24,6 +25,11 @@ PROFILE_SHEET = "异形参数"
 PROFILE_COLUMNS = ("编号", "类型", "a", "b", "c", "d", "旋转角度", "镜像")
 PIN_DIAMETERS = ("8", "6", "5")
 HOSE_SPECS = ("25", "32")
+AUTOMATIC = "自动"
+AUTOMATIC_FIELDS = ("structure_type", "board_material", "anchor_material", "hose_spec", "anchor_length_mm")
+M_ANCHOR_LENGTHS = (240, 220, 200, 180, 150, 120)
+INSERT_ANCHOR_LENGTHS = (450, 400, 350, 250)
+INSERT_ANCHOR_LABELS = frozenset({AnchorType.SIDE_INSERT.value, AnchorType.QUICK_INSERT.value})
 
 ANCHOR_TYPES = (
     ("M型", AnchorType.M_SHAPE),
@@ -90,7 +96,7 @@ COLUMN_SPECS = (
         82,
         "anchor",
     ),
-    ColumnSpec("anchor_length_mm", "锚固件长度", "number", (), 72, "anchor"),
+    ColumnSpec("anchor_length_mm", "锚固件长度", "number", tuple(map(str, M_ANCHOR_LENGTHS)), 82, "anchor"),
     ColumnSpec("anchor_material", "材质", "combo", ANCHOR_MATERIALS, 60, "anchor"),
     ColumnSpec("thread_spec", "螺栓", "combo", THREAD_SPECS, 60, "anchor"),
     ColumnSpec("pin_diameter_mm", "插针", "number", PIN_DIAMETERS, 54, "anchor"),
@@ -176,10 +182,88 @@ def _hose_value(value: str) -> str:
     return f"{text}胶管"
 
 
+def automatic_fields(values: dict[str, str | bool]) -> list[str]:
+    return [key for key in AUTOMATIC_FIELDS if values.get(key) in ("", AUTOMATIC)]
+
+
+def anchor_length_options(anchor_type: str) -> tuple[str, ...]:
+    if anchor_type in INSERT_ANCHOR_LABELS:
+        return tuple(map(str, INSERT_ANCHOR_LENGTHS + M_ANCHOR_LENGTHS))
+    if anchor_type in ("M型", AnchorType.M_SHAPE.value):
+        return tuple(map(str, M_ANCHOR_LENGTHS))
+    return ()
+
+
+def _input_number(value: str | bool) -> float | None:
+    try:
+        parsed = float(str(value).strip().replace(",", ""))
+    except ValueError:
+        return None
+    return parsed if isfinite(parsed) and parsed > 0 else None
+
+
+def _automatic_anchor_length(values: dict[str, str | bool], length: float | None) -> str:
+    tapered = bool(values["taper_enabled"])
+    height = _input_number(values["big_head_mm"] if tapered else values["expansion_length_mm"])
+    if height is None:
+        return ""
+    front_taper = tapered and values["taper_type"] == GeometryType.FRONT_TAPER.value
+    if front_taper:
+        small = _input_number(values["small_head_mm"])
+        start = _input_number(values["anchor_position_mm"])
+        spacing = _input_number(values["anchor_spacing_mm"])
+        count = _input_number(values["anchor_count"])
+        if (length is None or small is None or small >= height or start is None
+                or spacing is None or count is None or not count.is_integer()):
+            return ""
+        end = start + spacing * (count - 1)
+        if end > length:
+            return ""
+        # The standard editor places the big head at x=0. A common length must fit the shortest section.
+        height -= (height - small) * end / length
+
+    anchor_type = str(values["anchor_type"]).strip()
+    if anchor_type in INSERT_ANCHOR_LABELS:
+        target = round(height - 50, 2)
+        if target < 250:
+            target = next((size for size in M_ANCHOR_LENGTHS if size <= target), target)
+    elif front_taper:
+        target = round(height - 60, 2)
+    elif anchor_type in ("M型", AnchorType.M_SHAPE.value):
+        target = next((size for size in M_ANCHOR_LENGTHS if height - 60 <= size <= height - 50),
+                      round(height - 55, 2))
+    else:
+        target = round(height - 55, 2)
+    return f"{target:g}" if target > 0 else ""
+
+
+def resolve_automatic_values(
+    values: dict[str, str | bool],
+) -> dict[str, str]:
+    fields = automatic_fields(values)
+    if not fields:
+        return {}
+    length = _input_number(values["length_mm"])
+    density = _input_number(values["density_kg_m3"])
+    grade = _input_number(_without_suffix(str(values["material"]), "材质", "板材"))
+    thread = str(values["thread_spec"]).strip().upper()
+    suggestions = {
+        "structure_type": "半折叠" if length is not None and length > 600 else "折叠",
+        "board_material": "8厘" if density is not None and density <= 192 else str(DEFAULT_ROW["board_material"]),
+        "anchor_material": "310" if grade is not None and grade >= 1430 else str(DEFAULT_ROW["anchor_material"]),
+        "hose_spec": {"M10": "32", "M8": "25"}.get(thread, str(DEFAULT_ROW["hose_spec"])),
+    }
+    if "anchor_length_mm" in fields:
+        suggestions["anchor_length_mm"] = _automatic_anchor_length(values, length)
+    return {key: suggestions[key] for key in fields}
+
+
 def row_values_from_models(
     module: ModuleParameters,
     board: BoardParameters | None,
     anchor: AnchorParameters | None,
+    *,
+    automatic: Collection[str] = (),
 ) -> dict[str, str | bool]:
     board_model = board or BoardParameters(module_id=module.module_id, exists=False)
     anchor_model = anchor or AnchorParameters(
@@ -190,7 +274,7 @@ def row_values_from_models(
     )
     module_values = standard_module_values(module, board_model)
     anchor_values = standard_anchor_values(anchor_model)
-    return {
+    values = {
         "module_id": module_values.module_id,
         "length_mm": str(module_values.length_mm).removesuffix(".0"),
         "expansion_length_mm": f"{module_values.expansion_length_mm:g}",
@@ -231,6 +315,8 @@ def row_values_from_models(
         ),
         "source_note": module_values.source_note,
     }
+    values.update({key: AUTOMATIC for key in AUTOMATIC_FIELDS if key in automatic})
+    return values
 
 def standard_board_face_bounds(values: dict[str, str | bool]) -> tuple[float, float]:
     module_id = str(values["module_id"]).strip()
@@ -251,6 +337,8 @@ def build_standard_row(
     module_id = str(values["module_id"]).strip()
     if not module_id:
         raise ValueError("模块编号不能为空")
+    base_module, base_board, base_anchor = bases
+    values = {**values, **resolve_automatic_values(values)}
     length, thickness = standard_board_face_bounds(values)
     structure_label = str(values["structure_type"]).strip()
     tapered = bool(values["taper_enabled"])
@@ -281,7 +369,6 @@ def build_standard_row(
         source_note=str(values["source_note"]).strip(),
         board_face_profile=board_face_profile,
     )
-    base_module, base_board, base_anchor = bases
     module = build_standard_module(base_module, module_values)
     board = build_standard_board(
         base_board,
@@ -289,6 +376,8 @@ def build_standard_row(
         module_values.board_exists,
         module_values.board_material,
     )
+    if bool(values["anchor_enabled"]) and not str(values["anchor_length_mm"]).strip():
+        raise ValueError(f"{module_id}: 无法自动计算锚固件长度，请核对尺寸、位置与间距，或输入自定义长度")
     anchor = build_standard_anchor(
         base_anchor,
         module.module_id,

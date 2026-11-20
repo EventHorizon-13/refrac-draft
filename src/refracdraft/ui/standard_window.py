@@ -71,7 +71,8 @@ from refracdraft.resources import application_directory
 from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.standard import ensure_standard_project
 from refracdraft.standard_sheet import (
-    COLUMN_SPECS, DEFAULT_ROW, build_standard_row, row_values_from_models, standard_board_face_bounds,
+    AUTOMATIC, AUTOMATIC_FIELDS, COLUMN_SPECS, DEFAULT_ROW, anchor_length_options, automatic_fields,
+    build_standard_row, resolve_automatic_values, row_values_from_models, standard_board_face_bounds,
 )
 from refracdraft.ui.about import AboutDialog
 from refracdraft.ui.board_face_dialog import BoardFaceDialog
@@ -95,6 +96,7 @@ class TableState:
 COLUMN_INDEX = {spec.key: index for index, spec in enumerate(COLUMN_SPECS)}
 PROFILE_COLUMN = len(COLUMN_SPECS)
 COLUMN_BY_KEY = {spec.key: spec for spec in COLUMN_SPECS}
+AUTOMATIC_PREVIEW_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 TAPER_SETTING_KEYS = ("big_head_mm", "small_head_mm", "taper_type")
 ANCHOR_SETTING_KEYS = (
     "anchor_position_mm",
@@ -202,12 +204,23 @@ class ParameterDelegate(QStyledItemDelegate):
     def setEditorData(self, editor, index) -> None:
         value = index.data(Qt.ItemDataRole.DisplayRole) or ""
         if isinstance(editor, QLineEdit):
+            if value == AUTOMATIC:
+                value = index.data(AUTOMATIC_PREVIEW_ROLE) or ""
             editor.setText(str(value))
             editor.selectAll()
 
     def setModelData(self, editor, model, index) -> None:
         if isinstance(editor, QLineEdit):
+            if index.data(Qt.ItemDataRole.EditRole) == AUTOMATIC and not editor.isModified():
+                return
             model.setData(index, editor.text(), Qt.ItemDataRole.EditRole)
+
+    def initStyleOption(self, option, index) -> None:
+        super().initStyleOption(option, index)
+        suggestion = index.data(AUTOMATIC_PREVIEW_ROLE)
+        if suggestion and index.data(Qt.ItemDataRole.DisplayRole) == AUTOMATIC:
+            option.text = str(suggestion)
+            option.font.setItalic(True)
 
     def updateEditorGeometry(self, editor, option, index) -> None:
         editor.setGeometry(option.rect)
@@ -350,7 +363,12 @@ class ParameterTable(QTableWidget):
         choices = self._preset_list
         choices.clear()
         current = item.text().strip()
-        for option in spec.options:
+        options = spec.options
+        if spec.key == "anchor_length_mm":
+            options = anchor_length_options(self.item(row, COLUMN_INDEX["anchor_type"]).text())
+        if spec.key in AUTOMATIC_FIELDS:
+            options = (AUTOMATIC,) + options
+        for option in options:
             if option == "自定义":
                 continue
             entry = QListWidgetItem(option, choices)
@@ -1068,7 +1086,9 @@ class StandardWindow(MainWindow):
         table = self.parameter_table
         if source is not None:
             module, board, anchor = source
-            values = row_values_from_models(module, board, anchor)
+            values = row_values_from_models(
+                module, board, anchor, automatic=self.project.standard_auto_fields.get(module.module_id, ()),
+            )
             profile = module.board_face_outline
             base = RowBase(source, profile if isinstance(profile, BoardFaceProfile) else None)
         elif table.rowCount():
@@ -1082,6 +1102,7 @@ class StandardWindow(MainWindow):
             base = RowBase(profile=self._row_bases[-1].profile)
         else:
             values = dict(DEFAULT_ROW)
+            values.update(dict.fromkeys(AUTOMATIC_FIELDS, AUTOMATIC))
             base = RowBase()
 
         row = table.rowCount()
@@ -1216,6 +1237,14 @@ class StandardWindow(MainWindow):
                     self._set_cell_enabled(row, key, enabled)
                 if taper:
                     self._sync_expansion_length(row)
+                suggestions = resolve_automatic_values(self._sheet_values(row))
+                for key in AUTOMATIC_FIELDS:
+                    item = table.item(row, COLUMN_INDEX[key])
+                    if not item.text().strip():
+                        item.setText(AUTOMATIC)
+                    suggestion = suggestions.get(key)
+                    item.setData(AUTOMATIC_PREVIEW_ROLE, suggestion)
+                    item.setToolTip(f"自动计算 · {suggestion or '待填写参数'}" if key in suggestions else "")
         finally:
             self._updating_table = was_updating
 
@@ -1325,10 +1354,11 @@ class StandardWindow(MainWindow):
 
         dialog = QInputDialog(self)
         dialog.setWindowTitle(f"修改整列 - {spec.label}")
-        hint = "，".join(spec.options) if spec.options else "输入任意自定义内容"
+        options = (AUTOMATIC,) + spec.options if spec.key in AUTOMATIC_FIELDS else spec.options
+        hint = "，".join(options) if options else "输入任意自定义内容"
         dialog.setLabelText(f"将第 {column + 1} 列设置为：\n{hint}")
-        if spec.options:
-            dialog.setComboBoxItems(list(spec.options))
+        if options:
+            dialog.setComboBoxItems(list(options))
             dialog.setComboBoxEditable(True)
         table.blockSignals(True)
         try:
@@ -1439,16 +1469,21 @@ class StandardWindow(MainWindow):
         modules: list[ModuleParameters] = []
         boards: list[BoardParameters] = []
         anchors: list[AnchorParameters] = []
+        auto_fields = {}
         for row in range(self.parameter_table.rowCount()):
             module, board, anchor = self._build_project_row(row)
             modules.append(module)
             boards.append(board)
             anchors.append(anchor)
+            fields = automatic_fields(self._sheet_values(row))
+            if fields:
+                auto_fields[module.module_id] = fields
         project = Project(
             metadata=self.project.metadata,
             modules=modules,
             boards=boards,
             anchors=anchors,
+            standard_auto_fields=auto_fields,
         )
         ensure_standard_project(project)
         return project
