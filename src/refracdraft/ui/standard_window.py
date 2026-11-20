@@ -65,7 +65,7 @@ from refracdraft.domain.models import (
 from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import export_pdf
-from refracdraft.exporters.project import export_complete_project
+from refracdraft.exporters.project import export_complete_project, project_output_paths
 from refracdraft.release import app_version
 from refracdraft.resources import application_directory
 from refracdraft.reference.library import ReferenceLibrary
@@ -940,7 +940,7 @@ class StandardWindow(MainWindow):
             return
         directory = self.output_directory_edit.text().strip() or "当前工作目录"
         stem = self._filename_stem()
-        self.output_path_label.setText(f"{directory}\n{stem}.json  /  {stem}.dxf  /  {stem}.pdf  /  {stem}.zip")
+        self.output_path_label.setText(f"{directory}\n{stem}.json  /  {stem}.xlsx  /  {stem}.dxf  /  {stem}.pdf")
 
     def _output_target(self, suffix: str) -> Path | None:
         self._save_output_settings()
@@ -1576,9 +1576,18 @@ class StandardWindow(MainWindow):
             progress.deleteLater()
 
     def export_project_file(self) -> None:
-        path = self._output_target(".zip")
-        if path is None:
-            return
+        self._save_output_settings()
+        path = self._default_output_directory() / self._filename_stem()
+        existing = [file.name for file in project_output_paths(path).values() if file.exists()]
+        if existing:
+            names = "\n".join(existing)
+            answer = QMessageBox.question(
+                self, "覆盖文件", f"以下文件已存在，是否覆盖？\n{names}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         progress = OperationProgress(self, "正在整理项目参数…", 6)
         try:
             project = self._collect_project()
@@ -1591,7 +1600,7 @@ class StandardWindow(MainWindow):
             export_complete_project(project, drawing, path, reference_dxf=reference,
                                     font_directory=self._pdf_font_directory(), progress=progress.advance)
             progress.finish("完整项目已导出")
-            self.statusBar().showMessage(f"完整项目已导出：{path}")
+            self.statusBar().showMessage(f"完整项目已导出到：{path.parent}")
         except Exception as exc:
             progress.hide()
             QMessageBox.critical(self, "完整项目导出失败", str(exc))

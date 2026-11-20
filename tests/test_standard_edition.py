@@ -14,7 +14,6 @@ from refracdraft.drawing.layout import (
     detail_box,
     detail_top,
     details_width,
-    outline_width,
     view_bounds,
 )
 from refracdraft.domain.models import (
@@ -580,13 +579,13 @@ def test_short_module_details_are_centered_on_views(tmp_path):
     assert detail.dxf.width == pytest.approx(width * 10)
 
 
-def test_long_two_view_module_details_are_centered_on_views():
-    item = build_standard_module(None, StandardModuleValues("M1", 351, 300, 230))
+@pytest.mark.parametrize("length", [351, 600, 900])
+def test_long_two_view_module_details_follow_outline_left_edge(length):
+    item = build_standard_module(None, StandardModuleValues("M1", length, 300, 230))
     document = DrawingGenerator().generate(Project(modules=[item]))
     placed, = document.pages[0].modules
     left, _ = detail_box(placed)
-    center = placed.content_x_mm + outline_width(placed.drawing.front_view) / 2
-    assert left + details_width(placed.drawing) / 2 == pytest.approx(center)
+    assert left == pytest.approx(placed.content_x_mm)
 
 
 def test_tall_1120_style_pair_puts_details_beside_the_views():
@@ -624,6 +623,41 @@ def test_exported_standard_excel_round_trips_ordered_cuts_and_literal_text(tmp_p
     restored, = import_project_xlsx(path).modules
     assert (restored.module_id, restored.source_note) == ("=M1", "=复核")
     assert restored.board_face_outline == profile
+
+
+def test_complete_project_outputs_four_files_and_rolls_back_on_publish_failure(tmp_path, monkeypatch):
+    from refracdraft.exporters import project as exporter
+
+    part = build_standard_module(None, StandardModuleValues("M1", 300, 300, 230))
+    project = Project(modules=[part])
+    drawing = DrawingGenerator().generate(project)
+    base = tmp_path / "项目.v2"
+    paths = exporter.project_output_paths(base)
+
+    def dxf(_drawing, path, _reference):
+        path.write_bytes(b"DXF")
+
+    def pdf(_drawing, path, *, dxf_path, **kwargs):
+        assert dxf_path.read_bytes() == b"DXF"
+        path.write_bytes(b"PDF")
+
+    monkeypatch.setattr(exporter, "export_dxf", dxf)
+    monkeypatch.setattr(exporter, "export_pdf", pdf)
+    exporter.export_complete_project(project, drawing, base, progress=lambda _: None)
+    assert set(tmp_path.iterdir()) == set(paths.values())
+    for target in paths.values():
+        target.write_bytes(b"previous")
+    replace = Path.replace
+
+    def locked_pdf(source, target):
+        if target == paths["pdf"]:
+            raise PermissionError("PDF in use")
+        return replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", locked_pdf)
+    with pytest.raises(PermissionError, match="PDF in use"):
+        exporter.export_complete_project(project, drawing, base, progress=lambda _: None)
+    assert all(path.read_bytes() == b"previous" for path in paths.values())
 
 
 @pytest.mark.parametrize(("board_exists", "label"), [(True, "夹板"), (False, "无夹板")])

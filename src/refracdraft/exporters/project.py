@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import ExitStack
 from pathlib import Path
+from shutil import copy2
 from tempfile import TemporaryDirectory
-from zipfile import ZIP_DEFLATED, ZipFile
 
 from openpyxl import Workbook
 
@@ -43,28 +44,41 @@ def export_standard_excel(project: Project, path: Path) -> None:
     wb.save(path)
 
 
+def project_output_paths(base_path: Path) -> dict[str, Path]:
+    return {ext: base_path.parent / f"{base_path.name}.{ext}" for ext in ("json", "xlsx", "dxf", "pdf")}
+
+
 def export_complete_project(
     project: Project,
     drawing: DrawingDocument,
-    path: Path,
+    base_path: Path,
     *,
     reference_dxf: Path | None = None,
     font_directory: str | None = None,
     progress: Callable[[str], None],
 ) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(prefix="refracdraft-project-", dir=path.parent) as directory:
+    targets = project_output_paths(base_path)
+    base_path.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix="refracdraft-project-", dir=base_path.parent) as directory:
         stage = Path(directory)
-        files = {ext: stage / f"{path.stem}.{ext}" for ext in ("json", "xlsx", "dxf", "pdf")}
+        files = project_output_paths(stage / base_path.name)
         progress("正在写入 JSON 和 Excel…")
         files["json"].write_text(project.model_dump_json(indent=2), encoding="utf-8")
         export_standard_excel(project, files["xlsx"])
         progress("正在生成 DXF…")
         export_dxf(drawing, files["dxf"], reference_dxf)
         export_pdf(drawing, files["pdf"], dxf_path=files["dxf"], font_directory=font_directory, progress=progress)
-        progress("正在打包完整项目…")
-        archive = stage / path.name
-        with ZipFile(archive, "w", compression=ZIP_DEFLATED) as zip_file:
-            for file in files.values():
-                zip_file.write(file, arcname=file.name)
-        archive.replace(path)
+        progress("正在保存四个项目文件…")
+        backup_dir = stage / "previous"
+        backup_dir.mkdir()
+        with ExitStack() as rollback:
+            for ext, target in targets.items():
+                if target.exists():
+                    backup = backup_dir / f"{ext}.backup"
+                    copy2(target, backup)
+                    files[ext].replace(target)
+                    rollback.callback(backup.replace, target)
+                else:
+                    files[ext].replace(target)
+                    rollback.callback(target.unlink, missing_ok=True)
+            rollback.pop_all()
