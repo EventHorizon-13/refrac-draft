@@ -33,7 +33,13 @@ from refracdraft.domain.models import (
 from refracdraft.importers.excel import _normalize_row, import_project_xlsx
 from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.exporters.dxf import export_dxf
-from refracdraft.exporters.pdf import PDF_FONT_CANDIDATES, _find_pdf_font, _render_page, _single_page_dxf
+from refracdraft.exporters.pdf import (
+    PDF_FONT_CANDIDATES,
+    _find_pdf_font,
+    _fix_shx_page_scale,
+    _render_page,
+    _single_page_dxf,
+)
 from refracdraft.exporters.project import export_standard_excel
 from refracdraft.release import latest_portable_release
 from refracdraft.standard_sheet import COLUMN_SPECS, DEFAULT_ROW, build_standard_row
@@ -832,6 +838,26 @@ def test_pdf_prefers_bundled_song_font_to_system_font(monkeypatch):
     system_font = Path(r"C:\Windows\Fonts\simsun.ttc")
     monkeypatch.setattr(Path, "is_file", lambda path: path in (bundled_song, system_font))
     assert _find_pdf_font() == bundled_song
+
+
+def test_shx_pdf_keeps_full_a4_frame_when_renderer_zooms_to_module():
+    with pymupdf.open() as doc:
+        page = doc.new_page(width=297 * 72 / 25.4, height=210 * 72 / 25.4)
+        page.draw_rect(pymupdf.Rect(0, 0, 1, 1))
+        stream, = page.get_contents()
+        doc.update_stream(stream, (
+            b"q\n0.4766134803702599 0 0 0.4766134803702599 215.5269738327779 -367.9554320440735 cm\n"
+            b"60 2040 m 2910 2040 l 2910 60 l 60 60 l h S\n"
+            b"1687 60 m 1687 370 l 2910 370 l S\nQ\n"
+        ))
+        assert page.get_drawings()[0]["rect"].x1 > page.rect.x1
+
+        _fix_shx_page_scale(page)
+
+        frame, title = (path["rect"] for path in page.get_drawings())
+        points_per_mm = 72 / 25.4
+        assert tuple(frame) == pytest.approx(tuple(n * points_per_mm for n in (6, 6, 291, 204)), abs=0.001)
+        assert frame.contains(title)
 
 
 def test_pdf_render_skips_layers_with_plot_disabled():

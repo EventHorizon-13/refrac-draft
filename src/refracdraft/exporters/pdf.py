@@ -245,6 +245,29 @@ def _single_page_dxf(
     return target
 
 
+_PDF_NUMBER = rb"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
+_SHX_PAGE_TRANSFORM = re.compile(rb"\A\s*q\s+(" + rb"\s+".join([_PDF_NUMBER] * 6) + rb")\s+cm\b")
+
+
+def _fix_shx_page_scale(page: pymupdf.Page) -> None:
+    """Keep the model-space A4 origin and scale even if MLightCAD fits the artwork."""
+    for xref in page.get_contents():
+        stream = page.parent.xref_stream(xref)
+        transform = _SHX_PAGE_TRANSFORM.match(stream)
+        if transform is None:
+            continue
+        sx, skew_y, skew_x, sy, _, _ = map(float, transform[1].split())
+        if sx <= 0 or sx != sy or skew_x or skew_y:
+            break
+        scale = 72 / 25.4 / MODEL_SCALE
+        fixed = f"{scale:.12f} 0 0 {scale:.12f} 0 0".encode("ascii")
+        # Change the vector stream before merging so off-page content can be recovered.
+        start, end = transform.span(1)
+        page.parent.update_stream(xref, stream[:start] + fixed + stream[end:])
+        return
+    raise RuntimeError("无法确认 SHX PDF 的图纸比例")
+
+
 def _export_pdf_with_shx(
     document: DrawingDocument,
     output_path: Path,
@@ -306,6 +329,7 @@ def _export_pdf_with_shx(
         if not page_pdf.is_file() or page_pdf.stat().st_size < 8:
             raise RuntimeError("PDF 渲染器没有生成有效文件")
         with pymupdf.open(page_pdf) as one_page:
+            _fix_shx_page_scale(one_page[0])
             merged.insert_pdf(one_page)
 
     merged.set_metadata(
