@@ -182,7 +182,8 @@ def _panel_inner_margin(drawing: ModuleDrawing) -> float:
 
 def panel_content_left(drawing: ModuleDrawing, panel_width: float, content_width: float) -> float:
     if _side_details(drawing):
-        return _panel_inner_margin(drawing)
+        left = min(view_bounds(drawing.front_view)[0], view_bounds(drawing.board_view)[0])
+        return max(_panel_inner_margin(drawing), 1.0 - left)
     left, _, right, _ = drawing.front_view.outline.bounds
     if right - left > CENTERED_MODULE_MAX_LENGTH_MM:
         content_width = max(geometry_width(drawing), details_width(drawing))
