@@ -16,21 +16,18 @@ from PySide6.QtWidgets import (
 
 from refracdraft.domain.models import Project
 from refracdraft.drawing.generator import DrawingGenerator
+from refracdraft.drawing.model import linetype_role
 from refracdraft.drawing.layout import (
-    BOARD_VIEW_BOTTOM_MM,
     DETAIL_LINE_HEIGHT_MM,
     DETAIL_TEXT_SIZE_MM,
-    DETAIL_TOP_MM,
     DIMENSION_ARROW_SIZE_MM,
     DIMENSION_TEXT_SIZE_MM,
     PAGE_HEIGHT_MM,
     SEPARATOR_BOTTOM_MM,
     SEPARATOR_TOP_MM,
-    SIDE_VIEW_GAP_MM,
-    TOP_VIEW_BOTTOM_MM,
     VIEW_SCALE,
     detail_box,
-    outline_width,
+    view_placement,
 )
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import export_pdf
@@ -129,22 +126,20 @@ class DrawingPreview(QGraphicsView):
         scene.addRect(168.5, 172, 121.5, 31, QPen(QColor("#111111"), 0.2), QBrush(Qt.BrushStyle.NoBrush))
         for placed in page.modules:
             drawing, px = placed.drawing, placed.content_x_mm
+            placement = view_placement(drawing)
+            self._draw_view(scene, drawing.front_view, (px, placement.top_y), drawing.module_id, VIEW_SCALE)
             if drawing.side_view:
-                fw = outline_width(drawing.front_view)
-                self._draw_view(scene, drawing.front_view, (px, TOP_VIEW_BOTTOM_MM), drawing.module_id, VIEW_SCALE)
                 self._draw_view(
                     scene,
                     drawing.side_view,
-                    (px + fw + SIDE_VIEW_GAP_MM, TOP_VIEW_BOTTOM_MM),
+                    (px + placement.side_x, placement.top_y),
                     drawing.module_id,
                     VIEW_SCALE,
                 )
-            else:
-                self._draw_view(scene, drawing.front_view, (px, TOP_VIEW_BOTTOM_MM), drawing.module_id, VIEW_SCALE)
             self._draw_view(
                 scene,
                 drawing.board_view,
-                (px, BOARD_VIEW_BOTTOM_MM),
+                (px, placement.board_y),
                 drawing.module_id,
                 VIEW_SCALE,
             )
@@ -155,6 +150,7 @@ class DrawingPreview(QGraphicsView):
                     "\n".join(drawing.details),
                     left,
                     available_width,
+                    placement.detail_y,
                 )
         self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
@@ -173,7 +169,7 @@ class DrawingPreview(QGraphicsView):
         item.setPos(x, 210 - y - size)
         return item
 
-    def _add_multiline_text(self, scene, text, x, max_width):
+    def _add_multiline_text(self, scene, text, x, max_width, top):
         item = scene.addText(text)
         font = QFont(self.font())
         font.setPixelSize(100)
@@ -191,7 +187,7 @@ class DrawingPreview(QGraphicsView):
         cursor.mergeBlockFormat(block)
         item.setTextWidth(max_width / scale)
         item.setScale(scale)
-        item.setPos(x, PAGE_HEIGHT_MM - DETAIL_TOP_MM)
+        item.setPos(x, PAGE_HEIGHT_MM - top)
 
     def _draw_view(self, scene, view, origin, module_id, scale):
         ox, oy = origin
@@ -230,8 +226,11 @@ class DrawingPreview(QGraphicsView):
             lineweight = view.anchor_symbol_lineweights[symbol_index] if symbol_index < len(view.anchor_symbol_lineweights) else 22
             linetype = view.anchor_symbol_linetypes[symbol_index] if symbol_index < len(view.anchor_symbol_linetypes) else "CONTINUOUS"
             pen = QPen(QColor(aci_colors.get(aci, "#111111")), lineweight / 100.0)
-            if any(token in linetype.upper() for token in ("CENTER", "DASH", "HIDDEN")):
+            role = linetype_role(linetype)
+            if role == "center":
                 pen.setDashPattern([16.0, 3.0, 3.0, 3.0])
+            elif role == "hidden":
+                pen.setDashPattern([9.2, 4.6])
             for a, b in zip(p, p[1:] + ([p[0]] if symbol.closed else [])):
                 scene.addLine(a[0], a[1], b[0], b[1], pen)
         for x, y in view.anchor_points:

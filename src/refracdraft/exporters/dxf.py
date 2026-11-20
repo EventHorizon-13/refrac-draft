@@ -7,19 +7,16 @@ from ezdxf.addons.importer import Importer
 from ezdxf.enums import TextEntityAlignment
 
 from refracdraft.drawing.layout import (
-    BOARD_VIEW_BOTTOM_MM,
     DETAIL_LINE_SPACING,
     DETAIL_TEXT_SIZE_MM,
-    DETAIL_TOP_MM,
     DIMENSION_ARROW_SIZE_MM,
     DIMENSION_TEXT_SIZE_MM,
-    SIDE_VIEW_GAP_MM,
     SEPARATOR_BOTTOM_MM,
     SEPARATOR_TOP_MM,
-    TOP_VIEW_BOTTOM_MM,
     detail_box,
+    view_placement,
 )
-from refracdraft.drawing.model import DrawingDocument, ViewDrawing
+from refracdraft.drawing.model import DrawingDocument, ViewDrawing, linetype_role
 
 
 LAYER_COLORS = {
@@ -94,11 +91,7 @@ def _resolve_linetype(doc, linetype: str | None) -> str | None:
         return None
     if name in doc.linetypes:
         return name
-    if "CENTER" in name or "中心" in name:
-        return "CENTER2"
-    if "DASH" in name or "虚线" in name:
-        return "DASHED"
-    return None
+    return {"center": "CENTER2", "hidden": "HIDDEN"}.get(linetype_role(name))
 
 
 def _add_polyline(msp, points, closed=True, layer="OUTLINE", color=None, lineweight=None,
@@ -265,29 +258,21 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
             drawing = placed.drawing
             px = placed.content_x_mm * MODEL_SCALE
             scale = 1.0
+            placement = view_placement(drawing)
+            front_y = page_y + placement.top_y * MODEL_SCALE
+            _add_view(msp, drawing.front_view, (px, front_y), drawing.module_id, scale)
             if drawing.side_view:
-                front_w = drawing.front_view.outline.bounds[2] - drawing.front_view.outline.bounds[0]
-                front_y = page_y + TOP_VIEW_BOTTOM_MM * MODEL_SCALE
-                _add_view(msp, drawing.front_view, (px, front_y), drawing.module_id, scale)
                 _add_view(
                     msp,
                     drawing.side_view,
-                    (px + front_w + SIDE_VIEW_GAP_MM * MODEL_SCALE, front_y),
-                    drawing.module_id,
-                    scale,
-                )
-            else:
-                _add_view(
-                    msp,
-                    drawing.front_view,
-                    (px, page_y + TOP_VIEW_BOTTOM_MM * MODEL_SCALE),
+                    (px + placement.side_x * MODEL_SCALE, front_y),
                     drawing.module_id,
                     scale,
                 )
             _add_view(
                 msp,
                 drawing.board_view,
-                (px, page_y + BOARD_VIEW_BOTTOM_MM * MODEL_SCALE),
+                (px, page_y + placement.board_y * MODEL_SCALE),
                 drawing.module_id,
                 scale,
             )
@@ -296,7 +281,7 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
                 msp.add_mtext(
                     r"\P".join(drawing.details),
                     dxfattribs={
-                        "insert": (left * MODEL_SCALE, page_y + DETAIL_TOP_MM * MODEL_SCALE),
+                        "insert": (left * MODEL_SCALE, page_y + placement.detail_y * MODEL_SCALE),
                         "char_height": DETAIL_TEXT_HEIGHT,
                         "width": available_width * MODEL_SCALE,
                         "style": TEXT_STYLE,

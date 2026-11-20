@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from refracdraft.drawing.model import ModuleDrawing, PlacedModule
+from dataclasses import dataclass
+
+from refracdraft.drawing.model import ModuleDrawing, PlacedModule, ViewDrawing
 
 
 VIEW_SCALE = 0.0992
 SIDE_VIEW_GAP_MM = 14.0
+VIEW_CLEARANCE_MM = 10.0
 TOP_VIEW_BOTTOM_MM = 150.0
 BOARD_VIEW_BOTTOM_MM = 106.17
 PAGE_HEIGHT_MM = 210.0
@@ -28,6 +31,67 @@ DIMENSION_ARROW_SIZE_MM = 1.3
 DETAIL_LINE_SPACING = 0.76
 DETAIL_LINE_HEIGHT_MM = DETAIL_TEXT_SIZE_MM * (5 / 3) * DETAIL_LINE_SPACING
 DETAIL_TOP_MM = 94.0
+ANNOTATION_CLEARANCE_MM = DIMENSION_TEXT_SIZE_MM + 1.6
+
+
+@dataclass(frozen=True)
+class ViewPlacement:
+    top_y: float
+    board_y: float
+    side_x: float
+    detail_y: float
+
+
+def view_bounds(view: ViewDrawing) -> tuple[float, float, float, float]:
+    """Conservative paper-space bounds of the visible geometry and its dimensions."""
+    geometry = (view.outline, *view.internal_lines, *view.hidden_lines, *view.anchor_symbols, *view.cutouts)
+    boxes = [line.bounds for line in geometry]
+    left = min(box[0] for box in boxes) / 10
+    bottom = min(box[1] for box in boxes) / 10
+    right = max(box[2] for box in boxes) / 10
+    top = max(box[3] for box in boxes) / 10
+    for x, y in view.anchor_points:
+        left, right = min(left, x / 10 - 1.5), max(right, x / 10 + 1.5)
+        bottom, top = min(bottom, y / 10 - 1.5), max(top, y / 10 + 1.5)
+    for dim in view.dimensions:
+        x1, y1 = (value / 10 for value in dim.start)
+        x2, y2 = (value / 10 for value in dim.end)
+        pad = max(1.6, len(dim.label) * DIMENSION_TEXT_SIZE_MM * 0.36)
+        if dim.orientation == "horizontal":
+            y = dim.line_position / 10
+            mid = (x1 + x2) / 2
+            left, right = min(left, x1, x2, mid - pad), max(right, x1, x2, mid + pad)
+            bottom, top = min(bottom, y1, y2, y - 1.2), max(top, y1, y2, y + ANNOTATION_CLEARANCE_MM)
+        else:
+            x = dim.line_position / 10
+            mid = (y1 + y2) / 2
+            left, right = min(left, x1, x2, x - ANNOTATION_CLEARANCE_MM), max(right, x1, x2, x + ANNOTATION_CLEARANCE_MM)
+            bottom, top = min(bottom, y1, y2, mid - pad), max(top, y1, y2, mid + pad)
+    return left, bottom, right, top
+
+
+def side_view_offset(drawing: ModuleDrawing) -> float:
+    if drawing.side_view is None:
+        return 0.0
+    return max(
+        drawing.front_view.outline.bounds[2] / 10 + SIDE_VIEW_GAP_MM,
+        view_bounds(drawing.front_view)[2] - view_bounds(drawing.side_view)[0] + VIEW_CLEARANCE_MM,
+    )
+
+
+def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
+    upper = [view_bounds(drawing.front_view)]
+    if drawing.side_view is not None:
+        upper.append(view_bounds(drawing.side_view))
+    upper_bottom = min(box[1] for box in upper)
+    upper_top = max(box[3] for box in upper)
+    _, board_bottom, _, board_top = view_bounds(drawing.board_view)
+    needed_top_y = BOARD_VIEW_BOTTOM_MM + board_top + VIEW_CLEARANCE_MM - upper_bottom
+    ceiling = PAGE_HEIGHT_MM - FRAME_INSET_MM - 2.0
+    top_y = min(max(TOP_VIEW_BOTTOM_MM, needed_top_y), ceiling - upper_top)
+    board_y = min(BOARD_VIEW_BOTTOM_MM, top_y + upper_bottom - VIEW_CLEARANCE_MM - board_top)
+    detail_y = min(DETAIL_TOP_MM, board_y + board_bottom - 2.0)
+    return ViewPlacement(top_y, board_y, side_view_offset(drawing), detail_y)
 
 
 def outline_width(view) -> float:
@@ -38,7 +102,7 @@ def outline_width(view) -> float:
 def top_row_width(drawing: ModuleDrawing) -> float:
     width = outline_width(drawing.front_view)
     if drawing.side_view is not None:
-        width += SIDE_VIEW_GAP_MM + outline_width(drawing.side_view)
+        width = side_view_offset(drawing) + outline_width(drawing.side_view)
     return width
 
 

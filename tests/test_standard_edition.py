@@ -309,7 +309,7 @@ def test_standard_details_include_new_manufacturing_fields():
     assert "数量：84 Pcs" in text
     assert "容重：220 kg/m³" in text
     assert "7、25胶管，12厘夹板" in text
-    assert "8、备注：现场复核" in text
+    assert "8、现场复核" in text
 
 
 def test_side_insert_adds_machining_note_without_replacing_existing_note():
@@ -319,7 +319,7 @@ def test_side_insert_adds_machining_note_without_replacing_existing_note():
     anchor = build_standard_anchor(
         None, "M1", 300, StandardAnchorValues(enabled=True, anchor_type=AnchorType.SIDE_INSERT),
     )
-    assert _details(module, board, anchor)[-1] == "8、备注：现场复核；木板开口60*110 插针隔1层毯子插"
+    assert _details(module, board, anchor)[-1] == "8、现场复核；木板开口60*110 插针隔1层毯子插"
 
 
 def test_custom_type_labels_survive_project_json_and_appear_in_details():

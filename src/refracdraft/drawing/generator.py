@@ -110,7 +110,7 @@ def _section_intersections(outline: Polyline, station: float) -> tuple[float, ..
 
 
 def _add_board_projection(view: ViewDrawing, board: Polyline) -> ViewDrawing:
-    """Project near-side corners as solid edges and far-side corners as hidden edges."""
+    """Project each edge using the exposed boundary from that view's direction."""
     left, _, right, _ = view.outline.bounds
     board_left, _, board_right, _ = board.bounds
     corners: dict[float, list[float]] = {}
@@ -122,8 +122,11 @@ def _add_board_projection(view: ViewDrawing, board: Polyline) -> ViewDrawing:
     for station, depths in sorted(corners.items()):
         x = left + (station - board_left) * (right - left) / (board_right - board_left)
         section = _section_intersections(board, station)
-        at_far_outline = view.view_type == "front" and min(depths) - section[0] < 1e-6
-        lines = visible if section[-1] - max(depths) < 1e-6 or at_far_outline else hidden
+        if view.view_type == "front":
+            exposed = min(depths) - section[0] < 1e-6
+        else:
+            exposed = section[-1] - max(depths) < 1e-6
+        lines = visible if exposed else hidden
         intersections = _section_intersections(view.outline, x)
         for bottom, top in zip(intersections, intersections[1:]):
             if top - bottom > 1e-6 and point_in_outline(view.outline, (x, (bottom + top) / 2)):
@@ -186,7 +189,7 @@ def _details(module, board, anchor) -> tuple[str, ...]:
         if not any(instruction in note for note in notes):
             notes.append(instruction)
     if notes:
-        lines.append(f"8、备注：{'；'.join(notes)}")
+        lines.append(f"8、{'；'.join(notes)}")
     return tuple(lines)
 
 
