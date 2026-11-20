@@ -10,7 +10,12 @@ from refracdraft.drawing.layout import (
     DETAIL_LINE_SPACING,
     DETAIL_TEXT_SIZE_MM,
     DIMENSION_TEXT_SIZE_MM,
+    PAGE_CONTENT_WIDTH_MM,
+    PAGE_LEFT_MM,
     PANEL_INNER_MARGIN_MM,
+    SIDE_DETAIL_GAP_MM,
+    SIDE_DETAIL_RIGHT_MARGIN_MM,
+    SIDE_PANEL_GAP_MM,
     detail_box,
     detail_line_width_factor,
     detail_lines,
@@ -617,7 +622,7 @@ def test_tall_1120_style_pair_bottom_aligns_details_beside_the_views(tmp_path):
         placed, = page.modules
         left, width = detail_box(placed)
         geometry_right = max(view_bounds(view)[2] for view in (placed.drawing.front_view, placed.drawing.board_view))
-        assert left == pytest.approx(placed.content_x_mm + geometry_right + 10)
+        assert left == pytest.approx(placed.content_x_mm + geometry_right + SIDE_DETAIL_GAP_MM)
         assert left + width < placed.x_mm + placed.panel_width_mm
         anchor_y, align_bottom = detail_vertical_anchor(placed)
         board_bottom = view_placement(placed.drawing).board_y + placed.drawing.board_view.outline.bounds[1] / 10
@@ -637,21 +642,28 @@ def test_side_details_use_the_panel_width_without_wrapping(note):
     rows = [build_standard_row(
         dict(DEFAULT_ROW, module_id=f"M{index}", length_mm=str(length), thickness_mm=str(thickness),
              expansion_length_mm=str(height), anchor_enabled=True, anchor_count=str(index),
-             anchor_position_mm="150", anchor_spacing_mm="300", source_note=note),
+             anchor_position_mm="150", anchor_spacing_mm="300", production_quantity=str(index), source_note=note),
         board_face_profile=profile if index == 1 else None,
-    ) for index, length, thickness, height in ((1, 300, 550, 300), (2, 600, 600, 350))]
+    ) for index, length, thickness, height in ((1, 300, 600, 300), (2, 600, 600, 350))]
     modules, boards, anchors = map(list, zip(*rows))
     document = DrawingGenerator().generate(Project(modules=modules, boards=boards, anchors=anchors))
-    assert len(document.pages) == 2
+    long_note = note != "普通模块示例"
+    assert len(document.pages) == (2 if long_note else 1)
+    if not long_note:
+        first, second = document.pages[0].modules
+        assert (first.drawing.module_id, second.drawing.module_id) == ("M1", "M2")
+        assert second.x_mm - (first.x_mm + first.panel_width_mm) == pytest.approx(SIDE_PANEL_GAP_MM)
+        right_text_x, right_text_width = detail_box(second)
+        assert right_text_x + right_text_width < PAGE_LEFT_MM + PAGE_CONTENT_WIDTH_MM
     for page in document.pages:
-        placed, = page.modules
-        left, width = detail_box(placed)
-        assert width > 60
-        assert left + width == pytest.approx(placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM)
-        lines = detail_lines(placed)
-        assert lines == placed.drawing.details
-        assert all(detail_line_width_factor(line, width) == 1.0 for line in lines[:-1])
-        assert (detail_line_width_factor(lines[-1], width) < 1.0) == (note != "普通模块示例")
+        for placed in page.modules:
+            left, width = detail_box(placed)
+            assert width > 60
+            assert left + width == pytest.approx(placed.x_mm + placed.panel_width_mm - SIDE_DETAIL_RIGHT_MARGIN_MM)
+            lines = detail_lines(placed)
+            assert lines == placed.drawing.details
+            assert all(detail_line_width_factor(line, width) == 1.0 for line in lines[:-1])
+            assert (detail_line_width_factor(lines[-1], width) < 1.0) == long_note
 
 
 def test_exported_standard_excel_round_trips_ordered_cuts_and_literal_text(tmp_path):

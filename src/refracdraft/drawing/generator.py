@@ -22,6 +22,7 @@ from refracdraft.drawing.layout import (
     geometry_width,
     module_required_width,
     panel_content_left,
+    panel_gap,
 )
 from refracdraft.geometry.primitives import Polyline, equal_anchor_positions, module_front_outline, module_side_outline, parametric_outline, point_in_outline, rectangle, scale_template
 from refracdraft.reference.library import ReferenceLibrary
@@ -512,14 +513,15 @@ class DrawingGenerator:
             if on_module_drawn is not None:
                 on_module_drawn(count)
         required_widths = [module_required_width(drawing) for drawing in drawings]
+        gaps = [panel_gap(left, right) for left, right in zip(drawings, drawings[1:])]
         pages: list[SheetPage] = []
-        groups = _balanced_page_groups(required_widths)
+        groups = _balanced_page_groups(required_widths, gaps)
 
         for page_number, (start, end) in enumerate(groups, start=1):
             group = drawings[start:end]
             group_widths = required_widths[start:end]
-            gaps = PANEL_GAP_MM * max(0, len(group) - 1)
-            extra_width = max(0.0, PAGE_CONTENT_WIDTH_MM - gaps - sum(group_widths))
+            gap_width = sum(gaps[start:end - 1])
+            extra_width = max(0.0, PAGE_CONTENT_WIDTH_MM - gap_width - sum(group_widths))
             extra_each = extra_width / len(group) if group else 0.0
             placed: list[PlacedModule] = []
             panel_x = PAGE_LEFT_MM
@@ -535,26 +537,34 @@ class DrawingGenerator:
                         content_x_mm=content_x,
                     )
                 )
-                panel_x += panel_width + PANEL_GAP_MM
+                if panel_index + 1 < len(group):
+                    panel_x += panel_width + gaps[start + panel_index]
             pages.append(SheetPage(page_number, tuple(placed), len(group)))
         warnings = tuple(w for drawing in drawings for w in drawing.warnings)
         return DrawingDocument(project.metadata.project_name, tuple(pages), warnings)
 
 
-def _balanced_page_groups(required_widths: list[float]) -> list[tuple[int, int]]:
+def _balanced_page_groups(
+    required_widths: list[float], gaps: list[float] | None = None,
+) -> list[tuple[int, int]]:
     """Partition modules into the fewest pages, then balance the used width per page."""
     count = len(required_widths)
     if count == 0:
         return []
+    if gaps is None:
+        gaps = [PANEL_GAP_MM] * (count - 1)
     # State: page count, highest fill ratio, squared unused capacity, page start.
     best: list[tuple[int, float, float, int] | None] = [None] * (count + 1)
     best[0] = (0, 0.0, 0.0, 0)
     prefix = [0.0]
     for width in required_widths:
         prefix.append(prefix[-1] + width)
+    gap_prefix = [0.0]
+    for gap in gaps:
+        gap_prefix.append(gap_prefix[-1] + gap)
     for end in range(1, count + 1):
         for start in range(end - 1, -1, -1):
-            used = prefix[end] - prefix[start] + PANEL_GAP_MM * (end - start - 1)
+            used = prefix[end] - prefix[start] + gap_prefix[end - 1] - gap_prefix[start]
             if used > PAGE_CONTENT_WIDTH_MM + 1e-6:
                 break
             previous = best[start]

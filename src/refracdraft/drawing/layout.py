@@ -15,6 +15,9 @@ PAGE_LEFT_MM = 7.0
 PAGE_CONTENT_WIDTH_MM = 283.0
 PANEL_INNER_MARGIN_MM = 8.0
 PANEL_GAP_MM = 6.0
+SIDE_DETAIL_GAP_MM = 4.0
+SIDE_DETAIL_RIGHT_MARGIN_MM = 1.0
+SIDE_PANEL_GAP_MM = 2.0
 PANEL_MIN_WIDTH_MM = 58.0
 CENTERED_MODULE_MAX_LENGTH_MM = 350.0
 
@@ -153,15 +156,15 @@ def _side_details(drawing: ModuleDrawing) -> bool:
 
 
 def _side_detail_width(drawing: ModuleDrawing) -> float:
-    available = (PAGE_CONTENT_WIDTH_MM - _drawing_right(drawing) - VIEW_CLEARANCE_MM
-                 - _side_left_margin(drawing) - PANEL_INNER_MARGIN_MM)
+    available = (PAGE_CONTENT_WIDTH_MM - _drawing_right(drawing) - SIDE_DETAIL_GAP_MM
+                 - _side_left_margin(drawing) - SIDE_DETAIL_RIGHT_MARGIN_MM)
     return max(1.0, min(_preferred_detail_width(drawing), available))
 
 
 def geometry_width(drawing: ModuleDrawing) -> float:
     width = max(top_row_width(drawing), outline_width(drawing.board_view))
     if _side_details(drawing):
-        return _drawing_right(drawing) + VIEW_CLEARANCE_MM + _side_detail_width(drawing)
+        return _drawing_right(drawing) + SIDE_DETAIL_GAP_MM + _side_detail_width(drawing)
     return width
 
 
@@ -174,7 +177,13 @@ def _panel_inner_margin(drawing: ModuleDrawing) -> float:
 
 def _side_left_margin(drawing: ModuleDrawing) -> float:
     left = min(view_bounds(drawing.front_view)[0], view_bounds(drawing.board_view)[0])
-    return max(_panel_inner_margin(drawing), 1.0 - left)
+    return max(_panel_inner_margin(drawing), 0.5 - left)
+
+
+def panel_gap(left: ModuleDrawing, right: ModuleDrawing) -> float:
+    if _side_details(left) and _side_details(right):
+        return SIDE_PANEL_GAP_MM
+    return PANEL_GAP_MM
 
 
 def panel_content_left(drawing: ModuleDrawing, panel_width: float, content_width: float) -> float:
@@ -189,7 +198,7 @@ def panel_content_left(drawing: ModuleDrawing, panel_width: float, content_width
 def module_required_width(drawing: ModuleDrawing) -> float:
     content_width = geometry_width(drawing)
     if _side_details(drawing):
-        return max(PANEL_MIN_WIDTH_MM, content_width + _side_left_margin(drawing) + PANEL_INNER_MARGIN_MM)
+        return max(PANEL_MIN_WIDTH_MM, content_width + _side_left_margin(drawing) + SIDE_DETAIL_RIGHT_MARGIN_MM)
     margins = 2 * _panel_inner_margin(drawing)
     if drawing.details:
         text_width = _preferred_detail_width(drawing)
@@ -207,8 +216,8 @@ def _center_details(drawing: ModuleDrawing) -> bool:
 def detail_box(placed: PlacedModule) -> tuple[float, float]:
     drawing = placed.drawing
     if _side_details(drawing):
-        left = placed.content_x_mm + _drawing_right(drawing) + VIEW_CLEARANCE_MM
-        available = placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM - left
+        left = placed.content_x_mm + _drawing_right(drawing) + SIDE_DETAIL_GAP_MM
+        available = placed.x_mm + placed.panel_width_mm - SIDE_DETAIL_RIGHT_MARGIN_MM - left
         return left, available
     width = details_width(drawing)
     if _center_details(drawing):
