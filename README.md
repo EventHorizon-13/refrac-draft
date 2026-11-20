@@ -1,44 +1,74 @@
 # RefracDraft
 
-**Refractory Module 2D Drawing Generator**
+**Refractory Module 2D Drawing Generator** — 参数化生成耐火材料/陶瓷纤维模块二维加工图。
 
-RefracDraft 是一款面向耐火材料/陶瓷纤维模块深化与加工图生产的参数化二维绘图工具。
+> The supplied DXF/PDF examples are the accepted golden-master drawing standard. RefracDraft must reproduce their drafting language and page composition; it is not a free redesign of the drawings.
 
-## 目标工作流
+## Current scope
 
-1. 从 Excel 批量导入参数，或在软件内手动录入。
-2. 检查模块、夹板、锚固件三组平级参数。
-3. 点击「生成图纸」，生成二维视图、尺寸和明细。
-4. 在预览区检查图纸。
-5. 导出可编辑 DXF，并导出 A4 横向 PDF。
+- Pure 2D drawing; no 3D modeler.
+- Three independent peer parameter groups: modules, boards, anchors, associated by module ID.
+- Excel import and manual table entry.
+- Generate-on-click preview; no live redraw while editing.
+- A4 landscape, automatic pagination.
+- Editable DXF and vector PDF export from one drawing model.
+- Source-DXF board-face template extraction and reuse of anchor linework.
+- Original A4 frame/title-block block import for DXF; original sample PDF title block/footer reused as vector content for PDF.
 
-## 最重要的成图要求
+## Run from source
 
-三个原始示例文件就是最终加工图的黄金样板，不是宽泛的风格参考。生成结果必须高度复刻示例中的视图组织、尺寸标注、文字、明细、图框、标题栏和分页。DXF 负责提供 CAD 几何与制图样式依据，PDF 负责提供最终成图版式依据。不得擅自重新设计图纸风格。
+```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# Linux/macOS: source .venv/bin/activate
+pip install -e ".[ui,dev]"
 
-必须使用示例中的原始参数建立黄金样板回归测试，逐页比较生成图纸与示例的一致性。
+# Desktop UI
+refrac-draft-gui
 
-## 已确认的核心规则
+# CLI: generate DXF + PDF from JSON or Excel
+refrac-draft generate examples/b2_positive_tap.json --outdir output
+refrac-draft generate examples/jiangyin_b1_b4.json --outdir output
 
-- 纯二维绘图，不建立三维模型。
-- 模块、夹板、锚固件是三个平级参数组，通过模块编号关联，不做父子参数继承。
-- 夹板外轮廓采用模块对应的夹板面形状；夹板厚度、材质、是否存在等属性独立。
-- 无夹板时仍必须生成夹板面视图，并在视图中心标注「无夹板」。
-- 正敲：梯形位于正面，生成正面梯形视图和夹板面视图，共两个视图。
-- 侧敲：梯形位于侧面，生成正面、侧面梯形、夹板面三个视图。
-- 快插锚固件按类型调用标准夹板开口，也允许自定义开口。
-- 夹板面存在多种异形类型，必须以参考 DXF 中实际图形为依据建立图库。
-- Excel 导入和手动输入均支持。
-- 点击生成，不要求参数修改后实时重绘。
-- A4 横向自动分页。
-- DXF 与 PDF 使用同一套二维几何数据生成。
+# Inspect the supplied reference DXF and create a block inventory
+refrac-draft analyze-reference --dxf references/示例.dxf
+```
 
-## 参考资料
+If PySide6 is not installed, the CLI engine still works. The desktop UI is an optional dependency.
 
-参考资料目录及分析要求见 [references/README.md](references/README.md)。
+## Input model
 
-开发总提示词见 [PROMPT.md](PROMPT.md)。
+The Excel workbook uses three worksheets:
 
-## 开发原则
+1. `模块参数`
+2. `夹板参数`
+3. `锚固件参数`
 
-先分析参考文件和现有项目架构，再实施。不得凭图块名称臆测几何；不得把正敲与侧敲混淆；不得把无夹板理解为不生成夹板面视图；不得将原始参考文件覆盖或修改。
+The three groups are independent tables. Use `模块编号` to associate rows. Generate a starter workbook with `python scripts/create_excel_template.py --output examples/参数导入模板.xlsx`.
+
+For explicit anchor positions, use JSON in the `锚固件坐标` cell, e.g.:
+
+```json
+[{"x_mm": 500, "y_mm": 180}, {"x_mm": 700, "y_mm": 180}]
+```
+
+## Non-negotiable geometry rules
+
+- 普通: front + board-face views.
+- 正敲: trapezoid on the front face; front trapezoid + board-face views.
+- 侧敲: normal front + side trapezoid + board-face views.
+- Every module gets a board-face view. If there is no physical board, put `无夹板` at the center of that view.
+- Board outline follows the module's board-face geometry. Board material/thickness/presence/opening remain independent board parameters.
+- Quick-insert uses a front-profile block from the source DXF and a B10-PDF-derived board-face opening candidate (outer contour + four slots, about 22.578×16.933 mm). The opening is automatically drawn but explicitly flagged as unconfirmed because the PDF does not label its machining meaning.
+- Anchor positions can be explicit, evenly distributed, or fixed-spacing. Explicit segmented dimensions in the examples must be preserved.
+
+## Golden-master rule
+
+The examples are the output standard. Do not modernize, simplify, or redesign their view ordering, dimensions, labels, color usage, linework, BOM/detail block, title block, footer, or pagination. See `PROMPT.md`, `AGENTS.md`, and `docs/REFERENCE_ANALYSIS.md`.
+
+## Known implementation limits (initial engine)
+
+- Dynamic-block visibility/action metadata is proprietary; the current extractor uses visible block geometry and does not claim to recover every AutoCAD dynamic state.
+- Quick-insert standard board-opening geometry remains unresolved.
+- Page grouping currently follows the observed sample pattern (4 standard-width modules, 3 when an oversized/three-view group requires it); the general packing rules need more sample jobs.
+- The initial UI provides editable parameter tables, Excel/JSON import, generate-on-click preview, and export actions. Spreadsheet-grade fill-handle/undo/redo refinements are planned after geometry and output validation.

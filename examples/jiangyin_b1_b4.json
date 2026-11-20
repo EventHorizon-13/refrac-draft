@@ -1,0 +1,184 @@
+{
+  "metadata": {
+    "project_name": "江阴铁包 B1-B4 试运行样本"
+  },
+  "modules": [
+    {
+      "module_id": "B1",
+      "name": "折叠模块",
+      "structure_type": "折叠模块",
+      "geometry_type": "正敲",
+      "front_width_mm": 300,
+      "front_height_mm": 318,
+      "board_face_width_mm": 300,
+      "board_face_height_mm": 230,
+      "material": "1430材质",
+      "density_kg_m3": 220,
+      "production_quantity": 32,
+      "front_left_height_mm": 318,
+      "front_right_height_mm": 259
+    },
+    {
+      "module_id": "B2",
+      "name": "折叠模块",
+      "structure_type": "折叠模块",
+      "geometry_type": "正敲",
+      "front_width_mm": 300,
+      "front_height_mm": 289,
+      "board_face_width_mm": 300,
+      "board_face_height_mm": 230,
+      "material": "1430材质",
+      "density_kg_m3": 220,
+      "production_quantity": 26,
+      "front_left_height_mm": 289,
+      "front_right_height_mm": 220
+    },
+    {
+      "module_id": "B3",
+      "name": "折叠模块",
+      "structure_type": "折叠模块",
+      "geometry_type": "正敲",
+      "front_width_mm": 300,
+      "front_height_mm": 289,
+      "board_face_width_mm": 300,
+      "board_face_height_mm": 230,
+      "material": "1430材质",
+      "density_kg_m3": 220,
+      "production_quantity": 2,
+      "front_left_height_mm": 289,
+      "front_right_height_mm": 220,
+      "source_note": "前视轮廓与参考DXF快插锚固件右视图候选块相似；PDF未明确标注快插类型，待确认。"
+    },
+    {
+      "module_id": "B4",
+      "name": "折叠模块",
+      "structure_type": "折叠模块",
+      "geometry_type": "正敲",
+      "front_width_mm": 300,
+      "front_height_mm": 300,
+      "board_face_width_mm": 282,
+      "board_face_height_mm": 230,
+      "material": "1430材质",
+      "density_kg_m3": 220,
+      "production_quantity": 20,
+      "front_left_height_mm": 300,
+      "front_right_height_mm": 205
+    }
+  ],
+  "boards": [
+    {
+      "module_id": "B1",
+      "exists": true,
+      "material": "9厘夹板",
+      "thickness_mm": 9,
+      "source_note": ""
+    },
+    {
+      "module_id": "B2",
+      "exists": true,
+      "material": "9厘夹板",
+      "thickness_mm": 9,
+      "source_note": ""
+    },
+    {
+      "module_id": "B3",
+      "exists": true,
+      "material": "9厘夹板",
+      "thickness_mm": 9,
+      "source_note": "夹板面小符号的加工含义需结合原始DXF动态块状态进一步确认。"
+    },
+    {
+      "module_id": "B4",
+      "exists": true,
+      "material": "9厘夹板",
+      "thickness_mm": 9,
+      "source_note": ""
+    }
+  ],
+  "anchors": [
+    {
+      "module_id": "B1",
+      "exists": true,
+      "anchor_type": "M型",
+      "material": "310",
+      "thread_spec": "M10",
+      "diameter_mm": 8,
+      "length_mm": 200,
+      "count": 1,
+      "layout_mode": "指定坐标",
+      "positions": [
+        {
+          "x_mm": 150,
+          "y_mm": 194.5608498458106
+        }
+      ],
+      "hose_spec": "32胶管",
+      "dimension_horizontal": false,
+      "dimension_vertical": false,
+      "source_note": ""
+    },
+    {
+      "module_id": "B2",
+      "exists": true,
+      "anchor_type": "M型",
+      "material": "310",
+      "thread_spec": "M10",
+      "diameter_mm": 8,
+      "length_mm": 180,
+      "count": 1,
+      "layout_mode": "指定坐标",
+      "positions": [
+        {
+          "x_mm": 150,
+          "y_mm": 194.5608498458106
+        }
+      ],
+      "hose_spec": "32胶管",
+      "dimension_horizontal": false,
+      "dimension_vertical": false,
+      "source_note": ""
+    },
+    {
+      "module_id": "B3",
+      "exists": true,
+      "anchor_type": "快插",
+      "material": "310",
+      "thread_spec": "M10",
+      "diameter_mm": null,
+      "length_mm": 200,
+      "count": 1,
+      "layout_mode": "指定坐标",
+      "positions": [
+        {
+          "x_mm": 150,
+          "y_mm": 180
+        }
+      ],
+      "hose_spec": "32胶管",
+      "dimension_horizontal": false,
+      "dimension_vertical": true,
+      "source_note": "暂按快插候选类型映射，须用户确认；当前标准夹板开口模板尚未确认。"
+    },
+    {
+      "module_id": "B4",
+      "exists": true,
+      "anchor_type": "M型",
+      "material": "310",
+      "thread_spec": "M10",
+      "diameter_mm": 8,
+      "length_mm": 180,
+      "count": 1,
+      "layout_mode": "指定坐标",
+      "positions": [
+        {
+          "x_mm": 141,
+          "y_mm": 194.5608498458106
+        }
+      ],
+      "hose_spec": "32胶管",
+      "dimension_horizontal": false,
+      "dimension_vertical": false,
+      "source_note": ""
+    }
+  ]
+}
