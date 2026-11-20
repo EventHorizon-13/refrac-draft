@@ -22,6 +22,9 @@ from refracdraft.drawing.layout import (
     DETAIL_TEXT_SIZE_MM,
     DIMENSION_ARROW_SIZE_MM,
     DIMENSION_TEXT_SIZE_MM,
+    FILENAME_LABEL_HEIGHT_MM,
+    FILENAME_LABEL_POSITION,
+    FILENAME_LABEL_WIDTH_MM,
     PAGE_HEIGHT_MM,
     SEPARATOR_BOTTOM_MM,
     SEPARATOR_TOP_MM,
@@ -126,6 +129,12 @@ class DrawingPreview(QGraphicsView):
                 QPen(QColor("#222222"), 0.2),
             )
         scene.addRect(168.5, 172, 121.5, 31, QPen(QColor("#111111"), 0.2), QBrush(Qt.BrushStyle.NoBrush))
+        if document.filename_label:
+            x, y = FILENAME_LABEL_POSITION
+            item = self._add_text(scene, document.filename_label, x, y, FILENAME_LABEL_HEIGHT_MM, "#111111")
+            width = item.boundingRect().width() * item.scale()
+            if width > FILENAME_LABEL_WIDTH_MM:
+                item.setTransform(QTransform.fromScale(FILENAME_LABEL_WIDTH_MM / width, 1.0))
         for placed in page.modules:
             drawing, px = placed.drawing, placed.content_x_mm
             placement = view_placement(drawing)

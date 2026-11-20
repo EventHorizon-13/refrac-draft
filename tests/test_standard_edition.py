@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -56,7 +57,7 @@ from refracdraft.exporters.pdf import (
 from refracdraft.exporters.project import export_standard_excel
 from refracdraft.release import latest_portable_release
 from refracdraft.standard_sheet import (
-    AUTOMATIC, AUTOMATIC_FIELDS, COLUMN_SPECS, DEFAULT_ROW, build_standard_row,
+    AUTOMATIC, AUTOMATIC_FIELDS, COLUMN_SPECS, DEFAULT_ROW, anchor_length_options, build_standard_row,
 )
 from refracdraft.standard import (
     StandardAnchorValues,
@@ -692,6 +693,53 @@ def test_standard_associations_keep_manual_choices_and_roundtrip(
     assert restored.modules[0].structure_type == fold
     assert restored.anchors[0].length_mm == 240
     assert Project.model_validate_json(project.model_dump_json()).standard_auto_fields == project.standard_auto_fields
+
+
+def test_legacy_excel_resolves_associations_and_keeps_custom_values(tmp_path):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "标准版"
+    sheet.append([spec.label for spec in COLUMN_SPECS])
+    row = dict(DEFAULT_ROW, length_mm="700", density_kg_m3="192", anchor_enabled=True,
+               anchor_material="304", thread_spec="M8", anchor_position_mm=None,
+               board_material="9厘", hose_spec="32", anchor_length_mm="233.5")
+    sheet.append([row[spec.key] for spec in COLUMN_SPECS])
+    path = tmp_path / "legacy-standard.xlsx"
+    workbook.save(path)
+    result = import_project_xlsx(path)
+    assert result.modules[0].structure_type == StructureType.HALF_FOLDED
+    assert result.boards[0].thickness_mm == 8
+    anchor = result.anchors[0]
+    assert (anchor.material, anchor.hose_spec, anchor.length_mm, anchor.edge_offset_mm) == ("310", "25胶管", 233.5, 150)
+    assert anchor_length_options("菱形") == ("230", "200", "180", "150", "120")
+
+
+def test_measured_side_details_pack_the_450mm_pair_without_compressing_text(tmp_path):
+    rows = [build_standard_row(
+        dict(DEFAULT_ROW, module_id=f"M{index}", length_mm=str(length), thickness_mm="450",
+             expansion_length_mm=str(height), anchor_enabled=True, anchor_count=str(index),
+             anchor_position_mm="150", anchor_spacing_mm="300", source_note="普通模块示例"),
+        board_face_profile=BoardFaceProfile.model_validate({"features": [cut]}),
+    ) for index, length, height, cut in (
+        (1, 300, 300, {"type": 2, "a": 90, "b": 90, "c": 90, "d": 45}),
+        (2, 600, 350, {"type": 1, "a": 50, "b": 50, "rotation_deg": 180}),
+    )]
+    modules, boards, anchors = map(list, zip(*rows))
+    project = Project(modules=modules, boards=boards, anchors=anchors)
+    # The fixture models the advance of the compact SHX lettering used in the PDF.
+    drawing = DrawingGenerator().generate(
+        project, measure_detail=lambda text: sum(2.8 if char.isascii() else 4.8 for char in text),
+    )
+    page, = drawing.pages
+    assert [placed.drawing.module_id for placed in page.modules] == ["M1", "M2"]
+    assert all(detail_vertical_anchor(placed)[1] for placed in page.modules)
+    drawing = replace(drawing, pages=(page, replace(page, page_number=2)), filename_label="加工图_1120")
+    path = export_dxf(drawing, tmp_path / "packed.dxf")
+    msp = ezdxf.readfile(path).modelspace()
+    assert all(r"\W" not in text.text for text in msp.query("MTEXT"))
+    labels = [text for text in msp.query("TEXT") if text.dxf.text == drawing.filename_label]
+    assert [text.dxf.insert.y for text in labels] == pytest.approx([190, -2110])
+    assert [text.dxf.height for text in labels] == pytest.approx([24, 24])
 
 
 @pytest.mark.parametrize(

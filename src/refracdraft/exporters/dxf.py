@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from pathlib import Path
 
 import ezdxf
@@ -9,6 +11,9 @@ from ezdxf.enums import TextEntityAlignment
 from refracdraft.drawing.layout import (
     DETAIL_LINE_SPACING,
     DETAIL_TEXT_SIZE_MM,
+    FILENAME_LABEL_HEIGHT_MM,
+    FILENAME_LABEL_POSITION,
+    FILENAME_LABEL_WIDTH_MM,
     DIMENSION_ARROW_SIZE_MM,
     DIMENSION_TEXT_SIZE_MM,
     SEPARATOR_BOTTOM_MM,
@@ -49,11 +54,13 @@ DIMENSION_FALLBACK = {
 }
 
 
-def _detail_mtext(lines: tuple[str, ...], available_width: float) -> str:
+def _detail_mtext(
+    lines: tuple[str, ...], available_width: float, measure: Callable[[str], float] | None = None,
+) -> str:
     paragraphs = []
     for line in lines:
         escaped = line.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
-        factor = detail_line_width_factor(line, available_width)
+        factor = detail_line_width_factor(line, available_width, measure)
         if factor < 1.0:
             escaped = rf"{{\W{factor:.6f};{escaped}}}"
         paragraphs.append(escaped)
@@ -261,6 +268,14 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
             title.add_auto_attribs({"图名": document.project_name, "图号": "", "批准": "", "审定": "",
                                     "项目经理": "", "校核": "", "设计": "", "制图": "",
                                     "订单编号": "", "项目单位": "", "图纸": "A4"})
+        if document.filename_label:
+            x, y = FILENAME_LABEL_POSITION
+            reserved_width = len(document.filename_label) * FILENAME_LABEL_HEIGHT_MM * 1.39
+            msp.add_text(document.filename_label, dxfattribs={
+                "layer": "TEXT", "style": TEXT_STYLE, "height": FILENAME_LABEL_HEIGHT_MM * MODEL_SCALE,
+                "width": min(1.0, FILENAME_LABEL_WIDTH_MM / reserved_width),
+                "insert": (x * MODEL_SCALE, page_y + y * MODEL_SCALE),
+            })
         for placed in page.modules[1:]:
             msp.add_line(
                 (placed.x_mm * MODEL_SCALE, page_y + SEPARATOR_BOTTOM_MM * MODEL_SCALE),
@@ -294,7 +309,7 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
                 left, available_width = detail_box(placed)
                 anchor_y, align_bottom = detail_vertical_anchor(placed)
                 msp.add_mtext(
-                    _detail_mtext(detail_lines(placed), available_width),
+                    _detail_mtext(detail_lines(placed), available_width, placed.measure_detail),
                     dxfattribs={
                         "insert": (left * MODEL_SCALE, page_y + anchor_y * MODEL_SCALE),
                         "char_height": DETAIL_TEXT_HEIGHT,

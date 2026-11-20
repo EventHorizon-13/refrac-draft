@@ -16,11 +16,19 @@ _VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(b\d+)?")
 
 
 def app_version() -> str:
+    build_version = resource_path("assets/build-version.txt")
+    if build_version.is_file():
+        label = build_version.read_text(encoding="ascii").strip()
+        if _VERSION.fullmatch(label):
+            return label
+    project_file = resource_path("pyproject.toml")
+    if project_file.is_file():
+        with project_file.open("rb") as project:
+            return tomllib.load(project)["project"]["version"]
     try:
         return version("refrac-draft")
     except PackageNotFoundError:
-        with resource_path("pyproject.toml").open("rb") as project:
-            return tomllib.load(project)["project"]["version"]
+        return "未知"
 
 
 def build_time_display() -> str | None:

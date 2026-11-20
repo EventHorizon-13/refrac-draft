@@ -60,9 +60,13 @@ jobs:
           Copy-Item (Join-Path $exporter.FullName "*") "assets/pdf-exporter" -Recurse -Force
           if (-not (Test-Path "assets/pdf-exporter/node.exe")) { throw "PdfExporter/node.exe is missing." }
           if (-not (Test-Path "assets/pdf-exporter/pdf-exporter.bundle.mjs")) { throw "pdf-exporter.bundle.mjs is missing." }
-      - name: Record build time
+      - name: Record build version and time
         shell: pwsh
         run: |
+          $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+          if ($LASTEXITCODE -ne 0 -or -not $version) { throw "Cannot read project version." }
+          Set-Content -Encoding ascii "assets/build-version.txt" $version
+          "REFRACDRAFT_EXPECTED_VERSION=$version" >> $env:GITHUB_ENV
           [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'") |
             Set-Content -Encoding ascii "assets/build-time.txt"
       - name: Build one-folder application

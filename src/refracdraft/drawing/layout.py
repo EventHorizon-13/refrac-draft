@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from dataclasses import dataclass
 
 from refracdraft.drawing.model import ModuleDrawing, PlacedModule, ViewDrawing
@@ -22,6 +24,9 @@ CENTERED_MODULE_MAX_LENGTH_MM = 350.0
 # A 150 mm model-space inset is 15 mm on the 1:10 A4 sheet.
 FRAME_INSET_MM = 7.0
 TITLE_BLOCK_TOP_MM = 37.0
+FILENAME_LABEL_POSITION = (9.0, 19.0)
+FILENAME_LABEL_HEIGHT_MM = 2.4
+FILENAME_LABEL_WIDTH_MM = 154.0
 SEPARATOR_MARGIN_MM = 15.0
 SEPARATOR_TOP_MM = PAGE_HEIGHT_MM - FRAME_INSET_MM - SEPARATOR_MARGIN_MM
 SEPARATOR_BOTTOM_MM = TITLE_BLOCK_TOP_MM + SEPARATOR_MARGIN_MM
@@ -157,8 +162,8 @@ def _detail_row_width(line: str) -> float:
     return _text_width(line, 0.82, 1.39)
 
 
-def _preferred_detail_width(drawing: ModuleDrawing) -> float:
-    longest = max((_detail_row_width(line) for line in _detail_rows(drawing)), default=0.0)
+def _preferred_detail_width(drawing: ModuleDrawing, measure: Callable[[str], float] | None) -> float:
+    longest = max(map(measure or _detail_row_width, _detail_rows(drawing)), default=0.0)
     return longest + DETAIL_WIDTH_CLEARANCE_MM
 
 
@@ -173,16 +178,16 @@ def _side_details(drawing: ModuleDrawing) -> bool:
     return view_placement(drawing).detail_on_side
 
 
-def _side_detail_width(drawing: ModuleDrawing) -> float:
+def _side_detail_width(drawing: ModuleDrawing, measure: Callable[[str], float] | None) -> float:
     available = (PAGE_CONTENT_WIDTH_MM - _drawing_right(drawing) - SIDE_DETAIL_GAP_MM
                  - _panel_inner_margin(drawing) - SIDE_DETAIL_RIGHT_MARGIN_MM)
-    return max(1.0, min(_preferred_detail_width(drawing), available))
+    return max(1.0, min(_preferred_detail_width(drawing, measure), available))
 
 
-def geometry_width(drawing: ModuleDrawing) -> float:
+def geometry_width(drawing: ModuleDrawing, measure: Callable[[str], float] | None = None) -> float:
     width = max(top_row_width(drawing), outline_width(drawing.board_view))
     if _side_details(drawing):
-        return _drawing_right(drawing) + SIDE_DETAIL_GAP_MM + _side_detail_width(drawing)
+        return _drawing_right(drawing) + SIDE_DETAIL_GAP_MM + _side_detail_width(drawing, measure)
     return width
 
 
@@ -201,24 +206,27 @@ def panel_gap(left: ModuleDrawing, right: ModuleDrawing) -> float:
     return PANEL_GAP_MM
 
 
-def panel_content_left(drawing: ModuleDrawing, panel_width: float, content_width: float) -> float:
+def panel_content_left(
+    drawing: ModuleDrawing, panel_width: float, content_width: float,
+    measure: Callable[[str], float] | None = None,
+) -> float:
     left_margin = _panel_inner_margin(drawing)
     if _side_details(drawing):
         return left_margin
     right_limit = panel_width - _view_right_edge(drawing, content_width)
     if not _center_details(drawing):
-        content_width = max(content_width, min(_preferred_detail_width(drawing), panel_width))
+        content_width = max(content_width, min(_preferred_detail_width(drawing, measure), panel_width))
     return max(left_margin, min((panel_width - content_width) / 2, right_limit))
 
 
-def module_required_width(drawing: ModuleDrawing) -> float:
-    content_width = geometry_width(drawing)
+def module_required_width(drawing: ModuleDrawing, measure: Callable[[str], float] | None = None) -> float:
+    content_width = geometry_width(drawing, measure)
     margin = _panel_inner_margin(drawing)
     if _side_details(drawing):
         return max(PANEL_MIN_WIDTH_MM, content_width + margin + SIDE_DETAIL_RIGHT_MARGIN_MM)
     geometry_span = _view_right_edge(drawing, content_width) + margin
     text_margins = 2 * PANEL_INNER_MARGIN_MM if _center_details(drawing) else margin + PANEL_INNER_MARGIN_MM
-    text_span = min(PAGE_CONTENT_WIDTH_MM, _preferred_detail_width(drawing) + text_margins) if drawing.details else 0.0
+    text_span = min(PAGE_CONTENT_WIDTH_MM, _preferred_detail_width(drawing, measure) + text_margins) if drawing.details else 0.0
     return max(PANEL_MIN_WIDTH_MM, geometry_span, text_span)
 
 
@@ -237,7 +245,8 @@ def detail_box(placed: PlacedModule) -> tuple[float, float]:
     if _center_details(drawing):
         center = placed.content_x_mm + max(top_row_width(drawing), outline_width(drawing.board_view)) / 2
         ideal_left = center - details_width(drawing) / 2
-        left = max(placed.x_mm + PANEL_INNER_MARGIN_MM, min(ideal_left, right - _preferred_detail_width(drawing)))
+        preferred_width = _preferred_detail_width(drawing, placed.measure_detail)
+        left = max(placed.x_mm + PANEL_INNER_MARGIN_MM, min(ideal_left, right - preferred_width))
     else:
         left = placed.content_x_mm
     available = right - left
@@ -253,7 +262,7 @@ def detail_lines(placed: PlacedModule) -> tuple[str, ...]:
     return _detail_rows(placed.drawing)
 
 
-def detail_line_width_factor(line: str, available: float) -> float:
+def detail_line_width_factor(line: str, available: float, measure: Callable[[str], float] | None = None) -> float:
     usable = max(1.0, available - DETAIL_WIDTH_CLEARANCE_MM)
-    width = _detail_row_width(line)
+    width = (measure or _detail_row_width)(line)
     return usable / width if width > usable else 1.0

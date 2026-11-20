@@ -42,7 +42,7 @@ class StandardModuleValues:
 @dataclass(frozen=True)
 class StandardAnchorValues:
     enabled: bool = False
-    position_mm: float = 50.0
+    position_mm: float = 150.0
     spacing_mm: float = 300.0
     count: int = 1
     anchor_type: AnchorType = AnchorType.M_SHAPE

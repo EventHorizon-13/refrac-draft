@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 
 
@@ -42,6 +43,10 @@ def main() -> None:
             if window.windowIcon().pixmap(32, 32).isNull():
                 raise ValueError("便携版缺少可加载的程序图标")
             about = AboutDialog(window)
+            expected_version = os.environ.get("REFRACDRAFT_EXPECTED_VERSION")
+            version_label = about.findChild(QLabel, "versionLabel")
+            if expected_version and (version_label is None or f"v{expected_version} " not in version_label.text()):
+                raise ValueError("关于窗口没有显示本次构建的版本号")
             build_time = build_time_display()
             build_label = about.findChild(QLabel, "buildTimeLabel")
             if not build_time or build_label is None or build_time not in build_label.text():

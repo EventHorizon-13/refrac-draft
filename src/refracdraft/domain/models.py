@@ -209,7 +209,7 @@ class AnchorParameters(BaseModel):
     count: int = Field(default=1, ge=0)
     layout_mode: LayoutMode = LayoutMode.EXPLICIT
     positions: list[AnchorPosition] = Field(default_factory=list)
-    edge_offset_mm: float = Field(default=50, ge=0)
+    edge_offset_mm: float = Field(default=150, ge=0)
     spacing_mm: float | None = Field(default=None, gt=0)
     hose_spec: str = ""
     dimension_horizontal: bool = False

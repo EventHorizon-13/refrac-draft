@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from dataclasses import dataclass, field
 
 from refracdraft.geometry.primitives import Polyline
@@ -70,6 +72,7 @@ class PlacedModule:
     panel_index: int
     # Shared left edge of the front and board-face views.
     content_x_mm: float = 0.0
+    measure_detail: Callable[[str], float] | None = None
 
 
 @dataclass(frozen=True)
@@ -84,3 +87,4 @@ class DrawingDocument:
     project_name: str
     pages: tuple[SheetPage, ...]
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    filename_label: str = ""

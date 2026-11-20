@@ -11,7 +11,8 @@ from refracdraft.domain.models import (
     AnchorParameters, BoardFaceFeature, BoardFaceProfile, BoardParameters, GeometryType, ModuleParameters, Project,
 )
 from refracdraft.standard_sheet import (
-    COLUMN_SPECS, DEFAULT_ROW, PROFILE_COLUMNS, PROFILE_SHEET, automatic_fields, build_standard_row,
+    AUTOMATIC, AUTOMATIC_FALLBACK_KEYS, AUTOMATIC_SHEET, COLUMN_SPECS, DEFAULT_ROW, PROFILE_COLUMNS,
+    PROFILE_SHEET, automatic_fields, build_standard_row, legacy_automatic_fields,
 )
 
 
@@ -207,7 +208,10 @@ def _profiles(ws) -> dict[str, BoardFaceProfile]:
     return {key: BoardFaceProfile(features=value) for key, value in features.items()}
 
 
-def _import_standard_sheet(ws, headers: list[str], profiles: dict[str, BoardFaceProfile]) -> Project:
+def _import_standard_sheet(
+    ws, headers: list[str], profiles: dict[str, BoardFaceProfile],
+    fallbacks: dict[str, dict[str, str | bool]] | None,
+) -> Project:
     columns = {label: index for index, label in enumerate(headers)}
     if len(columns) != len(COLUMN_SPECS) or set(columns) != {spec.label for spec in COLUMN_SPECS}:
         raise ValueError("「标准版」表头不完整或有重复列，请使用程序附带的示例")
@@ -227,17 +231,22 @@ def _import_standard_sheet(ws, headers: list[str], profiles: dict[str, BoardFace
                     raise ValueError(f"Excel 第 {number} 行「{spec.label}」应填 TRUE/FALSE 或是/否")
                 values[spec.key] = parsed
             else:
+                if spec.key == "anchor_position_mm" and value is None:
+                    continue
                 values[spec.key] = "" if value is None else str(value).strip()
+        fallback = values.copy() if fallbacks is None else fallbacks.get(values["module_id"], {})
+        if fallbacks is None:
+            values.update(dict.fromkeys(legacy_automatic_fields(values), AUTOMATIC))
         try:
-            module, board, anchor = build_standard_row(values, board_face_profile=profiles.get(values["module_id"]))
+            module, board, anchor = build_standard_row(
+                values, board_face_profile=profiles.get(values["module_id"]), fallback=fallback,
+            )
         except ValueError as exc:
             raise ValueError(f"Excel 第 {number} 行：{exc}") from exc
         modules.append(module)
         boards.append(board)
         anchors.append(anchor)
-        fields = automatic_fields(values)
-        if fields:
-            auto_fields[module.module_id] = fields
+        auto_fields[module.module_id] = automatic_fields(values)
     if not modules:
         raise ValueError("「标准版」工作表没有模块数据")
     missing = profiles.keys() - {module.module_id for module in modules}
@@ -273,7 +282,14 @@ def import_project_xlsx(path: str | Path) -> Project:
                 headers.pop()
             if ws.title.strip() == "标准版" or set(headers) == labels:
                 profiles = _profiles(wb[PROFILE_SHEET]) if PROFILE_SHEET in wb.sheetnames else {}
-                return _import_standard_sheet(ws, headers, profiles)
+                fallbacks = None
+                if AUTOMATIC_SHEET in wb.sheetnames:
+                    fallbacks = {
+                        str(row[0]): {key: str(value) for key, value in zip(AUTOMATIC_FALLBACK_KEYS, row[1:])
+                                      if value is not None}
+                        for row in wb[AUTOMATIC_SHEET].iter_rows(min_row=2, values_only=True) if row and row[0] is not None
+                    }
+                return _import_standard_sheet(ws, headers, profiles, fallbacks)
         return _import_legacy_sheets(wb)
     finally:
         wb.close()

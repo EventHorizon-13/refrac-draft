@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QDialog,
     QFileDialog,
     QFrame,
@@ -64,7 +65,7 @@ from refracdraft.domain.models import (
 )
 from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.exporters.dxf import export_dxf
-from refracdraft.exporters.pdf import export_pdf
+from refracdraft.exporters.pdf import export_pdf, shx_detail_measure
 from refracdraft.exporters.project import export_complete_project, project_output_paths
 from refracdraft.release import app_version
 from refracdraft.resources import application_directory
@@ -72,7 +73,8 @@ from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.standard import ensure_standard_project
 from refracdraft.standard_sheet import (
     AUTOMATIC, AUTOMATIC_FIELDS, COLUMN_SPECS, DEFAULT_ROW, anchor_length_options, automatic_fields,
-    build_standard_row, resolve_automatic_values, row_values_from_models, standard_board_face_bounds,
+    build_standard_row, legacy_automatic_fields, resolve_automatic_values, row_values_from_models,
+    standard_board_face_bounds,
 )
 from refracdraft.ui.about import AboutDialog
 from refracdraft.ui.board_face_dialog import BoardFaceDialog
@@ -85,6 +87,7 @@ class RowBase:
         None, None, None,
     )
     profile: BoardFaceProfile | None = None
+    automatic_fallback: dict[str, str | bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -796,6 +799,11 @@ class StandardWindow(MainWindow):
         self.output_filename_edit = QLineEdit(_default_filename_stem())
         self.output_filename_edit.setPlaceholderText("不含扩展名")
         output_layout.addWidget(self.output_filename_edit)
+        self.print_filename_check = QCheckBox("图框左下角显示文件名")
+        self.print_filename_check.setChecked(self._settings.value("output/print_filename", False, type=bool))
+        self.print_filename_check.toggled.connect(self._filename_label_changed)
+        self.print_filename_check.toggled.connect(self._save_output_settings)
+        output_layout.addWidget(self.print_filename_check)
 
         self.output_path_label = QLabel()
         self.output_path_label.setProperty("role", "fieldLabel")
@@ -878,6 +886,7 @@ class StandardWindow(MainWindow):
         self.output_directory_edit.setText(output_directory)
         self.output_directory_edit.textChanged.connect(self._update_output_preview)
         self.output_filename_edit.textChanged.connect(self._update_output_preview)
+        self.output_filename_edit.textChanged.connect(self._filename_label_changed)
         self.output_directory_edit.editingFinished.connect(self._save_output_settings)
         self._update_output_preview()
 
@@ -935,6 +944,15 @@ class StandardWindow(MainWindow):
         self._settings.setValue(
             "output/last_directory", self.output_directory_edit.text().strip()
         )
+        self._settings.setValue("output/print_filename", self.print_filename_check.isChecked())
+
+    def _filename_label(self) -> str:
+        return self._filename_stem() if self.print_filename_check.isChecked() else ""
+
+    def _filename_label_changed(self, *_args) -> None:
+        if self.drawing_document and self.drawing_document.filename_label != self._filename_label():
+            self._drawing_dirty = True
+            self._preview_pdf = None
 
     def closeEvent(self, event) -> None:
         self._save_output_settings()
@@ -1086,11 +1104,13 @@ class StandardWindow(MainWindow):
         table = self.parameter_table
         if source is not None:
             module, board, anchor = source
-            values = row_values_from_models(
-                module, board, anchor, automatic=self.project.standard_auto_fields.get(module.module_id, ()),
-            )
+            fallback = row_values_from_models(module, board, anchor)
+            automatic = self.project.standard_auto_fields.get(module.module_id)
+            if automatic is None:
+                automatic = legacy_automatic_fields(fallback)
+            values = {**fallback, **dict.fromkeys((key for key in AUTOMATIC_FIELDS if key in automatic), AUTOMATIC)}
             profile = module.board_face_outline
-            base = RowBase(source, profile if isinstance(profile, BoardFaceProfile) else None)
+            base = RowBase(source, profile if isinstance(profile, BoardFaceProfile) else None, fallback)
         elif table.rowCount():
             values = self._sheet_values(table.rowCount() - 1)
             used = {
@@ -1099,7 +1119,8 @@ class StandardWindow(MainWindow):
             }
             base_id = str(values.get("module_id", "M1")).strip() or "M1"
             values["module_id"] = self._next_unique_module_id(base_id, used)
-            base = RowBase(profile=self._row_bases[-1].profile)
+            previous = self._row_bases[-1]
+            base = RowBase(profile=previous.profile, automatic_fallback=previous.automatic_fallback)
         else:
             values = dict(DEFAULT_ROW)
             values.update(dict.fromkeys(AUTOMATIC_FIELDS, AUTOMATIC))
@@ -1173,7 +1194,9 @@ class StandardWindow(MainWindow):
 
     def _cell_text(self, row: int, key: str) -> str:
         item = self.parameter_table.item(row, COLUMN_INDEX[key])
-        return item.text().strip() if item is not None else ""
+        if item is None:
+            return ""
+        return str(item.data(AUTOMATIC_PREVIEW_ROLE) or item.text()).strip()
 
     def _cell_bool(self, row: int, key: str) -> bool:
         item = self.parameter_table.item(row, COLUMN_INDEX[key])
@@ -1237,7 +1260,7 @@ class StandardWindow(MainWindow):
                     self._set_cell_enabled(row, key, enabled)
                 if taper:
                     self._sync_expansion_length(row)
-                suggestions = resolve_automatic_values(self._sheet_values(row))
+                suggestions = resolve_automatic_values(self._sheet_values(row), self._row_bases[row].automatic_fallback)
                 for key in AUTOMATIC_FIELDS:
                     item = table.item(row, COLUMN_INDEX[key])
                     if not item.text().strip():
@@ -1463,7 +1486,9 @@ class StandardWindow(MainWindow):
 
     def _build_project_row(self, row: int) -> tuple[ModuleParameters, BoardParameters, AnchorParameters]:
         base = self._row_bases[row]
-        return build_standard_row(self._sheet_values(row), base.models, board_face_profile=base.profile)
+        return build_standard_row(
+            self._sheet_values(row), base.models, board_face_profile=base.profile, fallback=base.automatic_fallback,
+        )
 
     def _collect_project(self) -> Project:
         modules: list[ModuleParameters] = []
@@ -1475,9 +1500,7 @@ class StandardWindow(MainWindow):
             modules.append(module)
             boards.append(board)
             anchors.append(anchor)
-            fields = automatic_fields(self._sheet_values(row))
-            if fields:
-                auto_fields[module.module_id] = fields
+            auto_fields[module.module_id] = automatic_fields(self._sheet_values(row))
         project = Project(
             metadata=self.project.metadata,
             modules=modules,
@@ -1495,14 +1518,17 @@ class StandardWindow(MainWindow):
             self.project = self._collect_project()
             progress.advance("正在读取参考图块…")
             library = ReferenceLibrary(self.reference_dxf) if self.reference_dxf.exists() else None
+            font_directory = self._pdf_font_directory()
             progress.advance(f"正在生成模块视图 0/{module_count}…")
             self.drawing_document = DrawingGenerator(library).generate(
                 self.project,
+                measure_detail=shx_detail_measure(font_directory),
                 on_module_drawn=lambda count: progress.advance(
                     f"正在生成模块视图 {count}/{module_count}…"
                     if count < module_count else "正在排版…"
                 ),
             )
+            self.drawing_document = replace(self.drawing_document, filename_label=self._filename_label())
             self._drawing_dirty = False
             self._preview_pdf = None
             progress.bar.setMaximum(module_count + len(self.drawing_document.pages) + 5)
@@ -1512,7 +1538,6 @@ class StandardWindow(MainWindow):
                 self.page_spin.setValue(1)
             warnings = list(self.drawing_document.warnings)
             try:
-                font_directory = self._pdf_font_directory()
                 with TemporaryDirectory(prefix="refracdraft-preview-") as directory:
                     path = self._render_pdf(Path(directory) / "preview.pdf", font_directory, progress)
                     self._preview_pdf = (font_directory, path.read_bytes())
@@ -1547,10 +1572,14 @@ class StandardWindow(MainWindow):
         return str(directory) if directory.is_dir() else None
 
     def _render_pdf(
-        self, path: Path, font_directory: str | None, progress: OperationProgress
+        self, path: Path, font_directory: str | None, progress: OperationProgress,
+        *, filename_label: str | None = None,
     ) -> Path:
+        drawing = self.drawing_document
+        if filename_label is not None:
+            drawing = replace(drawing, filename_label=filename_label)
         return export_pdf(
-            self.drawing_document,
+            drawing,
             path,
             reference_dxf=self.reference_dxf,
             font_directory=font_directory,
@@ -1569,7 +1598,8 @@ class StandardWindow(MainWindow):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             progress.advance("正在写入 DXF…")
-            export_dxf(self.drawing_document, path, self.reference_dxf)
+            label = path.stem if self.print_filename_check.isChecked() else ""
+            export_dxf(replace(self.drawing_document, filename_label=label), path, self.reference_dxf)
             progress.finish("DXF 已导出")
             self.statusBar().showMessage(f"DXF 已导出：{path}")
         except Exception as exc:
@@ -1591,16 +1621,19 @@ class StandardWindow(MainWindow):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             font_directory = self._pdf_font_directory()
-            if self._preview_pdf is not None and self._preview_pdf[0] == font_directory:
+            label = path.stem if self.print_filename_check.isChecked() else ""
+            same_label = label == self.drawing_document.filename_label
+            if same_label and self._preview_pdf is not None and self._preview_pdf[0] == font_directory:
                 progress.update_stage("正在保存预览 PDF…", progress.bar.maximum() - 1)
                 with TemporaryDirectory(prefix="refracdraft-save-", dir=path.parent) as directory:
                     staged = Path(directory) / "drawing.pdf"
                     staged.write_bytes(self._preview_pdf[1])
                     staged.replace(path)
             else:
-                self._render_pdf(path, font_directory, progress)
-                self._preview_pdf = (font_directory, path.read_bytes())
-                self._show_selected_page(self.page_spin.value())
+                self._render_pdf(path, font_directory, progress, filename_label=label)
+                if same_label:
+                    self._preview_pdf = (font_directory, path.read_bytes())
+                    self._show_selected_page(self.page_spin.value())
             progress.finish("PDF 已导出")
             self.statusBar().showMessage(f"PDF 已导出：{path}")
         except Exception as exc:
@@ -1630,10 +1663,12 @@ class StandardWindow(MainWindow):
             reference = self.reference_dxf if self.reference_dxf.exists() else None
             library = ReferenceLibrary(reference) if reference else None
             progress.advance("正在生成模块图纸…")
-            drawing = DrawingGenerator(library).generate(project)
+            font_directory = self._pdf_font_directory()
+            drawing = DrawingGenerator(library).generate(project, measure_detail=shx_detail_measure(font_directory))
+            drawing = replace(drawing, filename_label=self._filename_label())
             progress.bar.setMaximum(6 + len(drawing.pages))
             export_complete_project(project, drawing, path, reference_dxf=reference,
-                                    font_directory=self._pdf_font_directory(), progress=progress.advance)
+                                    font_directory=font_directory, progress=progress.advance)
             progress.finish("完整项目已导出")
             self.statusBar().showMessage(f"完整项目已导出到：{path.parent}")
         except Exception as exc:

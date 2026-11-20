@@ -12,7 +12,10 @@ from refracdraft.domain.models import BoardFaceProfile, Project
 from refracdraft.drawing.model import DrawingDocument
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import export_pdf
-from refracdraft.standard_sheet import COLUMN_SPECS, PROFILE_COLUMNS, PROFILE_SHEET, row_values_from_models
+from refracdraft.standard_sheet import (
+    AUTOMATIC, AUTOMATIC_FALLBACK_KEYS, AUTOMATIC_FIELDS, AUTOMATIC_SHEET, COLUMN_SPECS, PROFILE_COLUMNS, PROFILE_SHEET,
+    row_values_from_models,
+)
 
 
 def export_standard_excel(project: Project, path: Path) -> None:
@@ -22,11 +25,17 @@ def export_standard_excel(project: Project, path: Path) -> None:
     ws.append([spec.label for spec in COLUMN_SPECS])
     ws.freeze_panes = "B2"
     profile_sheet = None
+    automatic_sheet = wb.create_sheet(AUTOMATIC_SHEET)
+    automatic_sheet.sheet_state = "hidden"
+    automatic_sheet.append(("module_id", *AUTOMATIC_FALLBACK_KEYS))
     for module in project.modules:
-        row = row_values_from_models(
-            module, project.board_for(module.module_id), project.anchor_for(module.module_id),
-            automatic=project.standard_auto_fields.get(module.module_id, ()),
-        )
+        row = row_values_from_models(module, project.board_for(module.module_id), project.anchor_for(module.module_id))
+        automatic_sheet.append([module.module_id, *(row[key] for key in AUTOMATIC_FALLBACK_KEYS)])
+        for cell in automatic_sheet[automatic_sheet.max_row]:
+            if cell.data_type == "f":
+                cell.data_type = "s"
+        active = project.standard_auto_fields.get(module.module_id, ())
+        row.update(dict.fromkeys((key for key in AUTOMATIC_FIELDS if key in active), AUTOMATIC))
         ws.append([row[spec.key] for spec in COLUMN_SPECS])
         for cell in ws[ws.max_row]:
             if cell.data_type == "f":

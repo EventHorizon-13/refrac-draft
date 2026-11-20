@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "refrac-draft"
-version = "0.1.6b14"
+version = "0.1.6b15"
 description = "Parameter-driven 2D refractory module manufacturing drawing generator"
 readme = "README.md"
 requires-python = ">=3.11"

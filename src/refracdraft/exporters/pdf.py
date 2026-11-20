@@ -17,8 +17,10 @@ from ezdxf.addons.drawing import Frontend, RenderContext, layout
 from ezdxf.addons.drawing.config import BackgroundPolicy, ColorPolicy, Configuration
 from ezdxf.addons.drawing.pymupdf import PyMuPdfBackend
 from ezdxf.fonts import fonts
+from ezdxf.fonts.shapefile import GlyphCache, ShapeFileException, readfile as read_shx
 from ezdxf.math import BoundingBox2d
 
+from refracdraft.drawing.layout import DETAIL_TEXT_SIZE_MM
 from refracdraft.drawing.model import DrawingDocument
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.resources import resource_path
@@ -112,6 +114,28 @@ def _resolve_shx_fonts(
     if bigfont is None and bigfont_name is None:
         bigfont = next((info for info in infos if info.is_bigfont), None)
     return main, bigfont
+
+
+def shx_detail_measure(directory: str | Path | None) -> Callable[[str], float] | None:
+    main, big = _resolve_shx_fonts(directory, None, None)
+    if main is None or big is None or (main.name.casefold(), big.name.casefold()) != ("gbenor.shx", "gbcbig.shx"):
+        return None
+    try:
+        glyphs = GlyphCache(read_shx(str(main.path)))
+    except (OSError, ShapeFileException):
+        return None
+    advances = {}
+
+    def measure(text: str) -> float:
+        for char in set(text) - advances.keys():
+            if ord(char) in glyphs.font.shapes:
+                advances[char] = 1.05 * glyphs.get_text_length(char, DETAIL_TEXT_SIZE_MM)
+            else:
+                # The plotted GB bigfont has a square cell. Allow clearance for non-GB fallback glyphs.
+                advances[char] = DETAIL_TEXT_SIZE_MM * (1.08 if char.encode("gbk", errors="ignore") else 1.39)
+        return sum(advances[char] for char in text)
+
+    return measure
 
 
 def _font_score(path: Path) -> tuple[int, str]:

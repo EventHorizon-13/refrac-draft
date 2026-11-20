@@ -22,12 +22,15 @@ BOARD_TYPES = ("9厘", "8厘", "6厘")
 ANCHOR_MATERIALS = ("201", "304", "309", "310")
 THREAD_SPECS = ("M8", "M10")
 PROFILE_SHEET = "异形参数"
+AUTOMATIC_SHEET = "联动设置"
+AUTOMATIC_FALLBACK_KEYS = ("board_material", "anchor_material", "hose_spec")
 PROFILE_COLUMNS = ("编号", "类型", "a", "b", "c", "d", "旋转角度", "镜像")
 PIN_DIAMETERS = ("8", "6", "5")
 HOSE_SPECS = ("25", "32")
 AUTOMATIC = "自动"
 AUTOMATIC_FIELDS = ("structure_type", "board_material", "anchor_material", "hose_spec", "anchor_length_mm")
 M_ANCHOR_LENGTHS = (240, 220, 200, 180, 150, 120)
+DIAMOND_ANCHOR_LENGTHS = (230, 200, 180, 150, 120)
 INSERT_ANCHOR_LENGTHS = (450, 400, 350, 250)
 INSERT_ANCHOR_LABELS = frozenset({AnchorType.SIDE_INSERT.value, AnchorType.QUICK_INSERT.value})
 
@@ -120,7 +123,7 @@ DEFAULT_ROW = {
     "board_exists": True,
     "board_material": "9厘",
     "anchor_enabled": False,
-    "anchor_position_mm": "50",
+    "anchor_position_mm": "150",
     "anchor_spacing_mm": "300",
     "anchor_count": "1",
     "anchor_type": "M型",
@@ -186,11 +189,26 @@ def automatic_fields(values: dict[str, str | bool]) -> list[str]:
     return [key for key in AUTOMATIC_FIELDS if values.get(key) in ("", AUTOMATIC)]
 
 
+def legacy_automatic_fields(values: dict[str, str | bool]) -> list[str]:
+    """Recognize older preset values while keeping custom values explicit."""
+    presets = {
+        "structure_type": ("折叠", "半折叠", "折叠模块", "半折叠模块"),
+        "board_material": ("8厘", "9厘", "8厘夹板", "9厘夹板"),
+        "anchor_material": ANCHOR_MATERIALS,
+        "hose_spec": ("25", "32", "25胶管", "32胶管"),
+        "anchor_length_mm": (*anchor_length_options(str(values["anchor_type"])), "230"),
+    }
+    automatic = automatic_fields(values)
+    return [key for key in AUTOMATIC_FIELDS if key in automatic or str(values[key]) in presets[key]]
+
+
 def anchor_length_options(anchor_type: str) -> tuple[str, ...]:
     if anchor_type in INSERT_ANCHOR_LABELS:
         return tuple(map(str, INSERT_ANCHOR_LENGTHS + M_ANCHOR_LENGTHS))
     if anchor_type in ("M型", AnchorType.M_SHAPE.value):
         return tuple(map(str, M_ANCHOR_LENGTHS))
+    if anchor_type == AnchorType.DIAMOND.value:
+        return tuple(map(str, DIAMOND_ANCHOR_LENGTHS))
     return ()
 
 
@@ -229,16 +247,16 @@ def _automatic_anchor_length(values: dict[str, str | bool], length: float | None
             target = next((size for size in M_ANCHOR_LENGTHS if size <= target), target)
     elif front_taper:
         target = round(height - 60, 2)
-    elif anchor_type in ("M型", AnchorType.M_SHAPE.value):
-        target = next((size for size in M_ANCHOR_LENGTHS if height - 60 <= size <= height - 50),
-                      round(height - 55, 2))
     else:
-        target = round(height - 55, 2)
+        sizes = map(int, anchor_length_options(anchor_type))
+        target = next((size for size in sizes if height - 60 <= size <= height - 50),
+                      round(height - 55, 2))
     return f"{target:g}" if target > 0 else ""
 
 
 def resolve_automatic_values(
     values: dict[str, str | bool],
+    fallback: dict[str, str | bool] | None = None,
 ) -> dict[str, str]:
     fields = automatic_fields(values)
     if not fields:
@@ -247,11 +265,15 @@ def resolve_automatic_values(
     density = _input_number(values["density_kg_m3"])
     grade = _input_number(_without_suffix(str(values["material"]), "材质", "板材"))
     thread = str(values["thread_spec"]).strip().upper()
+    defaults = {}
+    for key in AUTOMATIC_FALLBACK_KEYS:
+        value = (fallback or {}).get(key)
+        defaults[key] = str(value if value not in ("", AUTOMATIC, None) else DEFAULT_ROW[key])
     suggestions = {
         "structure_type": "半折叠" if length is not None and length > 600 else "折叠",
-        "board_material": "8厘" if density is not None and density <= 192 else str(DEFAULT_ROW["board_material"]),
-        "anchor_material": "310" if grade is not None and grade >= 1430 else str(DEFAULT_ROW["anchor_material"]),
-        "hose_spec": {"M10": "32", "M8": "25"}.get(thread, str(DEFAULT_ROW["hose_spec"])),
+        "board_material": defaults["board_material"] if density is None else ("8厘" if density <= 192 else "9厘"),
+        "anchor_material": "310" if grade is not None and grade >= 1430 else defaults["anchor_material"],
+        "hose_spec": {"M10": "32", "M8": "25"}.get(thread, defaults["hose_spec"]),
     }
     if "anchor_length_mm" in fields:
         suggestions["anchor_length_mm"] = _automatic_anchor_length(values, length)
@@ -333,12 +355,13 @@ def build_standard_row(
     ),
     *,
     board_face_profile: BoardFaceProfile | None = None,
+    fallback: dict[str, str | bool] | None = None,
 ) -> tuple[ModuleParameters, BoardParameters, AnchorParameters]:
     module_id = str(values["module_id"]).strip()
     if not module_id:
         raise ValueError("模块编号不能为空")
     base_module, base_board, base_anchor = bases
-    values = {**values, **resolve_automatic_values(values)}
+    values = {**values, **resolve_automatic_values(values, fallback)}
     length, thickness = standard_board_face_bounds(values)
     structure_label = str(values["structure_type"]).strip()
     tapered = bool(values["taper_enabled"])

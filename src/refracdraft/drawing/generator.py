@@ -506,13 +506,14 @@ class DrawingGenerator:
         project: Project,
         *,
         on_module_drawn: Callable[[int], None] | None = None,
+        measure_detail: Callable[[str], float] | None = None,
     ) -> DrawingDocument:
         drawings = []
         for count, module in enumerate(project.modules, start=1):
             drawings.append(self.build_module(project, module))
             if on_module_drawn is not None:
                 on_module_drawn(count)
-        required_widths = [module_required_width(drawing) for drawing in drawings]
+        required_widths = [module_required_width(drawing, measure_detail) for drawing in drawings]
         gaps = [panel_gap(left, right) for left, right in zip(drawings, drawings[1:])]
         pages: list[SheetPage] = []
         groups = _balanced_page_groups(required_widths, gaps)
@@ -527,7 +528,9 @@ class DrawingGenerator:
             panel_x = PAGE_LEFT_MM
             for panel_index, (drawing, required) in enumerate(zip(group, group_widths)):
                 panel_width = required + extra_each
-                content_x = panel_x + panel_content_left(drawing, panel_width, geometry_width(drawing))
+                content_x = panel_x + panel_content_left(
+                    drawing, panel_width, geometry_width(drawing, measure_detail), measure_detail,
+                )
                 placed.append(
                     PlacedModule(
                         drawing=drawing,
@@ -535,6 +538,7 @@ class DrawingGenerator:
                         panel_width_mm=panel_width,
                         panel_index=panel_index,
                         content_x_mm=content_x,
+                        measure_detail=measure_detail,
                     )
                 )
                 if panel_index + 1 < len(group):
