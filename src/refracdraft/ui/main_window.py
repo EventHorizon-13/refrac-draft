@@ -27,6 +27,7 @@ from refracdraft.drawing.layout import (
     SEPARATOR_TOP_MM,
     VIEW_SCALE,
     detail_box,
+    detail_top,
     view_placement,
 )
 from refracdraft.exporters.dxf import export_dxf
@@ -150,7 +151,7 @@ class DrawingPreview(QGraphicsView):
                     "\n".join(drawing.details),
                     left,
                     available_width,
-                    placement.detail_y,
+                    detail_top(placed),
                 )
         self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 

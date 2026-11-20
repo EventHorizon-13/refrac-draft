@@ -7,8 +7,10 @@ from typing import Any
 
 from openpyxl import load_workbook
 
-from refracdraft.domain.models import Project, ModuleParameters, BoardParameters, AnchorParameters, GeometryType
-from refracdraft.standard_sheet import COLUMN_SPECS, DEFAULT_ROW, build_standard_row
+from refracdraft.domain.models import (
+    AnchorParameters, BoardFaceFeature, BoardFaceProfile, BoardParameters, GeometryType, ModuleParameters, Project,
+)
+from refracdraft.standard_sheet import COLUMN_SPECS, DEFAULT_ROW, PROFILE_COLUMNS, PROFILE_SHEET, build_standard_row
 
 
 SHEET_ALIASES = {
@@ -188,7 +190,22 @@ def _normalize_row(row: dict[str, Any], group: str) -> dict[str, Any]:
     return normalized
 
 
-def _import_standard_sheet(ws, headers: list[str]) -> Project:
+def _profiles(ws) -> dict[str, BoardFaceProfile]:
+    features: dict[str, list[BoardFaceFeature]] = {}
+    for number, row in enumerate(_rows(ws), start=2):
+        try:
+            module_id, kind, a, b, c, d, angle, mirror = (row.get(key) for key in PROFILE_COLUMNS)
+            if module_id is None or not str(module_id).strip():
+                raise ValueError("缺少编号")
+            cuts = features.setdefault(str(module_id).strip(), [])
+            cuts.append(BoardFaceFeature(type=kind, a=a, b=b, c=c, d=d,
+                                         rotation_deg=angle or 0, mirror_x=_bool(mirror) if mirror is not None else False))
+        except ValueError as exc:
+            raise ValueError(f"「{PROFILE_SHEET}」第 {number} 行：{exc}") from exc
+    return {key: BoardFaceProfile(features=value) for key, value in features.items()}
+
+
+def _import_standard_sheet(ws, headers: list[str], profiles: dict[str, BoardFaceProfile]) -> Project:
     columns = {label: index for index, label in enumerate(headers)}
     if len(columns) != len(COLUMN_SPECS) or set(columns) != {spec.label for spec in COLUMN_SPECS}:
         raise ValueError("「标准版」表头不完整或有重复列，请使用程序附带的示例")
@@ -209,7 +226,7 @@ def _import_standard_sheet(ws, headers: list[str]) -> Project:
             else:
                 values[spec.key] = "" if value is None else str(value).strip()
         try:
-            module, board, anchor = build_standard_row(values)
+            module, board, anchor = build_standard_row(values, board_face_profile=profiles.get(values["module_id"]))
         except ValueError as exc:
             raise ValueError(f"Excel 第 {number} 行：{exc}") from exc
         modules.append(module)
@@ -217,6 +234,9 @@ def _import_standard_sheet(ws, headers: list[str]) -> Project:
         anchors.append(anchor)
     if not modules:
         raise ValueError("「标准版」工作表没有模块数据")
+    missing = profiles.keys() - {module.module_id for module in modules}
+    if missing:
+        raise ValueError(f"「{PROFILE_SHEET}」包含未知模块：{'，'.join(sorted(missing))}")
     return Project(modules=modules, boards=boards, anchors=anchors)
 
 
@@ -246,7 +266,8 @@ def import_project_xlsx(path: str | Path) -> Project:
             while headers and not headers[-1]:
                 headers.pop()
             if ws.title.strip() == "标准版" or set(headers) == labels:
-                return _import_standard_sheet(ws, headers)
+                profiles = _profiles(wb[PROFILE_SHEET]) if PROFILE_SHEET in wb.sheetnames else {}
+                return _import_standard_sheet(ws, headers, profiles)
         return _import_legacy_sheets(wb)
     finally:
         wb.close()

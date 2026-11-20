@@ -8,7 +8,7 @@ import re
 
 import pymupdf
 from PySide6.QtCore import (
-    QEvent, QEventLoop, QPersistentModelIndex, QRect, QRegularExpression, QSettings, QSignalBlocker,
+    QByteArray, QEvent, QEventLoop, QPersistentModelIndex, QRect, QRegularExpression, QSettings, QSignalBlocker,
     QStandardPaths, Qt, Signal,
 )
 from PySide6.QtGui import (
@@ -65,6 +65,7 @@ from refracdraft.domain.models import (
 from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import export_pdf
+from refracdraft.exporters.project import export_complete_project
 from refracdraft.release import app_version
 from refracdraft.resources import application_directory
 from refracdraft.reference.library import ReferenceLibrary
@@ -645,6 +646,12 @@ class StandardWindow(MainWindow):
         super().__init__()
         self._history_ready = True
         self._reset_history()
+        geometry = self._settings.value("window/geometry", QByteArray())
+        if isinstance(geometry, QByteArray) and not geometry.isEmpty():
+            self.restoreGeometry(geometry)
+        split = self._settings.value("window/output_splitter", QByteArray())
+        if isinstance(split, QByteArray) and not split.isEmpty():
+            self.output_splitter.restoreState(split)
         self.setWindowTitle(f"RefracDraft Standard v{app_version()} — 模块加工图生成器")
         self.statusBar().showMessage("修改参数后点击「预览」；可拖动选区右下角批量填充。")
 
@@ -740,11 +747,13 @@ class StandardWindow(MainWindow):
         preview_layout = QVBoxLayout(preview_panel)
         preview_layout.setContentsMargins(8, 8, 8, 8)
         preview_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.output_splitter = preview_splitter
+        preview_splitter.setChildrenCollapsible(False)
+        preview_splitter.setHandleWidth(7)
 
         output_panel = QFrame()
         output_panel.setObjectName("outputPanel")
         output_panel.setMinimumWidth(245)
-        output_panel.setMaximumWidth(365)
         output_layout = QVBoxLayout(output_panel)
         output_layout.setContentsMargins(12, 10, 12, 10)
         output_layout.setSpacing(7)
@@ -789,8 +798,13 @@ class StandardWindow(MainWindow):
         self.output_pdf_button.clicked.connect(self.export_pdf_file)
         output_layout.addWidget(self.output_dxf_button)
         output_layout.addWidget(self.output_pdf_button)
+        self.output_project_button = QPushButton("导出完整项目")
+        self.output_project_button.setProperty("primary", True)
+        self.output_project_button.clicked.connect(self.export_project_file)
+        output_layout.addWidget(self.output_project_button)
 
         preview_canvas = QWidget()
+        preview_canvas.setMinimumWidth(240)
         canvas_layout = QGridLayout(preview_canvas)
         canvas_layout.setContentsMargins(0, 0, 0, 0)
         self.preview = DrawingPreview()
@@ -906,11 +920,13 @@ class StandardWindow(MainWindow):
 
     def closeEvent(self, event) -> None:
         self._save_output_settings()
+        self._settings.setValue("window/geometry", self.saveGeometry())
+        self._settings.setValue("window/output_splitter", self.output_splitter.saveState())
         super().closeEvent(event)
 
     def _filename_stem(self) -> str:
         value = self.output_filename_edit.text().strip() if hasattr(self, "output_filename_edit") else ""
-        if value.lower().endswith((".dxf", ".pdf", ".json")):
+        if value.lower().endswith((".dxf", ".pdf", ".json", ".xlsx", ".zip")):
             value = Path(value).stem
         value = re.sub(r'[<>:"/\\|?*]+', "-", value).strip(" .")
         return value or _default_filename_stem()
@@ -924,7 +940,7 @@ class StandardWindow(MainWindow):
             return
         directory = self.output_directory_edit.text().strip() or "当前工作目录"
         stem = self._filename_stem()
-        self.output_path_label.setText(f"{directory}\n{stem}.json  /  {stem}.dxf  /  {stem}.pdf")
+        self.output_path_label.setText(f"{directory}\n{stem}.json  /  {stem}.dxf  /  {stem}.pdf  /  {stem}.zip")
 
     def _output_target(self, suffix: str) -> Path | None:
         self._save_output_settings()
@@ -1555,6 +1571,30 @@ class StandardWindow(MainWindow):
         except Exception as exc:
             progress.hide()
             QMessageBox.critical(self, "PDF 导出失败", str(exc))
+        finally:
+            progress.hide()
+            progress.deleteLater()
+
+    def export_project_file(self) -> None:
+        path = self._output_target(".zip")
+        if path is None:
+            return
+        progress = OperationProgress(self, "正在整理项目参数…", 6)
+        try:
+            project = self._collect_project()
+            progress.advance("正在读取参考图块…")
+            reference = self.reference_dxf if self.reference_dxf.exists() else None
+            library = ReferenceLibrary(reference) if reference else None
+            progress.advance("正在生成模块图纸…")
+            drawing = DrawingGenerator(library).generate(project)
+            progress.bar.setMaximum(6 + len(drawing.pages))
+            export_complete_project(project, drawing, path, reference_dxf=reference,
+                                    font_directory=self._pdf_font_directory(), progress=progress.advance)
+            progress.finish("完整项目已导出")
+            self.statusBar().showMessage(f"完整项目已导出：{path}")
+        except Exception as exc:
+            progress.hide()
+            QMessageBox.critical(self, "完整项目导出失败", str(exc))
         finally:
             progress.hide()
             progress.deleteLater()

@@ -14,6 +14,7 @@ from refracdraft.drawing.layout import (
     SEPARATOR_BOTTOM_MM,
     SEPARATOR_TOP_MM,
     detail_box,
+    detail_top,
     view_placement,
 )
 from refracdraft.drawing.model import DrawingDocument, ViewDrawing, linetype_role
@@ -281,7 +282,7 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
                 msp.add_mtext(
                     r"\P".join(drawing.details),
                     dxfattribs={
-                        "insert": (left * MODEL_SCALE, page_y + placement.detail_y * MODEL_SCALE),
+                        "insert": (left * MODEL_SCALE, page_y + detail_top(placed) * MODEL_SCALE),
                         "char_height": DETAIL_TEXT_HEIGHT,
                         "width": available_width * MODEL_SCALE,
                         "style": TEXT_STYLE,

@@ -20,6 +20,8 @@ MODULE_MATERIALS = (
 BOARD_TYPES = ("9厘", "8厘", "6厘")
 ANCHOR_MATERIALS = ("201", "304", "309", "310")
 THREAD_SPECS = ("M8", "M10")
+PROFILE_SHEET = "异形参数"
+PROFILE_COLUMNS = ("编号", "类型", "a", "b", "c", "d", "旋转角度", "镜像")
 PIN_DIAMETERS = ("8", "6", "5")
 HOSE_SPECS = ("25", "32")
 

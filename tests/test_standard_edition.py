@@ -12,7 +12,10 @@ from refracdraft.drawing.layout import (
     DIMENSION_TEXT_SIZE_MM,
     PANEL_INNER_MARGIN_MM,
     detail_box,
+    detail_top,
     details_width,
+    outline_width,
+    view_bounds,
 )
 from refracdraft.domain.models import (
     AnchorParameters,
@@ -29,6 +32,7 @@ from refracdraft.importers.excel import _normalize_row, import_project_xlsx
 from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import PDF_FONT_CANDIDATES, _find_pdf_font, _render_page, _single_page_dxf
+from refracdraft.exporters.project import export_standard_excel
 from refracdraft.release import latest_portable_release
 from refracdraft.standard_sheet import COLUMN_SPECS, DEFAULT_ROW, build_standard_row
 from refracdraft.standard import (
@@ -563,25 +567,63 @@ def test_balanced_pages_do_not_leave_a_tiny_last_page():
     assert groups == [(0, 1), (1, 3)]
 
 
-def test_short_module_details_are_centered_independently_of_geometry(tmp_path):
+def test_short_module_details_are_centered_on_views(tmp_path):
     item = build_standard_module(None, StandardModuleValues("M1", 350, 300, 230))
     document = DrawingGenerator().generate(Project(modules=[item]))
     placed, = document.pages[0].modules
     left, width = detail_box(placed)
     center = placed.x_mm + placed.panel_width_mm / 2
     assert left + details_width(placed.drawing) / 2 == pytest.approx(center)
-    assert left < placed.content_x_mm
     output = export_dxf(document, tmp_path / "short-module.dxf")
     detail, = ezdxf.readfile(output).modelspace().query("MTEXT")
     assert detail.dxf.insert.x == pytest.approx(left * 10)
     assert detail.dxf.width == pytest.approx(width * 10)
 
 
-def test_long_module_details_line_up_with_geometry_on_the_left():
+def test_long_two_view_module_details_are_centered_on_views():
     item = build_standard_module(None, StandardModuleValues("M1", 351, 300, 230))
     document = DrawingGenerator().generate(Project(modules=[item]))
     placed, = document.pages[0].modules
-    assert detail_box(placed)[0] == pytest.approx(placed.content_x_mm)
+    left, _ = detail_box(placed)
+    center = placed.content_x_mm + outline_width(placed.drawing.front_view) / 2
+    assert left + details_width(placed.drawing) / 2 == pytest.approx(center)
+
+
+def test_tall_1120_style_pair_puts_details_beside_the_views():
+    profile = BoardFaceProfile.model_validate({"features": [
+        {"type": 2, "a": 69, "b": 90, "c": 69, "d": 50, "rotation_deg": 270, "mirror_x": True},
+    ]})
+    rows = [build_standard_row(
+        dict(DEFAULT_ROW, module_id=f"M{index}", length_mm="300", thickness_mm="550",
+             taper_enabled=True, taper_type="侧敲", big_head_mm="289", small_head_mm="220",
+             anchor_enabled=True, anchor_type="旁插", anchor_position_mm="150"),
+        board_face_profile=profile,
+    ) for index in (1, 2)]
+    modules, boards, anchors = map(list, zip(*rows))
+    doc = DrawingGenerator().generate(Project(modules=modules, boards=boards, anchors=anchors))
+    page, = doc.pages
+    assert len(page.modules) == 2
+    for placed in page.modules:
+        left, width = detail_box(placed)
+        geometry_right = max(view_bounds(view)[2] for view in (placed.drawing.front_view, placed.drawing.board_view))
+        assert left == pytest.approx(placed.content_x_mm + geometry_right + 10)
+        assert left + width < placed.x_mm + placed.panel_width_mm
+        assert detail_top(placed) > 100
+
+
+def test_exported_standard_excel_round_trips_ordered_cuts_and_literal_text(tmp_path):
+    profile = BoardFaceProfile.model_validate({"features": [
+        {"type": 2, "a": 69, "b": 90, "c": 69, "d": 45, "rotation_deg": 90},
+        {"type": 1, "a": 120, "b": 46, "rotation_deg": 270},
+    ]})
+    part, board, anchor = build_standard_row(
+        dict(DEFAULT_ROW, module_id="=M1", source_note="=复核"), board_face_profile=profile,
+    )
+    path = tmp_path / "project.xlsx"
+    export_standard_excel(Project(modules=[part], boards=[board], anchors=[anchor]), path)
+    restored, = import_project_xlsx(path).modules
+    assert (restored.module_id, restored.source_note) == ("=M1", "=复核")
+    assert restored.board_face_outline == profile
 
 
 @pytest.mark.parametrize(("board_exists", "label"), [(True, "夹板"), (False, "无夹板")])

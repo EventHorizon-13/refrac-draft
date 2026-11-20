@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import ceil
 
 from refracdraft.drawing.model import ModuleDrawing, PlacedModule, ViewDrawing
 
@@ -31,6 +32,7 @@ DIMENSION_ARROW_SIZE_MM = 1.3
 DETAIL_LINE_SPACING = 0.76
 DETAIL_LINE_HEIGHT_MM = DETAIL_TEXT_SIZE_MM * (5 / 3) * DETAIL_LINE_SPACING
 DETAIL_TOP_MM = 94.0
+DETAIL_TITLE_CLEARANCE_MM = 4.0
 ANNOTATION_CLEARANCE_MM = DIMENSION_TEXT_SIZE_MM + 1.6
 
 
@@ -107,19 +109,49 @@ def top_row_width(drawing: ModuleDrawing) -> float:
 
 
 def details_width(drawing: ModuleDrawing) -> float:
-    # Estimate advances conservatively for the SHX font pair and font fallbacks.
-    units = [
-        sum(0.4 if char.isspace() else 0.65 if char.isascii() else 0.95 for char in line)
-        for line in drawing.details
-    ]
+    units = [_text_width(line, 0.47, 0.76) for line in drawing.details]
     return min(
         PAGE_CONTENT_WIDTH_MM - PANEL_INNER_MARGIN_MM * 2,
-        max(units, default=0.0) * DETAIL_TEXT_SIZE_MM,
+        max(units, default=0.0),
     )
 
 
+def _text_width(line: str, ascii_width: float, cjk_width: float) -> float:
+    return sum(0.33 if char.isspace() else ascii_width if char.isascii() else cjk_width
+               for char in line) * DETAIL_TEXT_SIZE_MM
+
+
+def _detail_height(drawing: ModuleDrawing, width: float) -> float:
+    rows = sum(max(1, ceil(_text_width(line, 0.57, 0.95) / max(1.0, width))) for line in drawing.details)
+    return rows * DETAIL_LINE_HEIGHT_MM + 1.0
+
+
+def _drawing_right(drawing: ModuleDrawing) -> float:
+    right = max(view_bounds(drawing.front_view)[2], view_bounds(drawing.board_view)[2])
+    if drawing.side_view is not None:
+        right = max(right, side_view_offset(drawing) + view_bounds(drawing.side_view)[2])
+    return right
+
+
+def _side_details(drawing: ModuleDrawing) -> bool:
+    if not drawing.details:
+        return False
+    placement = view_placement(drawing)
+    return placement.detail_y - _detail_height(drawing, details_width(drawing) + 8) < (
+        TITLE_BLOCK_TOP_MM + DETAIL_TITLE_CLEARANCE_MM
+    )
+
+
+def _side_detail_width(drawing: ModuleDrawing) -> float:
+    return max(32.0, min(56.0, details_width(drawing) + 9, PAGE_CONTENT_WIDTH_MM - _drawing_right(drawing)
+                        - VIEW_CLEARANCE_MM - 2 * _panel_inner_margin(drawing)))
+
+
 def geometry_width(drawing: ModuleDrawing) -> float:
-    return max(top_row_width(drawing), outline_width(drawing.board_view))
+    width = max(top_row_width(drawing), outline_width(drawing.board_view))
+    if _side_details(drawing):
+        return _drawing_right(drawing) + VIEW_CLEARANCE_MM + _side_detail_width(drawing)
+    return width
 
 
 def _panel_inner_margin(drawing: ModuleDrawing) -> float:
@@ -137,11 +169,33 @@ def panel_content_left(drawing: ModuleDrawing, panel_width: float, content_width
 
 
 def module_required_width(drawing: ModuleDrawing) -> float:
-    content_width = max(geometry_width(drawing), details_width(drawing))
+    content_width = max(geometry_width(drawing), details_width(drawing) + 18)
     return max(PANEL_MIN_WIDTH_MM, content_width + _panel_inner_margin(drawing) * 2.0)
 
 
 def detail_box(placed: PlacedModule) -> tuple[float, float]:
-    width = details_width(placed.drawing)
-    left = placed.x_mm + panel_content_left(placed.drawing, placed.panel_width_mm, width)
-    return left, placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM - left
+    drawing = placed.drawing
+    if _side_details(drawing):
+        left = placed.content_x_mm + _drawing_right(drawing) + VIEW_CLEARANCE_MM
+        available = placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM - left
+        return left, min(details_width(drawing) + 9, available)
+    width = details_width(drawing)
+    if drawing.side_view is None or drawing.front_view.outline.bounds[2] <= CENTERED_MODULE_MAX_LENGTH_MM:
+        center = placed.content_x_mm + max(top_row_width(drawing), outline_width(drawing.board_view)) / 2
+        left = max(placed.x_mm + PANEL_INNER_MARGIN_MM, center - width / 2)
+    else:
+        left = placed.content_x_mm
+    available = placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM - left
+    return left, min(width + 9, available)
+
+
+def detail_top(placed: PlacedModule) -> float:
+    drawing = placed.drawing
+    placement = view_placement(drawing)
+    if not _side_details(drawing):
+        return placement.detail_y
+    top = placement.top_y + view_bounds(drawing.front_view)[3]
+    bottom = max(TITLE_BLOCK_TOP_MM + DETAIL_TITLE_CLEARANCE_MM,
+                 placement.board_y + view_bounds(drawing.board_view)[1])
+    height = _detail_height(drawing, detail_box(placed)[1])
+    return min(top, (top + bottom + height) / 2)
