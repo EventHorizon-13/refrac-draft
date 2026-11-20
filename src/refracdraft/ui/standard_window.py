@@ -22,6 +22,7 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
     QRegularExpressionValidator,
+    QValidator,
 )
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
@@ -72,9 +73,9 @@ from refracdraft.resources import application_directory
 from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.standard import ensure_standard_project
 from refracdraft.standard_sheet import (
-    AUTOMATIC, AUTOMATIC_FIELDS, COLUMN_SPECS, DEFAULT_ROW, anchor_length_options, automatic_fields,
-    build_standard_row, legacy_automatic_fields, resolve_automatic_values, row_values_from_models,
-    standard_board_face_bounds,
+    AUTOMATIC, AUTOMATIC_FIELDS, COLUMN_SPECS, DEFAULT_ROW, EMPTY_SELECTS_AUTOMATIC, OPTIONAL_ANCHOR_FIELDS,
+    STANDARD_LINK_VERSION, anchor_length_options, automatic_fields, build_standard_row, legacy_automatic_fields,
+    legacy_source_note, resolve_automatic_values, row_values_from_models, standard_board_face_bounds,
 )
 from refracdraft.ui.about import AboutDialog
 from refracdraft.ui.board_face_dialog import BoardFaceDialog
@@ -160,6 +161,13 @@ def _preset_button_rect(cell_rect: QRect) -> QRect:
     return QRect(cell_rect.right() - 15, cell_rect.top(), 16, cell_rect.height() - 7)
 
 
+class OptionalNumberValidator(QDoubleValidator):
+    def validate(self, text, position):
+        if not text:
+            return QValidator.State.Acceptable, text, position
+        return super().validate(text, position)
+
+
 class ParameterDelegate(QStyledItemDelegate):
     """Editable preset editor used by the spreadsheet-style module table."""
 
@@ -182,7 +190,8 @@ class ParameterDelegate(QStyledItemDelegate):
             " selection-background-color: #3b82f6; selection-color: white; }"
         )
         if spec.kind == "number":
-            validator = QDoubleValidator(0.0, 1_000_000.0, 2, editor)
+            validator_type = OptionalNumberValidator if spec.key in OPTIONAL_ANCHOR_FIELDS else QDoubleValidator
+            validator = validator_type(0.0, 1_000_000.0, 2, editor)
             validator.setNotation(QDoubleValidator.Notation.StandardNotation)
             editor.setValidator(validator)
         elif spec.kind == "integer":
@@ -221,7 +230,7 @@ class ParameterDelegate(QStyledItemDelegate):
     def initStyleOption(self, option, index) -> None:
         super().initStyleOption(option, index)
         suggestion = index.data(AUTOMATIC_PREVIEW_ROLE)
-        if suggestion and index.data(Qt.ItemDataRole.DisplayRole) == AUTOMATIC:
+        if suggestion is not None and index.data(Qt.ItemDataRole.DisplayRole) == AUTOMATIC:
             option.text = str(suggestion)
             option.font.setItalic(True)
 
@@ -369,7 +378,7 @@ class ParameterTable(QTableWidget):
         options = spec.options
         if spec.key == "anchor_length_mm":
             options = anchor_length_options(self.item(row, COLUMN_INDEX["anchor_type"]).text())
-        if spec.key in AUTOMATIC_FIELDS:
+        if spec.key in AUTOMATIC_FIELDS and AUTOMATIC not in options:
             options = (AUTOMATIC,) + options
         for option in options:
             if option == "自定义":
@@ -377,6 +386,11 @@ class ParameterTable(QTableWidget):
             entry = QListWidgetItem(option, choices)
             entry.setData(Qt.ItemDataRole.UserRole, option)
             if current == option:
+                choices.setCurrentItem(entry)
+        if spec.key in OPTIONAL_ANCHOR_FIELDS or spec.key == "source_note":
+            entry = QListWidgetItem("留空", choices)
+            entry.setData(Qt.ItemDataRole.UserRole, "")
+            if not current:
                 choices.setCurrentItem(entry)
         if spec.kind != "enum" or "自定义" in spec.options:
             QListWidgetItem("自定义…", choices)
@@ -1109,6 +1123,8 @@ class StandardWindow(MainWindow):
             if automatic is None:
                 automatic = legacy_automatic_fields(fallback)
             values = {**fallback, **dict.fromkeys((key for key in AUTOMATIC_FIELDS if key in automatic), AUTOMATIC)}
+            if self.project.standard_link_version < STANDARD_LINK_VERSION and "source_note" not in automatic:
+                values["source_note"] = legacy_source_note(values)
             profile = module.board_face_outline
             base = RowBase(source, profile if isinstance(profile, BoardFaceProfile) else None, fallback)
         elif table.rowCount():
@@ -1196,7 +1212,8 @@ class StandardWindow(MainWindow):
         item = self.parameter_table.item(row, COLUMN_INDEX[key])
         if item is None:
             return ""
-        return str(item.data(AUTOMATIC_PREVIEW_ROLE) or item.text()).strip()
+        suggestion = item.data(AUTOMATIC_PREVIEW_ROLE)
+        return str(item.text() if suggestion is None else suggestion).strip()
 
     def _cell_bool(self, row: int, key: str) -> bool:
         item = self.parameter_table.item(row, COLUMN_INDEX[key])
@@ -1263,11 +1280,14 @@ class StandardWindow(MainWindow):
                 suggestions = resolve_automatic_values(self._sheet_values(row), self._row_bases[row].automatic_fallback)
                 for key in AUTOMATIC_FIELDS:
                     item = table.item(row, COLUMN_INDEX[key])
-                    if not item.text().strip():
+                    if key in EMPTY_SELECTS_AUTOMATIC and not item.text().strip():
                         item.setText(AUTOMATIC)
                     suggestion = suggestions.get(key)
                     item.setData(AUTOMATIC_PREVIEW_ROLE, suggestion)
-                    item.setToolTip(f"自动计算 · {suggestion or '待填写参数'}" if key in suggestions else "")
+                    if key == "source_note":
+                        item.setToolTip("随锚固件类型自动填写" if key in suggestions else item.text())
+                    else:
+                        item.setToolTip(f"自动计算 · {suggestion or '待填写参数'}" if key in suggestions else "")
         finally:
             self._updating_table = was_updating
 
@@ -1377,7 +1397,9 @@ class StandardWindow(MainWindow):
 
         dialog = QInputDialog(self)
         dialog.setWindowTitle(f"修改整列 - {spec.label}")
-        options = (AUTOMATIC,) + spec.options if spec.key in AUTOMATIC_FIELDS else spec.options
+        options = spec.options
+        if spec.key in AUTOMATIC_FIELDS and AUTOMATIC not in options:
+            options = (AUTOMATIC,) + options
         hint = "，".join(options) if options else "输入任意自定义内容"
         dialog.setLabelText(f"将第 {column + 1} 列设置为：\n{hint}")
         if options:
@@ -1507,6 +1529,7 @@ class StandardWindow(MainWindow):
             boards=boards,
             anchors=anchors,
             standard_auto_fields=auto_fields,
+            standard_link_version=STANDARD_LINK_VERSION,
         )
         ensure_standard_project(project)
         return project

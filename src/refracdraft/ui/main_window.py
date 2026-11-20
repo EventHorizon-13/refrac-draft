@@ -489,6 +489,8 @@ class MainWindow(QMainWindow):
                 }
                 if not project.standard_auto_fields:
                     excluded["standard_auto_fields"] = True
+                if project.standard_link_version == 1:
+                    excluded["standard_link_version"] = True
                 path.parent.mkdir(parents=True, exist_ok=True)
                 data = project.model_dump_json(indent=2, exclude=excluded).encode("utf-8")
                 output = QSaveFile(str(path))

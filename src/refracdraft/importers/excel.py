@@ -12,7 +12,8 @@ from refracdraft.domain.models import (
 )
 from refracdraft.standard_sheet import (
     AUTOMATIC, AUTOMATIC_FALLBACK_KEYS, AUTOMATIC_SHEET, COLUMN_SPECS, DEFAULT_ROW, PROFILE_COLUMNS,
-    PROFILE_SHEET, automatic_fields, build_standard_row, legacy_automatic_fields,
+    PROFILE_SHEET, STANDARD_LINK_VERSION, automatic_fields, build_standard_row, legacy_automatic_fields,
+    legacy_source_note,
 )
 
 
@@ -210,7 +211,7 @@ def _profiles(ws) -> dict[str, BoardFaceProfile]:
 
 def _import_standard_sheet(
     ws, headers: list[str], profiles: dict[str, BoardFaceProfile],
-    fallbacks: dict[str, dict[str, str | bool]] | None,
+    fallbacks: dict[str, dict[str, str | bool]] | None, legacy_notes: bool,
 ) -> Project:
     columns = {label: index for index, label in enumerate(headers)}
     if len(columns) != len(COLUMN_SPECS) or set(columns) != {spec.label for spec in COLUMN_SPECS}:
@@ -237,6 +238,8 @@ def _import_standard_sheet(
         fallback = values.copy() if fallbacks is None else fallbacks.get(values["module_id"], {})
         if fallbacks is None:
             values.update(dict.fromkeys(legacy_automatic_fields(values), AUTOMATIC))
+        if legacy_notes:
+            values["source_note"] = legacy_source_note(values)
         try:
             module, board, anchor = build_standard_row(
                 values, board_face_profile=profiles.get(values["module_id"]), fallback=fallback,
@@ -252,7 +255,8 @@ def _import_standard_sheet(
     missing = profiles.keys() - {module.module_id for module in modules}
     if missing:
         raise ValueError(f"「{PROFILE_SHEET}」包含未知模块：{'，'.join(sorted(missing))}")
-    return Project(modules=modules, boards=boards, anchors=anchors, standard_auto_fields=auto_fields)
+    return Project(modules=modules, boards=boards, anchors=anchors, standard_auto_fields=auto_fields,
+                   standard_link_version=STANDARD_LINK_VERSION)
 
 
 def _import_legacy_sheets(wb) -> Project:
@@ -283,13 +287,17 @@ def import_project_xlsx(path: str | Path) -> Project:
             if ws.title.strip() == "标准版" or set(headers) == labels:
                 profiles = _profiles(wb[PROFILE_SHEET]) if PROFILE_SHEET in wb.sheetnames else {}
                 fallbacks = None
+                legacy_notes = True
                 if AUTOMATIC_SHEET in wb.sheetnames:
+                    automatic_sheet = wb[AUTOMATIC_SHEET]
+                    settings_headers = next(automatic_sheet.iter_rows(max_row=1, values_only=True), ())
+                    legacy_notes = "standard_link_version" not in settings_headers
                     fallbacks = {
                         str(row[0]): {key: str(value) for key, value in zip(AUTOMATIC_FALLBACK_KEYS, row[1:])
                                       if value is not None}
-                        for row in wb[AUTOMATIC_SHEET].iter_rows(min_row=2, values_only=True) if row and row[0] is not None
+                        for row in automatic_sheet.iter_rows(min_row=2, values_only=True) if row and row[0] is not None
                     }
-                return _import_standard_sheet(ws, headers, profiles, fallbacks)
+                return _import_standard_sheet(ws, headers, profiles, fallbacks, legacy_notes)
         return _import_legacy_sheets(wb)
     finally:
         wb.close()

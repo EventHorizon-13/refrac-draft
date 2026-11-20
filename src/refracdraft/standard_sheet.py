@@ -28,11 +28,15 @@ PROFILE_COLUMNS = ("编号", "类型", "a", "b", "c", "d", "旋转角度", "镜�
 PIN_DIAMETERS = ("8", "6", "5")
 HOSE_SPECS = ("25", "32")
 AUTOMATIC = "自动"
-AUTOMATIC_FIELDS = ("structure_type", "board_material", "anchor_material", "hose_spec", "anchor_length_mm")
+STANDARD_LINK_VERSION = 2
+AUTOMATIC_FIELDS = ("structure_type", "board_material", "anchor_material", "hose_spec", "anchor_length_mm", "source_note")
+EMPTY_SELECTS_AUTOMATIC = ("structure_type", "board_material", "hose_spec")
+OPTIONAL_ANCHOR_FIELDS = ("anchor_length_mm", "anchor_material", "thread_spec", "pin_diameter_mm")
 M_ANCHOR_LENGTHS = (240, 220, 200, 180, 150, 120)
 DIAMOND_ANCHOR_LENGTHS = (230, 200, 180, 150, 120)
 INSERT_ANCHOR_LENGTHS = (450, 400, 350, 250)
 INSERT_ANCHOR_LABELS = frozenset({AnchorType.SIDE_INSERT.value, AnchorType.QUICK_INSERT.value})
+INSERT_ANCHOR_NOTE = "木板开口60*110 插针隔1层毯子插"
 
 ANCHOR_TYPES = (
     ("M型", AnchorType.M_SHAPE),
@@ -105,7 +109,7 @@ COLUMN_SPECS = (
     ColumnSpec("pin_diameter_mm", "插针", "number", PIN_DIAMETERS, 54, "anchor"),
     ColumnSpec("hose_spec", "胶管", "combo", HOSE_SPECS, 54, "anchor"),
     ColumnSpec("embedment_depth_mm", "嵌入深度", "number", (), 62, "anchor"),
-    ColumnSpec("source_note", "备注", width=116, group="footer"),
+    ColumnSpec("source_note", "备注", options=(AUTOMATIC,), width=116, group="footer"),
 )
 DEFAULT_ROW = {
     "module_id": "M1",
@@ -133,7 +137,7 @@ DEFAULT_ROW = {
     "pin_diameter_mm": "8",
     "hose_spec": "32",
     "embedment_depth_mm": "50",
-    "source_note": "",
+    "source_note": AUTOMATIC,
 }
 
 
@@ -186,7 +190,24 @@ def _hose_value(value: str) -> str:
 
 
 def automatic_fields(values: dict[str, str | bool]) -> list[str]:
-    return [key for key in AUTOMATIC_FIELDS if values.get(key) in ("", AUTOMATIC)]
+    return [
+        key for key in AUTOMATIC_FIELDS
+        if values.get(key) == AUTOMATIC or (key in EMPTY_SELECTS_AUTOMATIC and values.get(key) == "")
+    ]
+
+
+def _insert_anchor_note(values: dict[str, str | bool]) -> str:
+    return INSERT_ANCHOR_NOTE if values["anchor_enabled"] and values["anchor_type"] in INSERT_ANCHOR_LABELS else ""
+
+
+def legacy_source_note(values: dict[str, str | bool]) -> str:
+    note = str(values["source_note"]).strip()
+    if note in ("", AUTOMATIC):
+        return AUTOMATIC
+    instruction = _insert_anchor_note(values)
+    if instruction and instruction not in note:
+        return f"{note}；{instruction}"
+    return note
 
 
 def legacy_automatic_fields(values: dict[str, str | bool]) -> list[str]:
@@ -199,7 +220,7 @@ def legacy_automatic_fields(values: dict[str, str | bool]) -> list[str]:
         "anchor_length_mm": (*anchor_length_options(str(values["anchor_type"])), "230"),
     }
     automatic = automatic_fields(values)
-    return [key for key in AUTOMATIC_FIELDS if key in automatic or str(values[key]) in presets[key]]
+    return [key for key in AUTOMATIC_FIELDS if key in automatic or str(values[key]) in presets.get(key, ())]
 
 
 def anchor_length_options(anchor_type: str) -> tuple[str, ...]:
@@ -274,6 +295,7 @@ def resolve_automatic_values(
         "board_material": defaults["board_material"] if density is None else ("8厘" if density <= 192 else "9厘"),
         "anchor_material": "310" if grade is not None and grade >= 1430 else defaults["anchor_material"],
         "hose_spec": {"M10": "32", "M8": "25"}.get(thread, defaults["hose_spec"]),
+        "source_note": _insert_anchor_note(values),
     }
     if "anchor_length_mm" in fields:
         suggestions["anchor_length_mm"] = _automatic_anchor_length(values, length)
@@ -317,11 +339,11 @@ def row_values_from_models(
         "anchor_count": str(anchor_values.count),
         "anchor_type": anchor_values.custom_type_label
         or ANCHOR_LABEL_BY_TYPE.get(anchor_values.anchor_type, "M型"),
-        "anchor_length_mm": f"{anchor_values.length_mm or 230.0:g}",
-        "anchor_material": anchor_model.material or anchor_values.material,
-        "thread_spec": anchor_model.thread_spec or anchor_values.thread_spec,
+        "anchor_length_mm": f"{anchor_model.length_mm:g}" if anchor_model.length_mm is not None else "",
+        "anchor_material": anchor_model.material,
+        "thread_spec": anchor_model.thread_spec,
         "pin_diameter_mm": (
-            f"{anchor_values.pin_diameter_mm:g}" if anchor_values.pin_diameter_mm is not None else "8"
+            f"{anchor_model.diameter_mm:g}" if anchor_model.diameter_mm is not None else ""
         ),
         "hose_spec": _without_suffix(
             anchor_model.hose_spec or anchor_values.hose_spec,
@@ -399,8 +421,6 @@ def build_standard_row(
         module_values.board_exists,
         module_values.board_material,
     )
-    if bool(values["anchor_enabled"]) and not str(values["anchor_length_mm"]).strip():
-        raise ValueError(f"{module_id}: 无法自动计算锚固件长度，请核对尺寸、位置与间距，或输入自定义长度")
     anchor = build_standard_anchor(
         base_anchor,
         module.module_id,
@@ -447,8 +467,8 @@ def _anchor_values(values: dict[str, str | bool], module_id: str) -> StandardAnc
         return StandardAnchorValues(
             enabled=False,
             anchor_type=anchor_type,
-            material=str(values["anchor_material"]).strip() or "310",
-            thread_spec=str(values["thread_spec"]).strip() or "M10",
+            material=str(values["anchor_material"]).strip(),
+            thread_spec=str(values["thread_spec"]).strip(),
             pin_diameter_mm=_optional_number(pin_text, "插针直径", module_id),
             hose_spec=_hose_value(str(values["hose_spec"]).strip()) or "32胶管",
         )
@@ -473,10 +493,10 @@ def _anchor_values(values: dict[str, str | bool], module_id: str) -> StandardAnc
         anchor_type=anchor_type,
         custom_type_label="" if type_label == "自定义" else type_label,
         embedment_depth_mm=embedment,
-        material=str(values["anchor_material"]).strip() or "310",
-        thread_spec=str(values["thread_spec"]).strip() or "M10",
+        material=str(values["anchor_material"]).strip(),
+        thread_spec=str(values["thread_spec"]).strip(),
         pin_diameter_mm=pin_diameter,
         hose_spec=_hose_value(str(values["hose_spec"]).strip()) or "32胶管",
-        length_mm=_number(str(values["anchor_length_mm"]), "锚固件长度", module_id),
+        length_mm=_optional_number(str(values["anchor_length_mm"]), "锚固件长度", module_id),
     )
 

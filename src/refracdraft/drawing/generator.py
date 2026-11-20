@@ -176,21 +176,16 @@ def _details(module, board, anchor) -> tuple[str, ...]:
             AnchorType.QUICK_INSERT: "快插", AnchorType.WELDED_DIAMOND: "焊接菱形",
             AnchorType.CUSTOM: anchor.custom_type_label or "自定义",
         }.get(anchor.anchor_type, "")
-        material = anchor.material or "未填写材质"
-        lines.extend((f"3、锚固件：{material}{anchor_name.removesuffix('锚固件')}{spec}",
-                      f"4、锚固件长度：{anchor.length_mm:g}mm" if anchor.length_mm else "4、锚固件长度：未填写"))
+        length = f"{anchor.length_mm:g}mm" if anchor.length_mm is not None else ""
+        lines.extend((f"3、锚固件：{anchor.material}{anchor_name.removesuffix('锚固件')}{spec}",
+                      f"4、锚固件长度：{length}"))
     lines.append(f"5、数量：{module.production_quantity} Pcs")
     lines.append(f"6、容重：{module.density_kg_m3:g} kg/m³" if module.density_kg_m3 else "6、容重：未填写")
     hose = anchor.hose_spec if anchor.exists else "无胶管"
     board_text = board.material if board.exists else "无夹板"
     lines.append(f"7、{hose or '未填写胶管'}，{board_text}")
-    notes = [module.source_note] if module.source_note else []
-    if anchor.exists and anchor.anchor_type == AnchorType.SIDE_INSERT:
-        instruction = "木板开口60*110 插针隔1层毯子插"
-        if not any(instruction in note for note in notes):
-            notes.append(instruction)
-    if notes:
-        lines.append(f"8、{'；'.join(notes)}")
+    if module.source_note:
+        lines.append(f"8、{module.source_note}")
     return tuple(lines)
 
 

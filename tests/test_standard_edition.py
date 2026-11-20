@@ -340,14 +340,32 @@ def test_standard_details_include_new_manufacturing_fields():
     assert "8、现场复核" in text
 
 
-def test_side_insert_adds_machining_note_without_replacing_existing_note():
-    module = build_standard_module(None, StandardModuleValues("M1", 300, 300, 230))
-    module = module.model_copy(update={"source_note": "现场复核"})
-    board = build_standard_board(None, "M1", True)
-    anchor = build_standard_anchor(
-        None, "M1", 300, StandardAnchorValues(enabled=True, anchor_type=AnchorType.SIDE_INSERT),
-    )
-    assert _details(module, board, anchor)[-1] == "8、现场复核；木板开口60*110 插针隔1层毯子插"
+@pytest.mark.parametrize("anchor_type", ["旁插", "快插"])
+def test_insert_anchor_remark_can_be_edited_or_cleared(anchor_type):
+    values = dict(DEFAULT_ROW, anchor_enabled=True, anchor_type=anchor_type)
+    module, board, anchor = build_standard_row(values)
+    assert module.source_note == "木板开口60*110 插针隔1层毯子插"
+    assert _details(module, board, anchor)[-1] == f"8、{module.source_note}"
+    for remark in ("现场复核开口", ""):
+        module, board, anchor = build_standard_row(dict(values, source_note=remark))
+        details = _details(module, board, anchor)
+        assert [line for line in details if line.startswith("8、")] == ([f"8、{remark}"] if remark else [])
+
+
+def test_blank_anchor_fields_and_remark_roundtrip_in_json_and_excel(tmp_path):
+    module, board, anchor = build_standard_row(dict(
+        DEFAULT_ROW, anchor_enabled=True, anchor_type="快插", anchor_length_mm="", anchor_material="",
+        thread_spec="", pin_diameter_mm="", source_note="",
+    ))
+    project = Project(modules=[module], boards=[board], anchors=[anchor], standard_link_version=2)
+    path = tmp_path / "empty-fields.xlsx"
+    export_standard_excel(project, path)
+    for restored in (Project.model_validate_json(project.model_dump_json()), import_project_xlsx(path)):
+        module, board, anchor = restored.modules[0], restored.boards[0], restored.anchors[0]
+        assert (anchor.length_mm, anchor.material, anchor.thread_spec, anchor.diameter_mm) == (None, "", "", None)
+        assert not restored.standard_auto_fields.get("M1")
+        assert module.source_note == ""
+        assert _details(module, board, anchor)[2:4] == ("3、锚固件：快插", "4、锚固件长度：")
 
 
 def test_custom_type_labels_survive_project_json_and_appear_in_details():
@@ -621,7 +639,7 @@ def test_1120_pair_uses_balanced_below_view_details_when_full_stack_fits(tmp_pat
                  expansion_length_mm=str(height), anchor_enabled=True, anchor_count=str(index),
                  anchor_position_mm="150", anchor_spacing_mm="300",
                  anchor_type="旁插" if index == 1 else "M型", thread_spec="M8" if index == 1 else "M10",
-                 source_note="" if index == 1 else "普通模块示例"),
+                 source_note=AUTOMATIC if index == 1 else "普通模块示例"),
             board_face_profile=BoardFaceProfile.model_validate({"features": [feature]}),
         )
         for index, length, height, feature in (

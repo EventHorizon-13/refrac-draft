@@ -221,7 +221,7 @@ def build_standard_anchor(
         raise ValueError(f"{module_id}: 已勾选锚固件，必须选择锚固件类型")
     position = _positive(values.position_mm, "锚固件位置", module_id)
     spacing = _positive(values.spacing_mm, "锚固件间距", module_id)
-    length = _positive(230.0 if values.length_mm is None else values.length_mm, "锚固件长度", module_id)
+    length = _positive(values.length_mm, "锚固件长度", module_id) if values.length_mm is not None else None
     count = int(values.count)
     if count < 1:
         raise ValueError(f"{module_id}: 锚固件数量至少为 1")
@@ -307,9 +307,9 @@ def standard_anchor_values(anchor: AnchorParameters) -> StandardAnchorValues:
         embedment_depth_mm=anchor.embedment_depth_mm,
         material=anchor.material,
         thread_spec=anchor.thread_spec,
-        pin_diameter_mm=anchor.diameter_mm if anchor.diameter_mm is not None else 8.0,
+        pin_diameter_mm=anchor.diameter_mm,
         hose_spec=anchor.hose_spec or _default_hose_spec(anchor.thread_spec),
-        length_mm=anchor.length_mm or 230.0,
+        length_mm=anchor.length_mm,
         custom_type_label=anchor.custom_type_label,
     )
 

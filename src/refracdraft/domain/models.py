@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class GeometryType(StrEnum):
@@ -216,6 +216,11 @@ class AnchorParameters(BaseModel):
     dimension_vertical: bool = False
     source_note: str = ""
 
+    @field_validator("material", "thread_spec", mode="before")
+    @classmethod
+    def normalize_empty_text(cls, value):
+        return "" if value is None else value
+
     @model_validator(mode="after")
     def validate_layout(self) -> "AnchorParameters":
         if not self.exists or self.anchor_type == AnchorType.NONE:
@@ -248,6 +253,7 @@ class Project(BaseModel):
     boards: list[BoardParameters] = Field(default_factory=list)
     anchors: list[AnchorParameters] = Field(default_factory=list)
     standard_auto_fields: dict[str, list[str]] = Field(default_factory=dict)
+    standard_link_version: int = 1
 
     @model_validator(mode="after")
     def validate_relations(self) -> "Project":

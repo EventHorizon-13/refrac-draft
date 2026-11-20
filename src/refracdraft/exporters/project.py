@@ -14,7 +14,7 @@ from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import export_pdf
 from refracdraft.standard_sheet import (
     AUTOMATIC, AUTOMATIC_FALLBACK_KEYS, AUTOMATIC_FIELDS, AUTOMATIC_SHEET, COLUMN_SPECS, PROFILE_COLUMNS, PROFILE_SHEET,
-    row_values_from_models,
+    STANDARD_LINK_VERSION, row_values_from_models,
 )
 
 
@@ -27,10 +27,10 @@ def export_standard_excel(project: Project, path: Path) -> None:
     profile_sheet = None
     automatic_sheet = wb.create_sheet(AUTOMATIC_SHEET)
     automatic_sheet.sheet_state = "hidden"
-    automatic_sheet.append(("module_id", *AUTOMATIC_FALLBACK_KEYS))
+    automatic_sheet.append(("module_id", *AUTOMATIC_FALLBACK_KEYS, "standard_link_version"))
     for module in project.modules:
         row = row_values_from_models(module, project.board_for(module.module_id), project.anchor_for(module.module_id))
-        automatic_sheet.append([module.module_id, *(row[key] for key in AUTOMATIC_FALLBACK_KEYS)])
+        automatic_sheet.append([module.module_id, *(row[key] for key in AUTOMATIC_FALLBACK_KEYS), STANDARD_LINK_VERSION])
         for cell in automatic_sheet[automatic_sheet.max_row]:
             if cell.data_type == "f":
                 cell.data_type = "s"
@@ -75,7 +75,11 @@ def export_complete_project(
         stage = Path(directory)
         files = project_output_paths(stage / base_path.name)
         progress("正在写入 JSON 和 Excel…")
-        excluded = {"standard_auto_fields"} if not project.standard_auto_fields else None
+        excluded = set()
+        if not project.standard_auto_fields:
+            excluded.add("standard_auto_fields")
+        if project.standard_link_version == 1:
+            excluded.add("standard_link_version")
         files["json"].write_text(project.model_dump_json(indent=2, exclude=excluded), encoding="utf-8")
         export_standard_excel(project, files["xlsx"])
         progress("正在生成 DXF…")
