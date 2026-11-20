@@ -14,6 +14,7 @@ from refracdraft.drawing.layout import (
     SEPARATOR_BOTTOM_MM,
     SEPARATOR_TOP_MM,
     detail_box,
+    detail_lines,
     detail_top,
     view_placement,
 )
@@ -280,7 +281,7 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
             if drawing.details:
                 left, available_width = detail_box(placed)
                 msp.add_mtext(
-                    r"\P".join(drawing.details),
+                    r"\P".join(detail_lines(placed)),
                     dxfattribs={
                         "insert": (left * MODEL_SCALE, page_y + detail_top(placed) * MODEL_SCALE),
                         "char_height": DETAIL_TEXT_HEIGHT,

@@ -27,6 +27,7 @@ from refracdraft.drawing.layout import (
     SEPARATOR_TOP_MM,
     VIEW_SCALE,
     detail_box,
+    detail_lines,
     detail_top,
     view_placement,
 )
@@ -148,7 +149,7 @@ class DrawingPreview(QGraphicsView):
                 left, available_width = detail_box(placed)
                 self._add_multiline_text(
                     scene,
-                    "\n".join(drawing.details),
+                    "\n".join(detail_lines(placed)),
                     left,
                     available_width,
                     detail_top(placed),
