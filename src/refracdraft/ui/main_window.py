@@ -295,9 +295,10 @@ class DrawingPreview(QGraphicsView):
             direction = 1.0 if y2 >= y1 else -1.0
             arrow(x1, y1, 0, -direction)
             arrow(x2, y2, 0, direction)
-            self._add_text(
-                scene, label, x1 - 2, (y1 + y2) / 2, DIMENSION_TEXT_SIZE_MM, "#00ff00"
-            )
+            text = self._add_text(scene, label, x1, (y1 + y2) / 2, DIMENSION_TEXT_SIZE_MM, "#00ff00")
+            text.setRotation(-90)
+            bounds = text.sceneBoundingRect()
+            text.moveBy(x1 - 0.6 - bounds.right(), PAGE_HEIGHT_MM - (y1 + y2) / 2 - bounds.center().y())
 
 
 class MainWindow(QMainWindow):

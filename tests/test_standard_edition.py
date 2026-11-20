@@ -998,6 +998,23 @@ def test_pdf_plot_uses_one_font_in_title_and_nested_logo_without_changing_source
     assert original.entitydb[chinese.dxf.handle].text == chinese.text
 
 
+def test_shx_dxf_retains_label_direction_on_first_and_translated_pages(tmp_path):
+    module = build_standard_module(None, StandardModuleValues("M1", 350, 300, 230))
+    drawing = DrawingGenerator().generate(Project(modules=[module]))
+    page, = drawing.pages
+    drawing = replace(drawing, pages=(page, replace(page, page_number=2)))
+    source = export_dxf(drawing, tmp_path / "dimensions.dxf")
+    for page_index in range(2):
+        plot = _single_page_dxf(source, page_index, tmp_path / f"plot-{page_index}.dxf", True)
+        dims = ezdxf.readfile(plot).modelspace().query("DIMENSION")
+        assert {dim.dxf.angle for dim in dims} == {0, 90}
+        for dim in dims:
+            label, = dim.get_geometry_block().query("MTEXT")
+            assert label.get_rotation() == pytest.approx(dim.dxf.angle)
+            if dim.dxf.angle == 90:
+                assert label.dxf.hasattr("text_direction")
+
+
 def test_pdf_prefers_bundled_song_font_to_system_font(monkeypatch):
     bundled_song = next(path for path in PDF_FONT_CANDIDATES if path.name == "SourceHanSerifSC-Regular.otf")
     system_font = Path(r"C:\Windows\Fonts\simsun.ttc")

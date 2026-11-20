@@ -262,6 +262,14 @@ def _single_page_dxf(
     if page_y:
         for entity in list(msp):
             entity.translate(0.0, -page_y, 0.0)
+    # The SHX renderer reads MTEXT's direction vector. A translated page already
+    # has it, but unshifted DXF dimension blocks can store only the rotation angle.
+    for dimension in msp.query("DIMENSION"):
+        block = dimension.get_geometry_block()
+        if block is None:
+            continue
+        for text in block.query("MTEXT"):
+            text.convert_rotation_to_text_direction()
     _apply_shx_text_style(doc, has_bigfont)
     _normalize_title_fonts(doc)
     target.parent.mkdir(parents=True, exist_ok=True)
