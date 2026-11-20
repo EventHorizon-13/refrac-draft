@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QIODevice, QSaveFile, Qt, Signal
 from PySide6.QtGui import (
     QAction, QColor, QBrush, QFont, QFontMetricsF, QPen, QPainter, QPalette, QPixmap,
-    QTextBlockFormat, QTextCursor, QTextOption,
+    QTextBlockFormat, QTextCursor, QTextOption, QTransform,
 )
 from PySide6.QtWidgets import (
     QFileDialog, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QMainWindow,
@@ -28,7 +28,7 @@ from refracdraft.drawing.layout import (
     VIEW_SCALE,
     detail_box,
     detail_lines,
-    detail_top,
+    detail_vertical_anchor,
     view_placement,
 )
 from refracdraft.exporters.dxf import export_dxf
@@ -147,12 +147,14 @@ class DrawingPreview(QGraphicsView):
             )
             if drawing.details:
                 left, available_width = detail_box(placed)
+                anchor_y, align_bottom = detail_vertical_anchor(placed)
                 self._add_multiline_text(
                     scene,
                     "\n".join(detail_lines(placed)),
                     left,
                     available_width,
-                    detail_top(placed),
+                    anchor_y,
+                    align_bottom,
                 )
         self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
@@ -171,7 +173,7 @@ class DrawingPreview(QGraphicsView):
         item.setPos(x, 210 - y - size)
         return item
 
-    def _add_multiline_text(self, scene, text, x, max_width, top):
+    def _add_multiline_text(self, scene, text, x, max_width, anchor_y, align_bottom):
         item = scene.addText(text)
         font = QFont(self.font())
         font.setPixelSize(100)
@@ -180,16 +182,21 @@ class DrawingPreview(QGraphicsView):
         item.setDefaultTextColor(QColor("#111111"))
         item.document().setDocumentMargin(0)
         options = item.document().defaultTextOption()
-        options.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        options.setWrapMode(QTextOption.WrapMode.NoWrap)
         item.document().setDefaultTextOption(options)
         cursor = item.textCursor()
         cursor.select(QTextCursor.SelectionType.Document)
         block = QTextBlockFormat()
         block.setLineHeight(DETAIL_LINE_HEIGHT_MM / scale, QTextBlockFormat.LineHeightTypes.FixedHeight.value)
         cursor.mergeBlockFormat(block)
-        item.setTextWidth(max_width / scale)
+        bounds = item.boundingRect()
+        if bounds.width() * scale > max_width:
+            item.setTransform(QTransform.fromScale(max_width / (bounds.width() * scale), 1.0))
         item.setScale(scale)
-        item.setPos(x, PAGE_HEIGHT_MM - top)
+        top = PAGE_HEIGHT_MM - anchor_y
+        if align_bottom:
+            top -= bounds.height() * scale
+        item.setPos(x, top)
 
     def _draw_view(self, scene, view, origin, module_id, scale):
         ox, oy = origin

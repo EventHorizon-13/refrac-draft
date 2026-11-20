@@ -14,8 +14,9 @@ from refracdraft.drawing.layout import (
     SEPARATOR_BOTTOM_MM,
     SEPARATOR_TOP_MM,
     detail_box,
+    detail_line_width_factor,
     detail_lines,
-    detail_top,
+    detail_vertical_anchor,
     view_placement,
 )
 from refracdraft.drawing.model import DrawingDocument, ViewDrawing, linetype_role
@@ -46,6 +47,17 @@ DIMENSION_FALLBACK = {
     "dimscale": 20.0,
     "dimtad": 1,
 }
+
+
+def _detail_mtext(lines: tuple[str, ...], available_width: float) -> str:
+    paragraphs = []
+    for line in lines:
+        escaped = line.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
+        factor = detail_line_width_factor(line, available_width)
+        if factor < 1.0:
+            escaped = rf"{{\W{factor:.6f};{escaped}}}"
+        paragraphs.append(escaped)
+    return r"\P".join(paragraphs)
 
 
 def _ensure_text_styles(doc) -> None:
@@ -280,15 +292,16 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
             )
             if drawing.details:
                 left, available_width = detail_box(placed)
+                anchor_y, align_bottom = detail_vertical_anchor(placed)
                 msp.add_mtext(
-                    r"\P".join(detail_lines(placed)),
+                    _detail_mtext(detail_lines(placed), available_width),
                     dxfattribs={
-                        "insert": (left * MODEL_SCALE, page_y + detail_top(placed) * MODEL_SCALE),
+                        "insert": (left * MODEL_SCALE, page_y + anchor_y * MODEL_SCALE),
                         "char_height": DETAIL_TEXT_HEIGHT,
-                        "width": available_width * MODEL_SCALE,
+                        "width": 0.0,
                         "style": TEXT_STYLE,
                         "layer": "TEXT",
-                        "attachment_point": 1,
+                        "attachment_point": 7 if align_bottom else 1,
                         "line_spacing_style": 2,
                         "line_spacing_factor": DETAIL_LINE_SPACING,
                     },

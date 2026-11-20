@@ -12,10 +12,12 @@ from refracdraft.drawing.layout import (
     DIMENSION_TEXT_SIZE_MM,
     PANEL_INNER_MARGIN_MM,
     detail_box,
+    detail_line_width_factor,
     detail_lines,
-    detail_top,
+    detail_vertical_anchor,
     details_width,
     view_bounds,
+    view_placement,
 )
 from refracdraft.domain.models import (
     AnchorParameters,
@@ -577,7 +579,8 @@ def test_short_module_details_are_centered_on_views(tmp_path):
     output = export_dxf(document, tmp_path / "short-module.dxf")
     detail, = ezdxf.readfile(output).modelspace().query("MTEXT")
     assert detail.dxf.insert.x == pytest.approx(left * 10)
-    assert detail.dxf.width == pytest.approx(width * 10)
+    assert detail.dxf.width == 0
+    assert width > 0
 
 
 @pytest.mark.parametrize("length", [351, 600, 900])
@@ -589,7 +592,7 @@ def test_long_two_view_module_details_follow_outline_left_edge(length):
     assert left == pytest.approx(placed.content_x_mm)
 
 
-def test_tall_1120_style_pair_puts_details_beside_the_views():
+def test_tall_1120_style_pair_bottom_aligns_details_beside_the_views(tmp_path):
     profile = BoardFaceProfile.model_validate({"features": [
         {"type": 2, "a": 69, "b": 90, "c": 69, "d": 50, "rotation_deg": 270, "mirror_x": True},
     ]})
@@ -601,38 +604,48 @@ def test_tall_1120_style_pair_puts_details_beside_the_views():
     ) for index in (1, 2)]
     modules, boards, anchors = map(list, zip(*rows))
     doc = DrawingGenerator().generate(Project(modules=modules, boards=boards, anchors=anchors))
-    page, = doc.pages
-    assert len(page.modules) == 2
-    for placed in page.modules:
+    output = export_dxf(doc, tmp_path / "side-details.dxf")
+    details = list(ezdxf.readfile(output).modelspace().query("MTEXT"))
+    assert len(details) == len(doc.pages) == 2
+    for page, detail in zip(doc.pages, details, strict=True):
+        placed, = page.modules
         left, width = detail_box(placed)
         geometry_right = max(view_bounds(view)[2] for view in (placed.drawing.front_view, placed.drawing.board_view))
         assert left == pytest.approx(placed.content_x_mm + geometry_right + 10)
         assert left + width < placed.x_mm + placed.panel_width_mm
-        assert detail_top(placed) > 100
+        anchor_y, align_bottom = detail_vertical_anchor(placed)
+        board_bottom = view_placement(placed.drawing).board_y + placed.drawing.board_view.outline.bounds[1] / 10
+        assert align_bottom
+        assert anchor_y == pytest.approx(board_bottom)
+        assert detail.dxf.attachment_point == 7
+        assert detail.dxf.insert.y == pytest.approx((board_bottom - (page.page_number - 1) * 230) * 10)
+        assert detail.dxf.width == 0
+        assert detail.plain_text(split=True) == list(placed.drawing.details)
 
 
-def test_side_details_use_the_panel_width_before_wrapping():
+@pytest.mark.parametrize("note", ["普通模块示例", "工艺备注" * 32])
+def test_side_details_use_the_panel_width_without_wrapping(note):
     profile = BoardFaceProfile.model_validate({"features": [
         {"type": 2, "a": 69, "b": 90, "c": 69, "d": 45},
     ]})
     rows = [build_standard_row(
         dict(DEFAULT_ROW, module_id=f"M{index}", length_mm=str(length), thickness_mm=str(thickness),
              expansion_length_mm=str(height), anchor_enabled=True, anchor_count=str(index),
-             anchor_position_mm="150", anchor_spacing_mm="300", source_note="普通模块示例"),
+             anchor_position_mm="150", anchor_spacing_mm="300", source_note=note),
         board_face_profile=profile if index == 1 else None,
     ) for index, length, thickness, height in ((1, 300, 550, 300), (2, 600, 600, 350))]
     modules, boards, anchors = map(list, zip(*rows))
-    page, = DrawingGenerator().generate(Project(modules=modules, boards=boards, anchors=anchors)).pages
-    assert len(page.modules) == 2
-    for placed in page.modules:
+    document = DrawingGenerator().generate(Project(modules=modules, boards=boards, anchors=anchors))
+    assert len(document.pages) == 2
+    for page in document.pages:
+        placed, = page.modules
         left, width = detail_box(placed)
         assert width > 60
         assert left + width == pytest.approx(placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM)
         lines = detail_lines(placed)
-        assert any(line.endswith(placed.drawing.module_id) for line in lines if line.startswith("1、"))
-        assert "4、锚固件长度：230mm" in lines
-        assert "6、容重：220 kg/m³" in lines
-        assert "7、32胶管，9厘夹板" in lines
+        assert lines == placed.drawing.details
+        assert all(detail_line_width_factor(line, width) == 1.0 for line in lines[:-1])
+        assert (detail_line_width_factor(lines[-1], width) < 1.0) == (note != "普通模块示例")
 
 
 def test_exported_standard_excel_round_trips_ordered_cuts_and_literal_text(tmp_path):
@@ -745,7 +758,7 @@ def test_dxf_uses_reference_dimension_style_and_big_font(tmp_path):
     detail_texts = list(exported.modelspace().query("MTEXT"))
     assert len(detail_texts) == 1
     assert detail_texts[0].dxf.char_height == pytest.approx(DETAIL_TEXT_SIZE_MM * 10.0)
-    assert detail_texts[0].dxf.width > 0
+    assert detail_texts[0].dxf.width == 0
     assert detail_texts[0].dxf.line_spacing_style == 2
     assert detail_texts[0].dxf.line_spacing_factor == pytest.approx(DETAIL_LINE_SPACING)
     assert "\\P" in detail_texts[0].text
