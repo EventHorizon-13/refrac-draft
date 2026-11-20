@@ -8,8 +8,6 @@ from refracdraft.drawing.model import ModuleDrawing, PlacedModule, ViewDrawing
 VIEW_SCALE = 0.0992
 SIDE_VIEW_GAP_MM = 14.0
 VIEW_CLEARANCE_MM = 10.0
-TOP_VIEW_BOTTOM_MM = 150.0
-BOARD_VIEW_BOTTOM_MM = 106.17
 PAGE_HEIGHT_MM = 210.0
 PAGE_LEFT_MM = 7.0
 PAGE_CONTENT_WIDTH_MM = 283.0
@@ -33,8 +31,8 @@ DIMENSION_TEXT_SIZE_MM = 3.2
 DIMENSION_ARROW_SIZE_MM = 1.3
 DETAIL_LINE_SPACING = 0.76
 DETAIL_LINE_HEIGHT_MM = DETAIL_TEXT_SIZE_MM * (5 / 3) * DETAIL_LINE_SPACING
-DETAIL_TOP_MM = 94.0
 DETAIL_TITLE_CLEARANCE_MM = 4.0
+DETAIL_VIEW_CLEARANCE_MM = 2.0
 DETAIL_WIDTH_CLEARANCE_MM = 2.0
 ANNOTATION_CLEARANCE_MM = DIMENSION_TEXT_SIZE_MM + 1.6
 
@@ -45,6 +43,7 @@ class ViewPlacement:
     board_y: float
     side_x: float
     detail_y: float
+    detail_on_side: bool
 
 
 def view_bounds(view: ViewDrawing) -> tuple[float, float, float, float]:
@@ -91,12 +90,30 @@ def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
     upper_bottom = min(box[1] for box in upper)
     upper_top = max(box[3] for box in upper)
     _, board_bottom, _, board_top = view_bounds(drawing.board_view)
-    needed_top_y = BOARD_VIEW_BOTTOM_MM + board_top + VIEW_CLEARANCE_MM - upper_bottom
     ceiling = PAGE_HEIGHT_MM - FRAME_INSET_MM - 2.0
-    top_y = min(max(TOP_VIEW_BOTTOM_MM, needed_top_y), ceiling - upper_top)
-    board_y = min(BOARD_VIEW_BOTTOM_MM, top_y + upper_bottom - VIEW_CLEARANCE_MM - board_top)
-    detail_y = min(DETAIL_TOP_MM, board_y + board_bottom - 2.0)
-    return ViewPlacement(top_y, board_y, side_view_offset(drawing), detail_y)
+    floor = TITLE_BLOCK_TOP_MM + DETAIL_TITLE_CLEARANCE_MM
+    available = ceiling - floor
+    view_height = upper_top - upper_bottom + board_top - board_bottom + VIEW_CLEARANCE_MM
+    detail_height = _detail_block_height(drawing)
+    below_height = detail_height + DETAIL_VIEW_CLEARANCE_MM if detail_height else 0.0
+    detail_on_side = bool(detail_height and view_height + below_height > available + 1e-6)
+    outline_bottom = drawing.board_view.outline.bounds[1] / 10
+    if detail_on_side:
+        # The side text starts at the outline bottom, above any lower dimensions.
+        side_height = outline_bottom - board_bottom + detail_height
+        view_gap_extra = min(6.0, max(0.0, available - max(view_height, side_height)) / 3)
+        occupied = max(view_height + view_gap_extra, side_height)
+        board_y = min(floor + (available - occupied) / 2, ceiling - view_height) - board_bottom
+        detail_y = max(floor, board_y + outline_bottom)
+    else:
+        spare = max(0.0, available - view_height - below_height)
+        view_gap_extra = min(6.0, spare / (4 if detail_height else 3))
+        detail_gap_extra = min(4.0, spare / 4) if detail_height else 0.0
+        margin = (available - view_height - below_height - view_gap_extra - detail_gap_extra) / 2
+        detail_y = floor + margin + detail_height
+        board_y = floor + margin + below_height + detail_gap_extra - board_bottom
+    top_y = board_y + board_top + VIEW_CLEARANCE_MM + view_gap_extra - upper_bottom
+    return ViewPlacement(top_y, board_y, side_view_offset(drawing), detail_y, detail_on_side)
 
 
 def outline_width(view) -> float:
@@ -128,6 +145,13 @@ def _detail_rows(drawing: ModuleDrawing) -> tuple[str, ...]:
     return tuple("\n".join(drawing.details).splitlines())
 
 
+def _detail_block_height(drawing: ModuleDrawing) -> float:
+    rows = len(_detail_rows(drawing))
+    if rows == 0:
+        return 0.0
+    return DETAIL_TEXT_SIZE_MM + (rows - 1) * DETAIL_LINE_HEIGHT_MM + 1.0
+
+
 def _detail_row_width(line: str) -> float:
     # Budget for the wider Song-style fallback as well as the SHX plot fonts.
     return _text_width(line, 0.82, 1.39)
@@ -146,13 +170,7 @@ def _drawing_right(drawing: ModuleDrawing) -> float:
 
 
 def _side_details(drawing: ModuleDrawing) -> bool:
-    if not drawing.details:
-        return False
-    placement = view_placement(drawing)
-    height = len(_detail_rows(drawing)) * DETAIL_LINE_HEIGHT_MM + 1.0
-    return placement.detail_y - height < (
-        TITLE_BLOCK_TOP_MM + DETAIL_TITLE_CLEARANCE_MM
-    )
+    return view_placement(drawing).detail_on_side
 
 
 def _side_detail_width(drawing: ModuleDrawing) -> float:
@@ -230,12 +248,8 @@ def detail_box(placed: PlacedModule) -> tuple[float, float]:
 
 
 def detail_vertical_anchor(placed: PlacedModule) -> tuple[float, bool]:
-    drawing = placed.drawing
-    placement = view_placement(drawing)
-    if not _side_details(drawing):
-        return placement.detail_y, False
-    board_bottom = placement.board_y + drawing.board_view.outline.bounds[1] / 10
-    return max(TITLE_BLOCK_TOP_MM + DETAIL_TITLE_CLEARANCE_MM, board_bottom), True
+    placement = view_placement(placed.drawing)
+    return placement.detail_y, placement.detail_on_side
 
 
 def detail_lines(placed: PlacedModule) -> tuple[str, ...]:

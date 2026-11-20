@@ -10,12 +10,19 @@ from refracdraft.drawing.layout import (
     DETAIL_LINE_SPACING,
     DETAIL_TEXT_SIZE_MM,
     DIMENSION_TEXT_SIZE_MM,
+    DETAIL_LINE_HEIGHT_MM,
+    DETAIL_TITLE_CLEARANCE_MM,
+    DETAIL_VIEW_CLEARANCE_MM,
+    FRAME_INSET_MM,
     PAGE_CONTENT_WIDTH_MM,
+    PAGE_HEIGHT_MM,
     PAGE_LEFT_MM,
     PANEL_INNER_MARGIN_MM,
     SIDE_DETAIL_GAP_MM,
     SIDE_DETAIL_RIGHT_MARGIN_MM,
     SIDE_PANEL_GAP_MM,
+    TITLE_BLOCK_TOP_MM,
+    VIEW_CLEARANCE_MM,
     detail_box,
     detail_line_width_factor,
     detail_lines,
@@ -601,6 +608,46 @@ def test_long_two_view_module_details_follow_outline_left_edge(length):
     placed, = document.pages[0].modules
     left, _ = detail_box(placed)
     assert left == pytest.approx(placed.content_x_mm)
+
+
+def test_1120_pair_uses_balanced_below_view_details_when_full_stack_fits(tmp_path):
+    rows = [
+        build_standard_row(
+            dict(DEFAULT_ROW, module_id=f"M{index}", length_mm=str(length), thickness_mm="300",
+                 expansion_length_mm=str(height), anchor_enabled=True, anchor_count=str(index),
+                 anchor_position_mm="150", anchor_spacing_mm="300", source_note="普通模块示例"),
+            board_face_profile=BoardFaceProfile.model_validate({"features": [feature]}),
+        )
+        for index, length, height, feature in (
+            (1, 300, 300, {"type": 2, "a": 90, "b": 90, "c": 90, "d": 45}),
+            (2, 600, 350, {"type": 1, "a": 50, "b": 50, "rotation_deg": 180}),
+        )
+    ]
+    modules, boards, anchors = map(list, zip(*rows))
+    document = DrawingGenerator().generate(Project(modules=modules, boards=boards, anchors=anchors))
+    page, = document.pages
+    assert [placed.drawing.module_id for placed in page.modules] == ["M1", "M2"]
+    output = export_dxf(document, tmp_path / "below-view-details.dxf")
+    details = list(ezdxf.readfile(output).modelspace().query("MTEXT"))
+    ceiling = PAGE_HEIGHT_MM - FRAME_INSET_MM - 2
+    floor = TITLE_BLOCK_TOP_MM + DETAIL_TITLE_CLEARANCE_MM
+    for placed, entity in zip(page.modules, details, strict=True):
+        drawing = placed.drawing
+        layout = view_placement(drawing)
+        anchor_y, align_bottom = detail_vertical_anchor(placed)
+        assert not align_bottom
+        assert entity.dxf.attachment_point == 1
+        assert entity.dxf.insert.y == pytest.approx(anchor_y * 10)
+        assert entity.plain_text(split=True) == list(drawing.details)
+        assert entity.dxf.width == 0 and r"\W" not in entity.text
+        _, front_bottom, _, front_top = view_bounds(drawing.front_view)
+        _, board_bottom, _, board_top = view_bounds(drawing.board_view)
+        assert layout.top_y + front_bottom - (layout.board_y + board_top) >= VIEW_CLEARANCE_MM - 1e-6
+        assert layout.board_y + board_bottom - anchor_y >= DETAIL_VIEW_CLEARANCE_MM - 1e-6
+        text_bottom = anchor_y - DETAIL_TEXT_SIZE_MM - (len(drawing.details) - 1) * DETAIL_LINE_HEIGHT_MM - 1
+        assert text_bottom >= floor
+        assert ceiling - (layout.top_y + front_top) == pytest.approx(text_bottom - floor)
+    assert detail_box(page.modules[1])[0] == pytest.approx(page.modules[1].content_x_mm)
 
 
 def test_tall_1120_style_pair_bottom_aligns_details_beside_the_views(tmp_path):
