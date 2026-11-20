@@ -181,6 +181,8 @@ def _panel_inner_margin(drawing: ModuleDrawing) -> float:
 
 
 def panel_content_left(drawing: ModuleDrawing, panel_width: float, content_width: float) -> float:
+    if _side_details(drawing):
+        return _panel_inner_margin(drawing)
     left, _, right, _ = drawing.front_view.outline.bounds
     if right - left > CENTERED_MODULE_MAX_LENGTH_MM:
         content_width = max(geometry_width(drawing), details_width(drawing))
@@ -207,7 +209,7 @@ def detail_box(placed: PlacedModule) -> tuple[float, float]:
     if _side_details(drawing):
         left = placed.content_x_mm + _drawing_right(drawing) + VIEW_CLEARANCE_MM
         available = placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM - left
-        return left, min(details_width(drawing) + 9, available)
+        return left, available
     width = details_width(drawing)
     if _center_details(drawing):
         center = placed.content_x_mm + max(top_row_width(drawing), outline_width(drawing.board_view)) / 2

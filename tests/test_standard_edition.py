@@ -12,6 +12,7 @@ from refracdraft.drawing.layout import (
     DIMENSION_TEXT_SIZE_MM,
     PANEL_INNER_MARGIN_MM,
     detail_box,
+    detail_lines,
     detail_top,
     details_width,
     view_bounds,
@@ -608,6 +609,30 @@ def test_tall_1120_style_pair_puts_details_beside_the_views():
         assert left == pytest.approx(placed.content_x_mm + geometry_right + 10)
         assert left + width < placed.x_mm + placed.panel_width_mm
         assert detail_top(placed) > 100
+
+
+def test_side_details_use_the_panel_width_before_wrapping():
+    profile = BoardFaceProfile.model_validate({"features": [
+        {"type": 2, "a": 69, "b": 90, "c": 69, "d": 45},
+    ]})
+    rows = [build_standard_row(
+        dict(DEFAULT_ROW, module_id=f"M{index}", length_mm=str(length), thickness_mm=str(thickness),
+             expansion_length_mm=str(height), anchor_enabled=True, anchor_count=str(index),
+             anchor_position_mm="150", anchor_spacing_mm="300", source_note="普通模块示例"),
+        board_face_profile=profile if index == 1 else None,
+    ) for index, length, thickness, height in ((1, 300, 550, 300), (2, 600, 600, 350))]
+    modules, boards, anchors = map(list, zip(*rows))
+    page, = DrawingGenerator().generate(Project(modules=modules, boards=boards, anchors=anchors)).pages
+    assert len(page.modules) == 2
+    for placed in page.modules:
+        left, width = detail_box(placed)
+        assert width > 60
+        assert left + width == pytest.approx(placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM)
+        lines = detail_lines(placed)
+        assert any(line.endswith(placed.drawing.module_id) for line in lines if line.startswith("1、"))
+        assert "4、锚固件长度：230mm" in lines
+        assert "6、容重：220 kg/m³" in lines
+        assert "7、32胶管，9厘夹板" in lines
 
 
 def test_exported_standard_excel_round_trips_ordered_cuts_and_literal_text(tmp_path):
