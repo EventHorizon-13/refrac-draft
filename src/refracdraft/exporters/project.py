@@ -14,7 +14,7 @@ from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import export_pdf
 from refracdraft.standard_sheet import (
     AUTOMATIC, AUTOMATIC_FALLBACK_KEYS, AUTOMATIC_FIELDS, AUTOMATIC_SHEET, COLUMN_SPECS, PROFILE_COLUMNS, PROFILE_SHEET,
-    STANDARD_LINK_VERSION, row_values_from_models,
+    STANDARD_LINK_VERSION, TAPER_LABEL_VERSION, row_values_from_models,
 )
 
 
@@ -27,10 +27,11 @@ def export_standard_excel(project: Project, path: Path) -> None:
     profile_sheet = None
     automatic_sheet = wb.create_sheet(AUTOMATIC_SHEET)
     automatic_sheet.sheet_state = "hidden"
-    automatic_sheet.append(("module_id", *AUTOMATIC_FALLBACK_KEYS, "standard_link_version"))
+    automatic_sheet.append(("module_id", *AUTOMATIC_FALLBACK_KEYS, "standard_link_version", "taper_label_version"))
     for module in project.modules:
         row = row_values_from_models(module, project.board_for(module.module_id), project.anchor_for(module.module_id))
-        automatic_sheet.append([module.module_id, *(row[key] for key in AUTOMATIC_FALLBACK_KEYS), STANDARD_LINK_VERSION])
+        automatic_sheet.append([module.module_id, *(row[key] for key in AUTOMATIC_FALLBACK_KEYS),
+                                STANDARD_LINK_VERSION, TAPER_LABEL_VERSION])
         for cell in automatic_sheet[automatic_sheet.max_row]:
             if cell.data_type == "f":
                 cell.data_type = "s"

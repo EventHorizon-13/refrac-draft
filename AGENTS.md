@@ -10,8 +10,8 @@ Before coding, read `PROMPT.md`, `README.md`, and `docs/REFERENCE_ANALYSIS.md`.
 - Module, board, and anchor are three **parallel, independent parameter groups**, linked by module ID. They are not parent/child objects and must not inherit or overwrite one another's parameters.
 - Board outer contour matches the module's board-face geometry. Board properties such as presence, material, thickness, and machining remain independent.
 - Every module must have a board-face view. If there is no physical board, still draw that view and put `无夹板` in its center.
-- **正敲** means the trapezoid is on the side face: front view + side trapezoid view + board-face view (3 views).
-- **侧敲** means the trapezoid is on the front face: front trapezoid + board-face view (2 views).
+- **侧敲** means the trapezoid is on the side face: front view + side trapezoid view + board-face view (3 views).
+- **正敲** means the trapezoid is on the front face: front trapezoid + board-face view (2 views).
 - Normal modules use front + board-face views (2 views).
 - Quick-insert anchor types determine a standard board opening; custom opening geometry is also supported.
 - Board-face shapes include multiple irregular templates. Inspect and reuse the actual shapes in the reference DXF; do not reduce them to generic rectangles/trapezoids.
@@ -40,7 +40,7 @@ The supplied sample files are the **final drawing standard**, not loose inspirat
 
 - Use the DXF as the primary source for CAD geometry, blocks, layers, linetypes, text/dimension styles, frames, and title blocks.
 - Use the PDFs as the primary source for final page composition, view arrangement, annotation placement, BOM/detail layout, frames, title blocks, and pagination.
-- Use the B2 front-trapezoid and A1 side-trapezoid images to check geometry and view count. The source filenames retain their historical terminology.
+- Use the B2 front-trapezoid and A1 side-trapezoid images to check geometry and view count.
 - Recreate sample inputs as golden-master regression cases. Generate vector/editable DXF and PDF and compare them page by page and view by view with the samples.
 - Do not omit dimensions, anchor details, board-face irregularities, technical text, BOMs, or title-block fields for the sake of a simplified demo.
 - Do not rasterize a sample PDF into the output or copy a whole sample drawing unchanged as a fake parameterized result. Extract reusable geometry and drafting rules, then generate editable drawings that match the sample style.

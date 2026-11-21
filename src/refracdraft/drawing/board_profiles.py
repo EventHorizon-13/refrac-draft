@@ -124,8 +124,19 @@ def _oriented_cut(
     return path, tuple(dimensions)
 
 
-def board_cut_path(width: float, height: float, feature: BoardFaceFeature) -> tuple[Point, ...]:
-    return _oriented_cut(width, height, feature)[0]
+def board_cut_edges(
+    width: float, height: float, feature: BoardFaceFeature,
+) -> tuple[tuple[Point, Point], ...]:
+    path, _ = _oriented_cut(width, height, feature)
+    # Some rotated notches enter along an unchanged span of the rectangle.
+    # Only the new cut walls can produce projection edges and a floor line.
+    return tuple(
+        (a, b) for a, b in zip(path, path[1:])
+        if a != b and not (
+            a[0] == b[0] and a[0] in (0, width)
+            or a[1] == b[1] and a[1] in (0, height)
+        )
+    )
 
 
 def _perimeter_position(point: Point, width: float, height: float) -> float:

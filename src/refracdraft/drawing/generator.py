@@ -15,10 +15,11 @@ from refracdraft.domain.models import (
     WELDED_ANCHOR_TYPES,
     format_bolt_remark,
 )
-from refracdraft.drawing.board_profiles import board_cut_path, build_board_profile, machining_dimensions
+from refracdraft.drawing.board_profiles import board_cut_edges, build_board_profile, machining_dimensions
 from refracdraft.drawing.model import Dimension, DrawingDocument, LeaderNote, ModuleDrawing, SheetPage, PlacedModule, ViewDrawing
 from refracdraft.drawing.layout import (
     ANNOTATION_CLEARANCE_MM,
+    TITLE_BLOCK_LEFT_MM,
     PAGE_CONTENT_WIDTH_MM,
     annotation_factor,
     PAGE_LEFT_MM,
@@ -29,6 +30,7 @@ from refracdraft.drawing.layout import (
     panel_content_left,
     panel_gap,
     place_bolt_note,
+    view_placement,
 )
 from refracdraft.geometry.primitives import Polyline, equal_anchor_positions, module_front_outline, module_side_outline, parametric_outline, point_in_outline, rectangle, scale_template
 from refracdraft.reference.library import ReferenceLibrary, SymbolGeometry
@@ -169,31 +171,36 @@ def _project_profile_cuts(view: ViewDrawing, width: float, height: float,
         section = _section_intersections(view.outline, x)
         return x, section[0], section[-1]
 
-    def edges_at(station, transverse):
+    def is_exposed(station, transverse):
         section = _section_intersections(section_outline, station)
         outer = section[-1] if side else section[0]
-        return visible if abs(outer - transverse) < 1e-6 else hidden
+        return abs(outer - transverse) < 1e-6
 
     for feature in profile.features:
         depth = feature.cut_depth_mm
         if depth is None:
             continue
-        path = orient(board_cut_path(width, height, feature))
-        for station, transverse in set(path):
-            if board_left < station < board_right:
-                x, bottom, top = projected(station)
-                end = min(top, bottom + depth)
-                edges_at(station, transverse).append(Polyline(((x, bottom), (x, end)), closed=False))
+        edges = tuple(orient(edge) for edge in board_cut_edges(width, height, feature))
+        corners: dict[float, bool] = {}
+        for edge in edges:
+            for station, transverse in edge:
+                if board_left < station < board_right:
+                    corners[station] = corners.get(station, False) or is_exposed(station, transverse)
+        for station, exposed in sorted(corners.items()):
+            x, bottom, top = projected(station)
+            line = Polyline(((x, bottom), (x, min(top, bottom + depth))), closed=False)
+            (visible if exposed else hidden).append(line)
 
+        stations = {point[0] for edge in edges for point in edge}
         floors = {}
-        for (a, ya), (b, yb) in zip(path, path[1:]):
+        for (a, ya), (b, yb) in edges:
             if a == b:
                 continue
-            breaks = sorted({a, b, *(x for x, _ in path if min(a, b) < x < max(a, b))})
+            breaks = sorted({a, b, *(x for x in stations if min(a, b) < x < max(a, b))})
             for start, end in zip(breaks, breaks[1:]):
                 mid = (start + end) / 2
                 transverse = ya + (yb - ya) * (mid - a) / (b - a)
-                floors[start, end] = floors.get((start, end), False) or edges_at(mid, transverse) is visible
+                floors[start, end] = floors.get((start, end), False) or is_exposed(mid, transverse)
         for (start, end), exposed in floors.items():
             x1, bottom1, top1 = projected(start)
             x2, bottom2, top2 = projected(end)
@@ -206,7 +213,12 @@ def _project_profile_cuts(view: ViewDrawing, width: float, height: float,
             start, end = max(floors, key=lambda span: span[1] - span[0])
             x, bottom, _ = projected((start + end) / 2)
             dimensions.append(Dimension((x, bottom), (x, bottom + depth), f"{depth:g}", "vertical", 30))
-    return replace(view, internal_lines=tuple(visible), hidden_lines=tuple(hidden), dimensions=tuple(dimensions))
+    # A projection line visible in any of the cuts should be plotted once.
+    visible_lines = tuple(dict.fromkeys(visible))
+    visible_set = set(visible_lines)
+    return replace(view, internal_lines=visible_lines,
+                   hidden_lines=tuple(line for line in dict.fromkeys(hidden) if line not in visible_set),
+                   dimensions=tuple(dimensions))
 
 
 def _anchor_chain_endpoints(
@@ -440,7 +452,7 @@ class DrawingGenerator:
                           f"{side_left_h:g}", "vertical", 40),
                 Dimension((module.side_length_mm or 0, side_right_bottom),
                           (module.side_length_mm or 0, side_top_right),
-                          f"{side_right_h:g}", "vertical", -40),
+                          f"{side_right_h:g}", "vertical", -55),
             )
             side_symbols: list[Polyline] = []
             side_symbol_colors: list[int] = []
@@ -453,6 +465,10 @@ class DrawingGenerator:
                              line.closed, line.bulges)
                     for line in bolt.polylines
                 )
+                bolt_left = min(line.bounds[0] for line in side_symbols)
+                left_dimension = side_dims[1]
+                if bolt_left <= left_dimension.line_position + 10:
+                    side_dims = (*side_dims[:1], replace(left_dimension, offset=-bolt_left + 18), side_dims[2])
                 side_symbol_colors.extend(bolt.colors)
                 side_symbol_lineweights.extend(bolt.lineweights)
                 side_symbol_linetypes.extend(bolt.linetypes)
@@ -607,6 +623,18 @@ class DrawingGenerator:
         if bolt is not None and positions:
             x, y = max(positions, key=lambda point: (point[1], -point[0]))
             leaders = (LeaderNote((x, y + exposure), f"焊接{anchor.thread_spec}螺栓 外露{exposure:g}", (1.5, 3)),)
+        if bolt is not None and anchor.anchor_type == AnchorType.WELDED_DIAMOND and positions:
+            # Place axial sizes between the first bolt and the outer callout,
+            # away from the central cutting and chain dimension labels.
+            x, y = min(positions)
+            seam = (x, y)
+            tip = (x, y + exposure)
+            base = (x, y - embedded)
+            board_dims.extend((
+                Dimension(seam, tip, f"{exposure:g}", "vertical", 54),
+                Dimension(base, seam, f"{embedded:g}", "vertical", 54),
+                Dimension(base, tip, f"{anchor.bolt_length_mm:g}", "vertical", 144),
+            ))
         if anchor.dimension_horizontal and positions:
             ordered = sorted(positions)
             top = module.board_face_height_mm
@@ -619,7 +647,10 @@ class DrawingGenerator:
             if bolt is not None:
                 cut_dim_top = max(cut_dim_top, max(y + exposure for _, y in ordered))
                 chain_offset = max(chain_offset, cut_dim_top - top + 28)
-            chain = [left, *((x, _section_intersections(board_outline, x)[-1]) for x, _ in ordered), right]
+            stations = ((x, y + (exposure if bolt is not None else 0)) for x, y in ordered)
+            if bolt is None:
+                stations = ((x, _section_intersections(board_outline, x)[-1]) for x, _ in ordered)
+            chain = [left, *stations, right]
             for start, end in zip(chain, chain[1:]):
                 distance = end[0] - start[0]
                 if distance > 0.01:
@@ -694,6 +725,21 @@ class DrawingGenerator:
             if on_module_drawn is not None:
                 on_module_drawn(count)
         required_widths = [module_required_width(drawing, measure_detail) for drawing in drawings]
+        compact_widths = [module_required_width(drawing, measure_detail, compact=True) for drawing in drawings]
+        footer_limit = TITLE_BLOCK_LEFT_MM - PAGE_LEFT_MM - 2.0
+        footer_drawings: list[ModuleDrawing | None] = []
+        footer_widths = required_widths.copy()
+        compact_footer_widths = compact_widths.copy()
+        for index, drawing in enumerate(drawings):
+            candidate = None
+            if drawing.scale_denominator == 10 and view_placement(drawing).detail_on_side:
+                lowered = replace(drawing, use_left_footer_space=True)
+                width = module_required_width(lowered, measure_detail)
+                if not view_placement(lowered).detail_on_side and width < min(footer_limit, footer_widths[index]):
+                    candidate = lowered
+                    footer_widths[index] = width
+                    compact_footer_widths[index] = module_required_width(lowered, measure_detail, compact=True)
+            footer_drawings.append(candidate)
         gaps = [panel_gap(left, right) for left, right in zip(drawings, drawings[1:])]
         pages: list[SheetPage] = []
         # Keep the conventional small-module packing and give each 1:20 module its own page.
@@ -702,22 +748,46 @@ class DrawingGenerator:
         for i, drawing in enumerate(drawings):
             if drawing.scale_denominator == 20:
                 groups.extend((start + a, start + b) for a, b in
-                              _balanced_page_groups(required_widths[start:i], gaps[start:i - 1]))
+                              _page_groups_with_compaction(
+                                  required_widths[start:i], compact_widths[start:i],
+                                  compact_footer_widths[start:i], gaps[start:i - 1],
+                              ))
                 groups.append((i, i + 1))
                 start = i + 1
         groups.extend((start + a, start + b) for a, b in
-                      _balanced_page_groups(required_widths[start:], gaps[start:]))
+                      _page_groups_with_compaction(
+                          required_widths[start:], compact_widths[start:],
+                          compact_footer_widths[start:], gaps[start:],
+                      ))
 
         for page_number, (start, end) in enumerate(groups, start=1):
             group = drawings[start:end]
             group_widths = required_widths[start:end]
             gap_width = sum(gaps[start:end - 1])
-            extra_width = max(0.0, PAGE_CONTENT_WIDTH_MM - gap_width - sum(group_widths))
-            extra_each = extra_width / len(group) if group else 0.0
+            available_width = PAGE_CONTENT_WIDTH_MM - gap_width
+            if sum(group_widths) > available_width + 1e-6:
+                first_lowered = footer_drawings[start]
+                footer_group = [footer_widths[start], *group_widths[1:]]
+                compact_footer_group = [compact_footer_widths[start], *compact_widths[start + 1:end]]
+                if first_lowered is not None and sum(footer_group) <= available_width + 1e-6:
+                    group[0] = first_lowered
+                    group_widths = footer_group
+                elif sum(compact_widths[start:end]) <= available_width + 1e-6:
+                    group_widths = compact_widths[start:end]
+                elif first_lowered is not None:
+                    group[0] = first_lowered
+                    group_widths = compact_footer_group
+            extra_width = max(0.0, available_width - sum(group_widths))
+            extra_each = extra_width / len(group)
+            distributed = [extra_each] * len(group)
+            if group[0].use_left_footer_space:
+                distributed[0] = min(extra_each, footer_limit - group_widths[0])
+                remaining_share = (extra_width - distributed[0]) / (len(group) - 1)
+                distributed[1:] = [remaining_share] * (len(group) - 1)
             placed: list[PlacedModule] = []
             panel_x = PAGE_LEFT_MM
-            for panel_index, (drawing, required) in enumerate(zip(group, group_widths)):
-                panel_width = required + extra_each
+            for panel_index, (drawing, required, extra) in enumerate(zip(group, group_widths, distributed)):
+                panel_width = required + extra
                 content_x = panel_x + panel_content_left(
                     drawing, panel_width, geometry_width(drawing, measure_detail), measure_detail,
                 )
@@ -738,8 +808,17 @@ class DrawingGenerator:
         return DrawingDocument(project.metadata.project_name, tuple(pages), warnings)
 
 
+def _page_groups_with_compaction(
+    preferred: list[float], compact: list[float], footer: list[float], gaps: list[float],
+) -> list[tuple[int, int]]:
+    usual = _balanced_page_groups(preferred, gaps)
+    alternate = _balanced_page_groups(compact, gaps, first_widths=[min(a, b) for a, b in zip(compact, footer)])
+    return alternate if len(alternate) < len(usual) else usual
+
+
 def _balanced_page_groups(
     required_widths: list[float], gaps: list[float] | None = None,
+    first_widths: list[float] | None = None,
 ) -> list[tuple[int, int]]:
     """Partition modules into the fewest pages, then balance the used width per page."""
     count = len(required_widths)
@@ -759,8 +838,12 @@ def _balanced_page_groups(
     for end in range(1, count + 1):
         for start in range(end - 1, -1, -1):
             used = prefix[end] - prefix[start] + gap_prefix[end - 1] - gap_prefix[start]
-            if used > PAGE_CONTENT_WIDTH_MM + 1e-6:
+            if used - required_widths[start] > PAGE_CONTENT_WIDTH_MM + 1e-6:
                 break
+            if first_widths is not None:
+                used += first_widths[start] - required_widths[start]
+            if used > PAGE_CONTENT_WIDTH_MM + 1e-6:
+                continue
             previous = best[start]
             if previous is None:
                 continue

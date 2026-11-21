@@ -10,6 +10,7 @@ from ezdxf.enums import TextEntityAlignment
 
 from refracdraft.drawing.layout import (
     DETAIL_LINE_SPACING,
+    TITLE_BLOCK_LEFT_MM,
     DETAIL_TEXT_SIZE_MM,
     FILENAME_LABEL_HEIGHT_MM,
     FILENAME_LABEL_POSITION,
@@ -155,27 +156,21 @@ def _ensure_anchor_linetypes(doc) -> None:
             doc.linetypes.add(name, pattern=pattern, description="RefracDraft reference center line")
 
 
-def _add_dimension(msp, x1, y1, x2, y2, label, horizontal=True, offset=6.0,
-                   denominator=10, fixed_extension_mm=None):
+def _add_dimension(msp, x1, y1, x2, y2, label, horizontal=True, offset=6.0, denominator=10):
     if horizontal:
         base = ((x1 + x2) / 2.0, max(y1, y2) + offset)
         angle = 0
     else:
         base = (min(x1, x2) - offset, (y1 + y2) / 2.0)
         angle = 90
-    style_name = f"_{denominator}"
-    override = DIMENSION_OVERRIDE
-    if fixed_extension_mm is not None:
-        dimscale = msp.doc.dimstyles.get(style_name).dxf.dimscale or 1.0
-        override = {**DIMENSION_OVERRIDE, "dimfxlon": 1, "dimfxl": fixed_extension_mm * denominator / dimscale}
     dimension = msp.add_linear_dim(
         base=base,
         p1=(x1, y1),
         p2=(x2, y2),
         text=label,
         angle=angle,
-        dimstyle=style_name,
-        override=override,
+        dimstyle=f"_{denominator}",
+        override=DIMENSION_OVERRIDE,
     )
     dimension.dimension.dxf.layer = "DIMENSIONS"
     dimension.render()
@@ -190,16 +185,15 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
             msp,
             ox + dim.start[0], oy + dim.start[1],
             ox + dim.end[0], oy + dim.end[1],
-            dim.label, dim.orientation == "horizontal", dim.offset, denominator, dim.fixed_extension_mm,
+            dim.label, dim.orientation == "horizontal", dim.offset, denominator,
         )
     for leader in view.leaders:
         x, y = leader.tip
-        dx, dy = leader.offset_mm
-        start = (ox + x, oy + y)
-        end = (start[0] + dx * denominator, start[1] + dy * denominator)
-        msp.add_leader([start, (end[0] - 1.5 * denominator, end[1]), end],
-                       dimstyle=f"_{denominator}", override={"dimclrd": 7},
-                       dxfattribs={"layer": "TEXT", "has_arrowhead": 0})
+        for path in leader.paths_mm:
+            vertices = [(ox + x + u * denominator, oy + y + v * denominator) for u, v in path]
+            msp.add_leader(vertices, dimstyle=f"_{denominator}", override={"dimclrd": 7},
+                           dxfattribs={"layer": "TEXT", "has_arrowhead": 0})
+        end = (ox + x + leader.offset_mm[0] * denominator, oy + y + leader.offset_mm[1] * denominator)
         msp.add_text(leader.text, dxfattribs={
             "height": leader_text_height(denominator) * denominator,
             "style": TEXT_STYLE,
@@ -290,7 +284,7 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
         if "标题栏" in doc.blocks:
             title = msp.add_blockref(
                 "标题栏",
-                (168.7 * denominator, page_y + 6.0 * denominator),
+                (TITLE_BLOCK_LEFT_MM * denominator, page_y + 6.0 * denominator),
                 dxfattribs={"xscale": 0.102 * denominator, "yscale": 0.102 * denominator, "zscale": 0.102 * denominator},
             )
             title.add_auto_attribs({"图名": document.project_name, "图号": "", "批准": "", "审定": "",

@@ -263,7 +263,7 @@ def test_standard_excel_aliases_accept_dynamic_block_terms():
 
 def test_standard_excel_generic_heads_move_to_side_for_side_taper():
     normalized = _normalize_row(
-        {"编号": "S1", "几何类型": "正敲", "大头": 300, "小头": 200},
+        {"编号": "S1", "几何类型": "侧敲", "大头": 300, "小头": 200},
         "modules",
     )
     assert normalized["side_left_height_mm"] == 300
@@ -273,8 +273,8 @@ def test_standard_excel_generic_heads_move_to_side_for_side_taper():
 
 
 @pytest.mark.parametrize(("label", "expected_type", "has_side_view"), [
-    ("正敲", GeometryType.SIDE_TAPER, True),
-    ("侧敲", GeometryType.FRONT_TAPER, False),
+    ("侧敲", GeometryType.SIDE_TAPER, True),
+    ("正敲", GeometryType.FRONT_TAPER, False),
 ])
 def test_standard_taper_labels_generate_the_correct_views(label, expected_type, has_side_view):
     module, board, anchor = build_standard_row({
@@ -821,8 +821,8 @@ def test_measured_side_details_pack_the_450mm_pair_without_compressing_text(tmp_
 
 @pytest.mark.parametrize(
     ("anchor_type", "taper", "height", "expected"),
-    [("M型", "侧敲", 320, 182), ("M型", "正敲", 310, 255), ("M型", "", 350, 295),
-     ("旁插", "侧敲", 320, 180), ("快插", "", 460, 410), ("快插", "", 400, 350)],
+    [("M型", "正敲", 320, 182), ("M型", "侧敲", 310, 255), ("M型", "", 350, 295),
+     ("旁插", "正敲", 320, 180), ("快插", "", 460, 410), ("快插", "", 400, 350)],
 )
 def test_standard_automatic_anchor_lengths_use_installation_height(anchor_type, taper, height, expected):
     values = dict(DEFAULT_ROW, length_mm="600", expansion_length_mm=str(height), taper_enabled=bool(taper),
@@ -839,7 +839,7 @@ def test_tall_1120_style_pair_bottom_aligns_details_beside_the_views(tmp_path):
     ]})
     rows = [build_standard_row(
         dict(DEFAULT_ROW, module_id=f"M{index}", length_mm="300", thickness_mm="550",
-             taper_enabled=True, taper_type="侧敲", big_head_mm="289", small_head_mm="220",
+             taper_enabled=True, taper_type="正敲", big_head_mm="289", small_head_mm="220",
              anchor_enabled=True, anchor_type="旁插", anchor_position_mm="150"),
         board_face_profile=profile,
     ) for index in (1, 2)]
@@ -1140,3 +1140,22 @@ def test_pdf_render_skips_layers_with_plot_disabled():
     ]
     assert red_paths == []
 
+
+
+def test_versioned_excel_preserves_taper_geometry_across_label_correction(tmp_path):
+    module, board, anchor = build_standard_row({
+        **DEFAULT_ROW, "taper_enabled": True, "taper_type": "侧敲",
+    })
+    project = Project(modules=[module], boards=[board], anchors=[anchor])
+    path = tmp_path / "tap.xlsx"
+    export_standard_excel(project, path)
+    assert import_project_xlsx(path).modules[0].geometry_type == GeometryType.SIDE_TAPER
+
+    workbook = load_workbook(path)
+    sheet = workbook["标准版"]
+    taper_col = [cell.value for cell in sheet[1]].index("类型") + 1
+    sheet.cell(2, taper_col).value = "正敲"
+    settings = workbook["联动设置"]
+    settings.delete_cols(settings.max_column)
+    workbook.save(path)
+    assert import_project_xlsx(path).modules[0].geometry_type == GeometryType.SIDE_TAPER

@@ -10,6 +10,8 @@ from refracdraft.drawing.model import DrawingDocument, ModuleDrawing, PlacedModu
 VIEW_SCALE = 0.0992
 SIDE_VIEW_GAP_MM = 14.0
 VIEW_CLEARANCE_MM = 10.0
+MIN_VERTICAL_VIEW_CLEARANCE_MM = 4.0
+COMPACT_DETAIL_WIDTH_FACTOR = 0.88
 PAGE_WIDTH_MM = 297.0
 PAGE_HEIGHT_MM = 210.0
 PAGE_STRIDE_MM = 230.0
@@ -26,6 +28,8 @@ CENTERED_MODULE_MAX_LENGTH_MM = 350.0
 # A 150 mm model-space inset is 15 mm on the 1:10 A4 sheet.
 FRAME_INSET_MM = 7.0
 TITLE_BLOCK_TOP_MM = 37.0
+TITLE_BLOCK_LEFT_MM = 168.7
+LEFT_FOOTER_FLOOR_MM = 25.0
 FILENAME_LABEL_POSITION = (9.0, 19.0)
 FILENAME_LABEL_HEIGHT_MM = 2.4
 FILENAME_LABEL_WIDTH_MM = 154.0
@@ -88,10 +92,10 @@ def view_bounds(view: ViewDrawing, denominator: int = 10) -> tuple[float, float,
         x, y = (value / denominator for value in leader.tip)
         dx, dy = leader.offset_mm
         text_width = sum(0.9 if char.isascii() else 1.39 for char in leader.text) * leader_text_height(denominator)
-        left = min(left, x, x + dx)
-        right = max(right, x, x + dx + text_width)
-        bottom = min(bottom, y, y + dy)
-        top = max(top, y, y + dy + leader_text_height(denominator))
+        left = min(left, *(x + u for u, _ in leader.vertices_mm))
+        right = max(right, x + dx + text_width, *(x + u for u, _ in leader.vertices_mm))
+        bottom = min(bottom, *(y + v for _, v in leader.vertices_mm))
+        top = max(top, y + dy + leader_text_height(denominator), *(y + v for _, v in leader.vertices_mm))
     for dim in view.dimensions:
         x1, y1 = (value / denominator for value in dim.start)
         x2, y2 = (value / denominator for value in dim.end)
@@ -110,34 +114,37 @@ def view_bounds(view: ViewDrawing, denominator: int = 10) -> tuple[float, float,
 
 
 def place_bolt_note(view: ViewDrawing, denominator: int) -> ViewDrawing:
-    """Keep the exposure callout in a clear strip below the upper dimensions."""
+    """Put the callout outside the existing dimensions and route around them."""
     if not view.leaders:
         return view
     note, = view.leaders
-    tip_y = note.tip[1] / denominator
-    scale = annotation_factor(denominator)
-    clearance = ANNOTATION_CLEARANCE_MM * scale
-    # Include geometry and vertical annotation before choosing the callout baseline.
-    vertical = tuple(dim for dim in view.dimensions if dim.orientation == "vertical")
-    avoid_top = view_bounds(replace(view, leaders=(), dimensions=vertical), denominator)[3]
-    baseline = max(tip_y + 3.0, avoid_top + 2.0)
-    note = replace(note, offset_mm=(1.5, baseline - tip_y))
-    dimensions = list(view.dimensions)
-    horizontal_rows: dict[float, list[int]] = {}
-    for index, dim in enumerate(dimensions):
-        if dim.orientation == "horizontal" and dim.line_position / denominator + clearance >= tip_y:
-            horizontal_rows.setdefault(dim.line_position, []).append(index)
-    fixed_extension = 1.4
-    lane = baseline + leader_text_height(denominator) + 2.0 + fixed_extension
-    for position, indices in sorted(horizontal_rows.items()):
-        lane = max(lane, position / denominator)
-        for index in indices:
-            dim = dimensions[index]
-            dimensions[index] = replace(
-                dim, offset=dim.offset + lane * denominator - position, fixed_extension_mm=fixed_extension,
-            )
-        lane += clearance
-    return replace(view, leaders=(note,), dimensions=tuple(dimensions))
+    tip_x, tip_y = (value / denominator for value in note.tip)
+    left, _, _, top = view_bounds(replace(view, leaders=()), denominator)
+    bridge_x = left - 2.0
+    bridge_y = tip_y + 0.7
+    text_y = top + 1.5
+    bridge_gaps = set()
+    for dim in view.dimensions:
+        if dim.orientation != "horizontal":
+            continue
+        dimension_y = dim.line_position / denominator
+        for point_x, point_y in (dim.start, dim.end):
+            line_x = point_x / denominator
+            if bridge_x < line_x < tip_x:
+                bridge_height = tip_y + (bridge_y - tip_y) * (line_x - tip_x) / (bridge_x - tip_x)
+                start_y = point_y / denominator
+                if start_y + 0.8 < bridge_height < dimension_y + 0.8:
+                    bridge_gaps.add(line_x - tip_x)
+    # The first segment stays below the upper dimension chain. The vertical
+    # segment runs outside the dimension extents, so the dimension lanes keep
+    # their measured endpoints, offsets, and complete extension lines.
+    note = replace(
+        note,
+        offset_mm=(max(0.0, bridge_x + 5.0) - tip_x, text_y - tip_y),
+        elbows_mm=((bridge_x - tip_x, bridge_y - tip_y), (bridge_x - tip_x, text_y - tip_y)),
+        bridge_gaps_mm=tuple(sorted(bridge_gaps)),
+    )
+    return replace(view, leaders=(note,))
 
 
 def side_view_offset(drawing: ModuleDrawing) -> float:
@@ -150,6 +157,12 @@ def side_view_offset(drawing: ModuleDrawing) -> float:
     )
 
 
+def _content_floor(drawing: ModuleDrawing) -> float:
+    if drawing.use_left_footer_space:
+        return LEFT_FOOTER_FLOOR_MM
+    return TITLE_BLOCK_TOP_MM + DETAIL_TITLE_CLEARANCE_MM
+
+
 def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
     denominator = drawing.scale_denominator
     upper = [view_bounds(drawing.front_view, denominator)]
@@ -159,12 +172,15 @@ def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
     upper_top = max(box[3] for box in upper)
     _, board_bottom, _, board_top = view_bounds(drawing.board_view, drawing.scale_denominator)
     ceiling = PAGE_HEIGHT_MM - FRAME_INSET_MM - 2.0
-    floor = TITLE_BLOCK_TOP_MM + DETAIL_TITLE_CLEARANCE_MM
+    floor = _content_floor(drawing)
     available = ceiling - floor
-    view_height = upper_top - upper_bottom + board_top - board_bottom + VIEW_CLEARANCE_MM
+    views_span = upper_top - upper_bottom + board_top - board_bottom
     detail_height = _detail_block_height(drawing)
     below_height = detail_height + DETAIL_VIEW_CLEARANCE_MM if detail_height else 0.0
-    detail_on_side = bool(detail_height and view_height + below_height > available + 1e-6)
+    below_gap = min(VIEW_CLEARANCE_MM, max(MIN_VERTICAL_VIEW_CLEARANCE_MM, available - views_span - below_height))
+    detail_on_side = bool(detail_height and views_span + below_gap + below_height > available + 1e-6)
+    view_gap = VIEW_CLEARANCE_MM if detail_on_side else below_gap
+    view_height = views_span + view_gap
     outline_bottom = drawing.board_view.outline.bounds[1] / denominator
     if detail_on_side:
         # The side text starts at the outline bottom, above any lower dimensions.
@@ -180,7 +196,7 @@ def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
         margin = (available - view_height - below_height - view_gap_extra - detail_gap_extra) / 2
         detail_y = floor + margin + detail_height
         board_y = floor + margin + below_height + detail_gap_extra - board_bottom
-    top_y = board_y + board_top + VIEW_CLEARANCE_MM + view_gap_extra - upper_bottom
+    top_y = board_y + board_top + view_gap + view_gap_extra - upper_bottom
     return ViewPlacement(top_y, board_y, side_view_offset(drawing), detail_y, detail_on_side)
 
 
@@ -282,21 +298,26 @@ def panel_content_left(
     return max(left_margin, min((panel_width - content_width) / 2, right_limit))
 
 
-def module_required_width(drawing: ModuleDrawing, measure: Callable[[str], float] | None = None) -> float:
+def module_required_width(
+    drawing: ModuleDrawing, measure: Callable[[str], float] | None = None, *, compact: bool = False,
+) -> float:
     content_width = geometry_width(drawing, measure)
     margin = _panel_inner_margin(drawing)
+    detail_factor = COMPACT_DETAIL_WIDTH_FACTOR if compact else 1.0
     if _side_details(drawing):
-        return max(PANEL_MIN_WIDTH_MM, content_width + margin + SIDE_DETAIL_RIGHT_MARGIN_MM)
+        details = _side_detail_width(drawing, measure) * detail_factor
+        return max(PANEL_MIN_WIDTH_MM, _drawing_right(drawing) + SIDE_DETAIL_GAP_MM
+                   + details + margin + SIDE_DETAIL_RIGHT_MARGIN_MM)
     geometry_span = _view_right_edge(drawing, content_width) + margin
     text_margins = 2 * PANEL_INNER_MARGIN_MM if _center_details(drawing) else margin + PANEL_INNER_MARGIN_MM
-    text_span = min(PAGE_CONTENT_WIDTH_MM, _preferred_detail_width(drawing, measure) + text_margins) if drawing.details else 0.0
+    text_span = min(PAGE_CONTENT_WIDTH_MM, _preferred_detail_width(drawing, measure) * detail_factor + text_margins) if drawing.details else 0.0
     return max(PANEL_MIN_WIDTH_MM, geometry_span, text_span)
 
 
 def fits_sheet_height(drawing: ModuleDrawing) -> bool:
     placement = view_placement(drawing)
     lower = placement.board_y + view_bounds(drawing.board_view, drawing.scale_denominator)[1]
-    return lower >= TITLE_BLOCK_TOP_MM + DETAIL_TITLE_CLEARANCE_MM - 1e-6
+    return lower >= _content_floor(drawing) - 1e-6
 
 
 def _center_details(drawing: ModuleDrawing) -> bool:
@@ -334,5 +355,7 @@ def detail_lines(placed: PlacedModule) -> tuple[str, ...]:
 def detail_line_width_factor(line: str, available: float, measure: Callable[[str], float] | None = None,
                              text_scale: float = 1.0) -> float:
     usable = max(1.0, available - DETAIL_WIDTH_CLEARANCE_MM)
-    width = (measure or _detail_row_width)(line) * text_scale
+    # The default width is a layout estimate, so keep a small margin for the
+    # actual glyph advances of the fallback font used when plotting the DXF.
+    width = (measure(line) if measure else _detail_row_width(line) * 1.07) * text_scale
     return usable / width if width > usable else 1.0

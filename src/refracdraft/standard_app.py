@@ -56,9 +56,9 @@ def _smoke_test_welded_output(window) -> None:
     long_board = drawing.pages[1].modules[0].drawing.board_view
     leader, = long_board.leaders
     if leader.text != "焊接M8螺栓 外露170":
-        raise ValueError("焊接菱形图上只应标注螺栓外露长度")
-    if not any(dim.fixed_extension_mm is not None for dim in long_board.dimensions):
-        raise ValueError("焊接标注与上方尺寸标注未分开")
+        raise ValueError("焊接菱形外露引线缺失")
+    if not {"150", "170", "320"} <= {dim.label for dim in long_board.dimensions} or len(leader.vertices_mm) < 4:
+        raise ValueError("焊接菱形轴向尺寸缺失或引线未绕开尺寸线")
     with TemporaryDirectory(prefix="refracdraft-welded-smoke-") as directory:
         dxf_path = export_dxf(drawing, Path(directory) / "mixed.dxf", reference)
         modelspace = ezdxf.readfile(dxf_path).modelspace()
@@ -163,7 +163,7 @@ def main() -> None:
             if (
                 not window._cell_bool(row, "taper_enabled")
                 or window._cell_text(row, "big_head_mm") != "289"
-                or window._cell_text(row, "taper_type") != "侧敲"
+                or window._cell_text(row, "taper_type") != "正敲"
             ):
                 raise ValueError("大小头参数未按 B2 示例载入")
             if not window._cell_bool(row, "anchor_enabled"):

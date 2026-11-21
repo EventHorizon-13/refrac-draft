@@ -214,6 +214,7 @@ def _profiles(ws) -> dict[str, BoardFaceProfile]:
 def _import_standard_sheet(
     ws, headers: list[str], profiles: dict[str, BoardFaceProfile],
     fallbacks: dict[str, dict[str, str | bool]] | None, legacy_notes: bool,
+    legacy_taper_labels: bool = False,
 ) -> Project:
     columns = {label: index for index, label in enumerate(headers)}
     expected = {spec.label for spec in COLUMN_SPECS}
@@ -240,6 +241,8 @@ def _import_standard_sheet(
                 if spec.key == "anchor_position_mm" and value is None:
                     continue
                 values[spec.key] = "" if value is None else str(value).strip()
+        if legacy_taper_labels and values["taper_enabled"]:
+            values["taper_type"] = {"正敲": "侧敲", "侧敲": "正敲"}.get(values["taper_type"], values["taper_type"])
         fallback = values.copy() if fallbacks is None else fallbacks.get(values["module_id"], {})
         if fallbacks is None:
             values.update(dict.fromkeys(legacy_automatic_fields(values), AUTOMATIC))
@@ -293,16 +296,18 @@ def import_project_xlsx(path: str | Path) -> Project:
                 profiles = _profiles(wb[PROFILE_SHEET]) if PROFILE_SHEET in wb.sheetnames else {}
                 fallbacks = None
                 legacy_notes = True
+                legacy_taper_labels = False
                 if AUTOMATIC_SHEET in wb.sheetnames:
                     automatic_sheet = wb[AUTOMATIC_SHEET]
                     settings_headers = next(automatic_sheet.iter_rows(max_row=1, values_only=True), ())
                     legacy_notes = "standard_link_version" not in settings_headers
+                    legacy_taper_labels = "taper_label_version" not in settings_headers
                     fallbacks = {
                         str(row[0]): {key: str(value) for key, value in zip(AUTOMATIC_FALLBACK_KEYS, row[1:])
                                       if value is not None}
                         for row in automatic_sheet.iter_rows(min_row=2, values_only=True) if row and row[0] is not None
                     }
-                return _import_standard_sheet(ws, headers, profiles, fallbacks, legacy_notes)
+                return _import_standard_sheet(ws, headers, profiles, fallbacks, legacy_notes, legacy_taper_labels)
         return _import_legacy_sheets(wb)
     finally:
         wb.close()

@@ -65,7 +65,8 @@ def test_exposure_and_blind_cut_round_trip_and_depth_controls_projection(tmp_pat
 
 
 def test_welded_diamond_depth_and_remark_are_independent_of_anchor_length(tmp_path: Path):
-    from refracdraft.drawing.layout import leader_text_height
+    from dataclasses import replace
+    from refracdraft.drawing.layout import view_bounds
     from refracdraft.reference.library import ReferenceLibrary
 
     values = {
@@ -99,15 +100,10 @@ def test_welded_diamond_depth_and_remark_are_independent_of_anchor_length(tmp_pa
     assert "4、锚固件长度：245mm" in data.details
     assert data.details[-1] == "8、螺栓长度330mm，外露190mm"
     denominator = page.scale_denominator
-    label_top = leader.tip[1] / denominator + leader.offset_mm[1] + leader_text_height(denominator)
-    upper_dims = [
-        dim for dim in view.dimensions
-        if dim.orientation == "horizontal" and dim.line_position > 790
-    ]
-    assert upper_dims
-    for dim in upper_dims:
-        assert dim.fixed_extension_mm is not None
-        assert dim.line_position / denominator - dim.fixed_extension_mm - label_top >= 2 - 1e-6
+    left, _, _, top = view_bounds(replace(view, leaders=()), denominator)
+    assert leader.tip[0] / denominator + leader.vertices_mm[1][0] < left
+    assert leader.tip[1] / denominator + leader.offset_mm[1] > top
+    assert {"140", "190", "330"} <= {dim.label for dim in view.dimensions if dim.orientation == "vertical"}
 
     edited = anchor.model_copy(update={"length_mm": None})
     new_project = project.model_copy(update={"anchors": [edited]})
@@ -123,9 +119,10 @@ def test_welded_diamond_depth_and_remark_are_independent_of_anchor_length(tmp_pa
     recovered = import_project_xlsx(excel).anchors[0]
     assert (recovered.length_mm, recovered.embedment_depth_mm, recovered.bolt_length_mm) == (245, 140, 330)
     modelspace = ezdxf.readfile(export_dxf(drawing, tmp_path / "welded.dxf")).modelspace()
-    assert len(modelspace.query("LEADER")) == 1
-    assert any(dim.override().get("dimfxlon") for dim in modelspace.query("DIMENSION"))
-    assert not any(dim.dxf.text in {"190", "140", "330"} for dim in modelspace.query("DIMENSION"))
+    assert modelspace.query("LEADER")
+    for value in (190, 140, 330):
+        assert any(dim.dxf.text == str(value) and dim.get_measurement() == pytest.approx(value)
+                   for dim in modelspace.query("DIMENSION"))
 
     legacy = anchor.model_copy(update={"embedment_depth_mm": None})
     incomplete = project.model_copy(update={"anchors": [legacy]})

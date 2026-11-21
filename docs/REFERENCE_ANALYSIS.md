@@ -56,8 +56,8 @@ The DXF contains AutoCAD dynamic-block data (`ACDB_BLOCKREPRESENTATION_DATA`) an
 
 ## 4. Supplementary geometry images
 
-- `B2_正敲示例.png` (historical filename): 侧敲 has the trapezoid on the **front face**. It has two views: front trapezoid and board face. Example front width is 300 mm with end heights 289 and 220 mm; board face is 300×230 mm.
-- `A1_侧敲示例.png` (historical filename): 正敲 has the trapezoid on the **side face**. It has three views: normal front, side trapezoid, and board face. Example front is 300×300 mm; side view is 300 mm long with end heights 300 and 200 mm; board face is 300×330 mm.
+- `B2_正敲示例.png`: 正敲 has the trapezoid on the **front face**. It has two views: front trapezoid and board face. Example front width is 300 mm with end heights 289 and 220 mm; board face is 300×230 mm.
+- `A1_侧敲示例.png`: 侧敲 has the trapezoid on the **side face**. It has three views: normal front, side trapezoid, and board face. Example front is 300×300 mm; side view is 300 mm long with end heights 300 and 200 mm; board face is 300×330 mm.
 
 ## 5. Source facts vs unresolved items
 

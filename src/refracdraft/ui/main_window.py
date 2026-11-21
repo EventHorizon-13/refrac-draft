@@ -232,11 +232,12 @@ class DrawingPreview(QGraphicsView):
         for leader in view.leaders:
             x, y = leader.tip
             start_x, start_y = ox + x * scale, oy + y * scale
-            dx, dy = leader.offset_mm
-            end_x, end_y = start_x + dx, start_y + dy
             pen = QPen(QColor("#111111"), 0.15)
-            scene.addLine(start_x, 210 - start_y, end_x - 1.5, 210 - end_y, pen)
-            scene.addLine(end_x - 1.5, 210 - end_y, end_x, 210 - end_y, pen)
+            for path in leader.paths_mm:
+                points = [(start_x + u, start_y + v) for u, v in path]
+                for (x1, y1), (x2, y2) in zip(points, points[1:]):
+                    scene.addLine(x1, 210 - y1, x2, 210 - y2, pen)
+            end_x, end_y = start_x + leader.offset_mm[0], start_y + leader.offset_mm[1]
             self._add_text(scene, leader.text, end_x, end_y, leader_text_height(denominator), "#111111")
         for cutout in view.cutouts:
             p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in cutout.points]

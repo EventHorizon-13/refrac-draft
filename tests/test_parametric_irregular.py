@@ -48,7 +48,7 @@ def test_front_outline_is_computed_and_taper_is_not_silently_discarded():
     assert (260, 0) in module_front_outline(module).points
     drawing = DrawingGenerator().generate(Project(modules=[module])).pages[0].modules[0].drawing
     assert len(drawing.front_view.dimensions) == 4
-    with pytest.raises(ValueError, match="侧敲正面异形组合尚未定义"):
+    with pytest.raises(ValueError, match="正敲正面异形组合尚未定义"):
         ModuleParameters(
             module_id="I1", geometry_type=GeometryType.FRONT_TAPER,
             front_width_mm=300, front_height_mm=230,
@@ -218,3 +218,28 @@ def test_tall_board_dimensions_keep_clear_of_the_front_view():
     assert placement.top_y + front_bottom - (placement.board_y + board_top) >= VIEW_CLEARANCE_MM - 1e-8
     assert placement.top_y + front_top <= PAGE_HEIGHT_MM - FRAME_INSET_MM
 
+
+
+@pytest.mark.parametrize(("width", "thickness", "height", "a", "b", "c", "depth", "expected"), [
+    (300, 450, 300, 150, 90, 50, 250, (100, 150)),
+    (600, 500, 350, 150, 100, 150, 280, (300, 450)),
+])
+def test_partial_rotated_notch_projects_only_the_cut_span(
+    width, thickness, height, a, b, c, depth, expected,
+):
+    profile = BoardFaceProfile.model_validate({"features": [{
+        "type": 2, "a": a, "b": b, "c": c, "d": b, "rotation_deg": 90, "cut_depth_mm": depth,
+    }]})
+    module = ModuleParameters(
+        module_id="M1", front_width_mm=width, front_height_mm=height,
+        board_face_width_mm=width, board_face_height_mm=thickness, board_face_outline=profile,
+    )
+    front = DrawingGenerator().build_module(Project(modules=[module]), module).front_view
+    projected = front.internal_lines + front.hidden_lines
+    assert [line.points for line in projected if all(y == depth for _, y in line.points)] == [
+        ((expected[0], depth), (expected[1], depth)),
+    ]
+    assert {line.points for line in projected if line.points[0][0] == line.points[1][0]} == {
+        ((x, 0), (x, depth)) for x in expected
+    }
+    assert len(projected) == 3

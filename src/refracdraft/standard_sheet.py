@@ -29,6 +29,7 @@ PIN_DIAMETERS = ("8", "6", "5")
 HOSE_SPECS = ("25", "32")
 AUTOMATIC = "自动"
 STANDARD_LINK_VERSION = 2
+TAPER_LABEL_VERSION = 2
 AUTOMATIC_FIELDS = ("structure_type", "board_material", "anchor_material", "hose_spec", "anchor_length_mm", "source_note")
 EMPTY_SELECTS_AUTOMATIC = ("structure_type", "board_material", "hose_spec")
 OPTIONAL_ANCHOR_FIELDS = ("anchor_length_mm", "anchor_material", "thread_spec", "pin_diameter_mm")
