@@ -62,6 +62,7 @@ FIELD_ALIASES = {
         "thread_spec": {"螺纹规格", "规格", "螺纹"},
         "diameter_mm": {"直径", "锚固件直径"},
         "length_mm": {"锚固件长度", "长度"},
+        "bolt_exposure_mm": {"螺栓外露长度", "螺栓外露", "外露长度"},
         "embedment_depth_mm": {"嵌入深度", "埋入深度", "锚固件嵌入深度"},
         "count": {"锚固件数量", "锚固件个数", "数量"},
         "layout_mode": {"布置方式", "排列方式"},
@@ -117,8 +118,8 @@ def _enum_value(field: str, value: Any) -> Any:
         return value
     v = value.strip()
     if field == "anchor_type":
-        for token, normalized in (("无", "无"), ("M型", "M型"), ("M形", "M型"),
-                                  ("焊接菱形", "焊接菱形"), ("菱形", "菱形"),
+        for token, normalized in (("无", "无"), ("焊接M型", "焊接M型"), ("焊接M形", "焊接M型"),
+                                  ("焊接菱形", "焊接菱形"), ("M型", "M型"), ("M形", "M型"), ("菱形", "菱形"),
                                   ("旁插", "旁插"), ("快插", "快插")):
             if token in v:
                 return normalized
@@ -171,7 +172,7 @@ def _normalize_row(row: dict[str, Any], group: str) -> dict[str, Any]:
         elif field in {"front_width_mm", "front_height_mm", "expansion_length_mm", "front_left_height_mm", "front_right_height_mm",
                        "side_length_mm", "side_left_height_mm", "side_right_height_mm", "board_face_width_mm",
                        "board_face_height_mm", "density_kg_m3", "production_quantity", "thickness_mm",
-                       "diameter_mm", "length_mm", "embedment_depth_mm", "count", "edge_offset_mm", "spacing_mm"}:
+                       "diameter_mm", "length_mm", "embedment_depth_mm", "bolt_exposure_mm", "count", "edge_offset_mm", "spacing_mm"}:
             value = _number(value)
         elif field in {"geometry_type", "structure_type", "anchor_type", "layout_mode", "opening_mode"}:
             value = _enum_value(field, value)
@@ -198,11 +199,12 @@ def _profiles(ws) -> dict[str, BoardFaceProfile]:
     features: dict[str, list[BoardFaceFeature]] = {}
     for number, row in enumerate(_rows(ws), start=2):
         try:
-            module_id, kind, a, b, c, d, angle, mirror = (row.get(key) for key in PROFILE_COLUMNS)
+            module_id, kind, a, b, c, d, angle, mirror, depth = (row.get(key) for key in PROFILE_COLUMNS)
             if module_id is None or not str(module_id).strip():
                 raise ValueError("缺少编号")
             cuts = features.setdefault(str(module_id).strip(), [])
             cuts.append(BoardFaceFeature(type=kind, a=a, b=b, c=c, d=d,
+                                         cut_depth_mm=_number(depth) if depth not in (None, "", "贯通") else None,
                                          rotation_deg=angle or 0, mirror_x=_bool(mirror) if mirror is not None else False))
         except ValueError as exc:
             raise ValueError(f"「{PROFILE_SHEET}」第 {number} 行：{exc}") from exc
@@ -214,7 +216,8 @@ def _import_standard_sheet(
     fallbacks: dict[str, dict[str, str | bool]] | None, legacy_notes: bool,
 ) -> Project:
     columns = {label: index for index, label in enumerate(headers)}
-    if len(columns) != len(COLUMN_SPECS) or set(columns) != {spec.label for spec in COLUMN_SPECS}:
+    expected = {spec.label for spec in COLUMN_SPECS}
+    if len(columns) != len(headers) or set(columns) not in (expected, expected - {"螺栓外露长度"}):
         raise ValueError("「标准版」表头不完整或有重复列，请使用程序附带的示例")
     modules = []
     boards = []
@@ -225,6 +228,8 @@ def _import_standard_sheet(
             continue
         values = DEFAULT_ROW.copy()
         for spec in COLUMN_SPECS:
+            if spec.label not in columns:
+                continue
             value = cells[columns[spec.label]]
             if spec.kind == "check":
                 parsed = False if value is None else _bool(value)
@@ -284,7 +289,7 @@ def import_project_xlsx(path: str | Path) -> Project:
             headers = [str(value).strip() if value is not None else "" for value in row]
             while headers and not headers[-1]:
                 headers.pop()
-            if ws.title.strip() == "标准版" or set(headers) == labels:
+            if ws.title.strip() == "标准版" or set(headers) in (labels, labels - {"螺栓外露长度"}):
                 profiles = _profiles(wb[PROFILE_SHEET]) if PROFILE_SHEET in wb.sheetnames else {}
                 fallbacks = None
                 legacy_notes = True

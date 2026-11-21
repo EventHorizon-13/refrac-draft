@@ -26,8 +26,12 @@ class AnchorType(StrEnum):
     DIAMOND = "菱形"
     SIDE_INSERT = "旁插"
     QUICK_INSERT = "快插"
+    WELDED_M = "焊接M型"
     WELDED_DIAMOND = "焊接菱形"
     CUSTOM = "自定义"
+
+
+WELDED_ANCHOR_TYPES = frozenset({AnchorType.WELDED_M, AnchorType.WELDED_DIAMOND})
 
 
 class LayoutMode(StrEnum):
@@ -72,6 +76,7 @@ class BoardFaceFeature(BaseModel):
     b: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     c: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     d: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    cut_depth_mm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     rotation_deg: Literal[0, 90, 180, 270] = 0
     mirror_x: bool = False
 
@@ -146,6 +151,14 @@ class ModuleParameters(BaseModel):
             return {**data, "geometry_type": GeometryType.FRONT_TAPER if front else GeometryType.SIDE_TAPER}
         return data
 
+    @property
+    def minimum_expansion_mm(self) -> float:
+        return min(value for value in (
+            self.expansion_length_mm, self.front_height_mm,
+            self.front_left_height_mm, self.front_right_height_mm,
+            self.side_left_height_mm, self.side_right_height_mm,
+        ) if value is not None)
+
     @model_validator(mode="after")
     def validate_geometry(self) -> "ModuleParameters":
         if self.expansion_length_mm is None:
@@ -161,6 +174,10 @@ class ModuleParameters(BaseModel):
             required = (self.side_length_mm, self.side_left_height_mm, self.side_right_height_mm)
             if any(v is None for v in required):
                 raise ValueError("正敲模块必须输入侧面长度和侧面两端高度")
+        if isinstance(self.board_face_outline, BoardFaceProfile):
+            for index, feature in enumerate(self.board_face_outline.features, 1):
+                if feature.cut_depth_mm is not None and feature.cut_depth_mm > self.minimum_expansion_mm:
+                    raise ValueError(f"{self.module_id}: 切口 {index} 的剪切深度不能超过 {self.minimum_expansion_mm:g} mm")
         return self
 
 
@@ -206,6 +223,7 @@ class AnchorParameters(BaseModel):
     length_mm: float | None = Field(default=None, gt=0)
     # Source dynamic-block parameter used by diamond anchors.
     embedment_depth_mm: float | None = Field(default=None, gt=0)
+    bolt_exposure_mm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     count: int = Field(default=1, ge=0)
     layout_mode: LayoutMode = LayoutMode.EXPLICIT
     positions: list[AnchorPosition] = Field(default_factory=list)

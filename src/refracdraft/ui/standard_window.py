@@ -59,6 +59,7 @@ from PySide6.QtWidgets import (
 from refracdraft.domain.models import (
     AnchorParameters,
     AnchorType,
+    WELDED_ANCHOR_TYPES,
     BoardFaceProfile,
     BoardParameters,
     ModuleParameters,
@@ -113,6 +114,7 @@ ANCHOR_SETTING_KEYS = (
     "pin_diameter_mm",
     "hose_spec",
     "embedment_depth_mm",
+    "bolt_exposure_mm",
 )
 
 def _default_filename_stem() -> str:
@@ -1085,11 +1087,15 @@ class StandardWindow(MainWindow):
         values = self._sheet_values(row)
         try:
             width, height = standard_board_face_bounds(values)
+            depth_key = "small_head_mm" if values["taper_enabled"] else "expansion_length_mm"
+            max_depth = float(str(values[depth_key]).replace(",", ""))
+            if not (0 < max_depth < float("inf")):
+                raise ValueError("请填写有效的膨胀长度或小头尺寸")
         except ValueError as exc:
             QMessageBox.warning(self, "请先填写有效的外尺寸", str(exc))
             return
         base = self._row_bases[row]
-        dialog = BoardFaceDialog(str(values["module_id"]) or f"第 {row + 1} 行", width, height, base.profile, self)
+        dialog = BoardFaceDialog(str(values["module_id"]) or f"第 {row + 1} 行", width, height, base.profile, self, max_depth=max_depth)
         if dialog.exec() == QDialog.DialogCode.Accepted and dialog.profile != base.profile:
             self._row_bases[row] = replace(base, profile=dialog.profile)
             self._set_profile_button(button, dialog.profile)
@@ -1250,14 +1256,19 @@ class StandardWindow(MainWindow):
             self._cell_bool(row, "anchor_enabled") and self._cell_text(row, "anchor_type") == "菱形"
             for row in range(table.rowCount())
         )
+        any_welded = any(
+            self._cell_bool(row, "anchor_enabled") and self._cell_text(row, "anchor_type") in WELDED_ANCHOR_TYPES
+            for row in range(table.rowCount())
+        )
         any_pin_anchor = any(
-            self._cell_bool(row, "anchor_enabled") and self._cell_text(row, "anchor_type") != "菱形"
+            self._cell_bool(row, "anchor_enabled") and self._cell_text(row, "anchor_type") not in ("菱形", "焊接菱形")
             for row in range(table.rowCount())
         )
         for key in ANCHOR_SETTING_KEYS:
             table.setColumnHidden(COLUMN_INDEX[key], not any_anchor)
         table.setColumnHidden(COLUMN_INDEX["embedment_depth_mm"], not any_diamond)
         table.setColumnHidden(COLUMN_INDEX["pin_diameter_mm"], not any_pin_anchor)
+        table.setColumnHidden(COLUMN_INDEX["bolt_exposure_mm"], not any_welded)
 
         was_updating = self._updating_table
         self._updating_table = True
@@ -1266,14 +1277,16 @@ class StandardWindow(MainWindow):
                 taper = self._cell_bool(row, "taper_enabled")
                 board = self._cell_bool(row, "board_exists")
                 anchor = self._cell_bool(row, "anchor_enabled")
-                is_diamond = self._cell_text(row, "anchor_type") == "菱形"
+                anchor_type = self._cell_text(row, "anchor_type")
+                is_diamond = anchor_type == AnchorType.DIAMOND
                 self._set_cell_enabled(row, "expansion_length_mm", not taper)
                 for key in TAPER_SETTING_KEYS:
                     self._set_cell_enabled(row, key, taper)
                 self._set_cell_enabled(row, "board_material", board)
                 for key in ANCHOR_SETTING_KEYS:
-                    enabled = anchor and not (key == "pin_diameter_mm" and is_diamond)
+                    enabled = anchor and not (key == "pin_diameter_mm" and anchor_type in (AnchorType.DIAMOND, AnchorType.WELDED_DIAMOND))
                     enabled = enabled and not (key == "embedment_depth_mm" and not is_diamond)
+                    enabled = enabled and not (key == "bolt_exposure_mm" and anchor_type not in WELDED_ANCHOR_TYPES)
                     self._set_cell_enabled(row, key, enabled)
                 if taper:
                     self._sync_expansion_length(row)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 import json
 from math import hypot, radians, tan
 from pathlib import Path
@@ -270,6 +271,20 @@ class ReferenceLibrary:
             y2 = y1 + slope * (x2 - x1)
             result.append(Polyline(((x1, y1), (x2, y2)), closed=False))
         return tuple(result)
+
+    @cached_property
+    def welded_bolt_profile(self) -> tuple[Polyline, ...]:
+        # The two visible contours from the named block. Its hatch duplicates
+        # the threaded outline and its red datum lines are construction geometry.
+        return tuple(
+            _anchor_polyline(entity)
+            for entity in self.doc.blocks["动态螺栓-L形"].query("LWPOLYLINE")
+        )
+
+    @cached_property
+    def welded_diamond_shoe(self) -> SymbolGeometry:
+        # Visible nested shoe in 动态模块-焊接菱形锚固件2-夹板面 → *U298 → *U297.
+        return self.symbol_from_block("G$C705DAB1D", preserve_arcs=True)
 
     def front_anchor_symbol(self, anchor_type: str) -> SymbolGeometry:
         if anchor_type in INSERT_ANCHOR_NAMES:

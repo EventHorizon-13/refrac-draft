@@ -18,7 +18,12 @@ from refracdraft.drawing.layout import (
     DIMENSION_TEXT_SIZE_MM,
     SEPARATOR_BOTTOM_MM,
     SEPARATOR_TOP_MM,
+    PAGE_WIDTH_MM,
+    PAGE_HEIGHT_MM,
+    annotation_factor,
     detail_box,
+    page_model_origins,
+    leader_text_height,
     detail_line_width_factor,
     detail_lines,
     detail_vertical_anchor,
@@ -38,7 +43,6 @@ LAYER_COLORS = {
 }
 
 TEXT_STYLE = "大字体"
-DIMENSION_STYLE = "_10"
 MODEL_SCALE = 10.0
 DETAIL_TEXT_HEIGHT = DETAIL_TEXT_SIZE_MM * MODEL_SCALE
 VALUE_TEXT_HEIGHT = 40.0
@@ -56,11 +60,12 @@ DIMENSION_FALLBACK = {
 
 def _detail_mtext(
     lines: tuple[str, ...], available_width: float, measure: Callable[[str], float] | None = None,
+    text_scale: float = 1.0,
 ) -> str:
     paragraphs = []
     for line in lines:
         escaped = line.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
-        factor = detail_line_width_factor(line, available_width, measure)
+        factor = detail_line_width_factor(line, available_width, measure, text_scale)
         if factor < 1.0:
             escaped = rf"{{\W{factor:.6f};{escaped}}}"
         paragraphs.append(escaped)
@@ -77,11 +82,12 @@ def _ensure_text_styles(doc) -> None:
         style.dxf.bigfont = "gbcbig.shx"
 
 
-def _ensure_dimension_style(doc, source=None) -> None:
+def _ensure_dimension_style(doc, source=None, denominator: int = 10) -> None:
+    name = f"_{denominator}"
     attributes = {**DIMENSION_FALLBACK, **DIMENSION_OVERRIDE}
     if source is not None:
         try:
-            source_style = source.dimstyles.get(DIMENSION_STYLE)
+            source_style = source.dimstyles.get(name)
             attributes.update({
                 key: value
                 for key, value in source_style.dxf.all_existing_dxf_attribs().items()
@@ -91,17 +97,17 @@ def _ensure_dimension_style(doc, source=None) -> None:
         except (KeyError, ValueError):
             pass
     scale = attributes["dimscale"] or 1
-    attributes["dimtxt"] = DIMENSION_TEXT_SIZE_MM * MODEL_SCALE / scale
-    attributes["dimasz"] = DIMENSION_ARROW_SIZE_MM * MODEL_SCALE / scale
-    attributes["dimgap"] = 0.6 * MODEL_SCALE / scale
-    attributes["dimexo"] = 0.9 * MODEL_SCALE / scale
-    attributes["dimexe"] = 0.8 * MODEL_SCALE / scale
-    if DIMENSION_STYLE in doc.dimstyles:
-        style = doc.dimstyles.get(DIMENSION_STYLE)
+    attributes["dimtxt"] = DIMENSION_TEXT_SIZE_MM * annotation_factor(denominator) * denominator / scale
+    attributes["dimasz"] = DIMENSION_ARROW_SIZE_MM * denominator / scale
+    attributes["dimgap"] = 0.6 * denominator / scale
+    attributes["dimexo"] = 0.9 * denominator / scale
+    attributes["dimexe"] = 0.8 * denominator / scale
+    if name in doc.dimstyles:
+        style = doc.dimstyles.get(name)
         for key, value in attributes.items():
             style.dxf.set(key, value)
     else:
-        doc.dimstyles.new(DIMENSION_STYLE, dxfattribs=attributes)
+        doc.dimstyles.new(name, dxfattribs=attributes)
 
 
 def _resolve_linetype(doc, linetype: str | None) -> str | None:
@@ -149,7 +155,7 @@ def _ensure_anchor_linetypes(doc) -> None:
             doc.linetypes.add(name, pattern=pattern, description="RefracDraft reference center line")
 
 
-def _add_dimension(msp, x1, y1, x2, y2, label, horizontal=True, offset=6.0):
+def _add_dimension(msp, x1, y1, x2, y2, label, horizontal=True, offset=6.0, denominator=10):
     if horizontal:
         base = ((x1 + x2) / 2.0, max(y1, y2) + offset)
         angle = 0
@@ -162,60 +168,75 @@ def _add_dimension(msp, x1, y1, x2, y2, label, horizontal=True, offset=6.0):
         p2=(x2, y2),
         text=label,
         angle=angle,
-        dimstyle=DIMENSION_STYLE,
+        dimstyle=f"_{denominator}",
         override=DIMENSION_OVERRIDE,
     )
+    dimension.dimension.dxf.layer = "DIMENSIONS"
     dimension.render()
 
 
-def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: str, scale: float = 0.1):
+def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: str, denominator: int):
     ox, oy = origin
-    points = [(ox + x * scale, oy + y * scale) for x, y in view.outline.points]
+    points = [(ox + x, oy + y) for x, y in view.outline.points]
     _add_polyline(msp, points, view.outline.closed, "OUTLINE")
     for dim in view.dimensions:
         _add_dimension(
             msp,
-            ox + dim.start[0] * scale, oy + dim.start[1] * scale,
-            ox + dim.end[0] * scale, oy + dim.end[1] * scale,
-            dim.label, dim.orientation == "horizontal", dim.offset * scale,
+            ox + dim.start[0], oy + dim.start[1],
+            ox + dim.end[0], oy + dim.end[1],
+            dim.label, dim.orientation == "horizontal", dim.offset, denominator,
         )
+    for leader in view.leaders:
+        x, y = leader.tip
+        dx, dy = leader.offset_mm
+        start = (ox + x, oy + y)
+        end = (start[0] + dx * denominator, start[1] + dy * denominator)
+        msp.add_leader([start, (end[0] - 1.5 * denominator, end[1]), end],
+                       dimstyle=f"_{denominator}", override={"dimclrd": 7},
+                       dxfattribs={"layer": "TEXT", "has_arrowhead": 0})
+        msp.add_text(leader.text, dxfattribs={
+            "height": leader_text_height(denominator) * denominator,
+            "style": TEXT_STYLE,
+            "layer": "TEXT",
+            "insert": end,
+        })
     min_x, min_y, max_x, max_y = view.outline.bounds
     for cutout in view.cutouts:
-        pts = [(ox + x * scale, oy + y * scale) for x, y in cutout.points]
+        pts = [(ox + x, oy + y) for x, y in cutout.points]
         _add_polyline(msp, pts, cutout.closed, "OUTLINE")
     for line in view.internal_lines:
-        pts = [(ox + x * scale, oy + y * scale) for x, y in line.points]
+        pts = [(ox + x, oy + y) for x, y in line.points]
         _add_polyline(msp, pts, line.closed, "OUTLINE")
     for line in view.hidden_lines:
-        pts = [(ox + x * scale, oy + y * scale) for x, y in line.points]
+        pts = [(ox + x, oy + y) for x, y in line.points]
         _add_polyline(msp, pts, line.closed, "HIDDEN", lineweight=13, linetype="HIDDEN")
     for symbol_index, symbol in enumerate(view.anchor_symbols):
-        pts = [(ox + x * scale, oy + y * scale) for x, y in symbol.points]
+        pts = [(ox + x, oy + y) for x, y in symbol.points]
         aci = view.anchor_symbol_colors[symbol_index] if symbol_index < len(view.anchor_symbol_colors) else None
         lineweight = view.anchor_symbol_lineweights[symbol_index] if symbol_index < len(view.anchor_symbol_lineweights) else 22
         linetype = view.anchor_symbol_linetypes[symbol_index] if symbol_index < len(view.anchor_symbol_linetypes) else None
         _add_polyline(msp, pts, symbol.closed, "ANCHORS", color=aci, lineweight=lineweight,
                       linetype=linetype, linetype_scale=1.0, bulges=symbol.bulges)
     for x, y in view.anchor_points:
-        cx, cy = ox + x * scale, oy + y * scale
+        cx, cy = ox + x, oy + y
         if view.anchor_marker_style == "target":
-            msp.add_circle((cx, cy), 0.75 * MODEL_SCALE, dxfattribs={"layer": "CENTER", "color": 1})
-            msp.add_line((cx - 1.5 * MODEL_SCALE, cy), (cx + 1.5 * MODEL_SCALE, cy),
+            msp.add_circle((cx, cy), 0.75 * denominator, dxfattribs={"layer": "CENTER", "color": 1})
+            msp.add_line((cx - 1.5 * denominator, cy), (cx + 1.5 * denominator, cy),
                          dxfattribs={"layer": "CENTER", "color": 1})
         else:
-            msp.add_line((cx - 1.5 * MODEL_SCALE, cy), (cx + 1.5 * MODEL_SCALE, cy),
+            msp.add_line((cx - 1.5 * denominator, cy), (cx + 1.5 * denominator, cy),
                          dxfattribs={"layer": "CENTER", "color": 1})
-            msp.add_line((cx, cy - 1.5 * MODEL_SCALE), (cx, cy + 1.5 * MODEL_SCALE),
+            msp.add_line((cx, cy - 1.5 * denominator), (cx, cy + 1.5 * denominator),
                          dxfattribs={"layer": "CENTER", "color": 1})
     label = view.note or module_id
     board_face = view.view_type == "board-face"
     label_y = (min_y + max_y) / 2
     if not board_face and (view.anchor_symbols or view.anchor_points):
-        label_y = (view.outline.points[0][1] + view.outline.points[1][1]) / 2.0 + 5.0 * MODEL_SCALE
-    label_point = (ox + (min_x + max_x) * scale / 2, oy + label_y * scale)
+        label_y = (view.outline.points[0][1] + view.outline.points[1][1]) / 2.0 + 5.0 * denominator
+    label_point = (ox + (min_x + max_x) / 2, oy + label_y)
     alignment = TextEntityAlignment.MIDDLE_CENTER if board_face else TextEntityAlignment.CENTER
     msp.add_text(
-        label, dxfattribs={"height": VALUE_TEXT_HEIGHT, "style": TEXT_STYLE, "layer": "TEXT"}
+        label, dxfattribs={"height": VALUE_TEXT_HEIGHT * denominator / MODEL_SCALE * annotation_factor(denominator), "style": TEXT_STYLE, "layer": "TEXT"}
     ).set_placement(label_point, align=alignment)
 
 
@@ -240,30 +261,31 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
             if block_name in source.blocks:
                 importer.import_block(block_name, rename=False)
         importer.finalize()
-    _ensure_dimension_style(doc, source)
+    for denominator in {page.scale_denominator for page in document.pages} or {MODEL_SCALE}:
+        _ensure_dimension_style(doc, source, int(denominator))
 
     msp = doc.modelspace()
-    for page in document.pages:
-        page_y = -(page.page_number - 1) * 230.0 * MODEL_SCALE
+    for page, page_y in zip(document.pages, page_model_origins(document)):
+        denominator = page.scale_denominator
         if "图框-A4" in doc.blocks:
             msp.add_blockref(
                 "图框-A4",
                 (0, page_y),
-                dxfattribs={"layer": "FRAME", "xscale": MODEL_SCALE, "yscale": MODEL_SCALE, "zscale": MODEL_SCALE},
+                dxfattribs={"layer": "FRAME", "xscale": denominator, "yscale": denominator, "zscale": denominator},
             )
         else:
             _add_polyline(
                 msp,
-                [(0, page_y), (297 * MODEL_SCALE, page_y),
-                 (297 * MODEL_SCALE, page_y + 210 * MODEL_SCALE), (0, page_y + 210 * MODEL_SCALE)],
+                [(0, page_y), (PAGE_WIDTH_MM * denominator, page_y),
+                 (PAGE_WIDTH_MM * denominator, page_y + PAGE_HEIGHT_MM * denominator), (0, page_y + PAGE_HEIGHT_MM * denominator)],
                 True,
                 "FRAME",
             )
         if "标题栏" in doc.blocks:
             title = msp.add_blockref(
                 "标题栏",
-                (168.7 * MODEL_SCALE, page_y + 6.0 * MODEL_SCALE),
-                dxfattribs={"xscale": 1.02, "yscale": 1.02, "zscale": 1.02},
+                (168.7 * denominator, page_y + 6.0 * denominator),
+                dxfattribs={"xscale": 0.102 * denominator, "yscale": 0.102 * denominator, "zscale": 0.102 * denominator},
             )
             title.add_auto_attribs({"图名": document.project_name, "图号": "", "批准": "", "审定": "",
                                     "项目经理": "", "校核": "", "设计": "", "制图": "",
@@ -277,47 +299,47 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
         )
         reserved_width = len(footer_label) * FILENAME_LABEL_HEIGHT_MM * 1.39
         msp.add_text(footer_label, dxfattribs={
-            "layer": "TEXT", "style": TEXT_STYLE, "height": FILENAME_LABEL_HEIGHT_MM * MODEL_SCALE,
+            "layer": "TEXT", "style": TEXT_STYLE, "height": FILENAME_LABEL_HEIGHT_MM * denominator,
             "width": min(1.0, FILENAME_LABEL_WIDTH_MM / reserved_width),
-            "insert": (x * MODEL_SCALE, page_y + y * MODEL_SCALE),
+            "insert": (x * denominator, page_y + y * denominator),
         })
         for placed in page.modules[1:]:
             msp.add_line(
-                (placed.x_mm * MODEL_SCALE, page_y + SEPARATOR_BOTTOM_MM * MODEL_SCALE),
-                (placed.x_mm * MODEL_SCALE, page_y + SEPARATOR_TOP_MM * MODEL_SCALE),
+                (placed.x_mm * denominator, page_y + SEPARATOR_BOTTOM_MM * denominator),
+                (placed.x_mm * denominator, page_y + SEPARATOR_TOP_MM * denominator),
                 dxfattribs={"layer": "FRAME"},
             )
 
         for placed in page.modules:
             drawing = placed.drawing
-            px = placed.content_x_mm * MODEL_SCALE
-            scale = 1.0
+            px = placed.content_x_mm * denominator
             placement = view_placement(drawing)
-            front_y = page_y + placement.top_y * MODEL_SCALE
-            _add_view(msp, drawing.front_view, (px, front_y), drawing.module_id, scale)
+            front_y = page_y + placement.top_y * denominator
+            _add_view(msp, drawing.front_view, (px, front_y), drawing.module_id, denominator)
             if drawing.side_view:
                 _add_view(
                     msp,
                     drawing.side_view,
-                    (px + placement.side_x * MODEL_SCALE, front_y),
+                    (px + placement.side_x * denominator, front_y),
                     drawing.module_id,
-                    scale,
+                    denominator,
                 )
             _add_view(
                 msp,
                 drawing.board_view,
-                (px, page_y + placement.board_y * MODEL_SCALE),
+                (px, page_y + placement.board_y * denominator),
                 drawing.module_id,
-                scale,
+                denominator,
             )
             if drawing.details:
                 left, available_width = detail_box(placed)
                 anchor_y, align_bottom = detail_vertical_anchor(placed)
                 msp.add_mtext(
-                    _detail_mtext(detail_lines(placed), available_width, placed.measure_detail),
+                    _detail_mtext(detail_lines(placed), available_width, placed.measure_detail,
+                                  annotation_factor(denominator)),
                     dxfattribs={
-                        "insert": (left * MODEL_SCALE, page_y + anchor_y * MODEL_SCALE),
-                        "char_height": DETAIL_TEXT_HEIGHT,
+                        "insert": (left * denominator, page_y + anchor_y * denominator),
+                        "char_height": DETAIL_TEXT_HEIGHT * denominator / MODEL_SCALE * annotation_factor(denominator),
                         "width": 0.0,
                         "style": TEXT_STYLE,
                         "layer": "TEXT",

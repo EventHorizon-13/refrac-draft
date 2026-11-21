@@ -6,7 +6,7 @@ from math import isfinite
 
 from refracdraft.domain.models import (
     AnchorParameters, AnchorType, BoardFaceProfile, BoardParameters, GeometryType, ModuleParameters,
-    StructureType,
+    StructureType, WELDED_ANCHOR_TYPES,
 )
 from refracdraft.standard import (
     StandardAnchorValues, StandardModuleValues, build_standard_anchor, build_standard_board,
@@ -24,7 +24,7 @@ THREAD_SPECS = ("M8", "M10")
 PROFILE_SHEET = "异形参数"
 AUTOMATIC_SHEET = "联动设置"
 AUTOMATIC_FALLBACK_KEYS = ("board_material", "anchor_material", "hose_spec")
-PROFILE_COLUMNS = ("编号", "类型", "a", "b", "c", "d", "旋转角度", "镜像")
+PROFILE_COLUMNS = ("编号", "类型", "a", "b", "c", "d", "旋转角度", "镜像", "剪切深度")
 PIN_DIAMETERS = ("8", "6", "5")
 HOSE_SPECS = ("25", "32")
 AUTOMATIC = "自动"
@@ -43,6 +43,7 @@ ANCHOR_TYPES = (
     ("菱形", AnchorType.DIAMOND),
     ("旁插", AnchorType.SIDE_INSERT),
     ("快插", AnchorType.QUICK_INSERT),
+    ("焊接M型", AnchorType.WELDED_M),
     ("焊接菱形", AnchorType.WELDED_DIAMOND),
     ("自定义", AnchorType.CUSTOM),
 )
@@ -109,6 +110,7 @@ COLUMN_SPECS = (
     ColumnSpec("pin_diameter_mm", "插针", "number", PIN_DIAMETERS, 54, "anchor"),
     ColumnSpec("hose_spec", "胶管", "combo", HOSE_SPECS, 54, "anchor"),
     ColumnSpec("embedment_depth_mm", "嵌入深度", "number", (), 62, "anchor"),
+    ColumnSpec("bolt_exposure_mm", "螺栓外露长度", "number", (), 96, "anchor"),
     ColumnSpec("source_note", "备注", options=(AUTOMATIC,), width=116, group="footer"),
 )
 DEFAULT_ROW = {
@@ -137,6 +139,7 @@ DEFAULT_ROW = {
     "pin_diameter_mm": "8",
     "hose_spec": "32",
     "embedment_depth_mm": "50",
+    "bolt_exposure_mm": "",
     "source_note": AUTOMATIC,
 }
 
@@ -217,7 +220,8 @@ def legacy_automatic_fields(values: dict[str, str | bool]) -> list[str]:
         "board_material": ("8厘", "9厘", "8厘夹板", "9厘夹板"),
         "anchor_material": ANCHOR_MATERIALS,
         "hose_spec": ("25", "32", "25胶管", "32胶管"),
-        "anchor_length_mm": (*anchor_length_options(str(values["anchor_type"])), "230"),
+        "anchor_length_mm": ((*anchor_length_options(str(values["anchor_type"])), "230")
+                             if values["anchor_type"] != AnchorType.WELDED_DIAMOND else ()),
     }
     automatic = automatic_fields(values)
     return [key for key in AUTOMATIC_FIELDS if key in automatic or str(values[key]) in presets.get(key, ())]
@@ -226,7 +230,7 @@ def legacy_automatic_fields(values: dict[str, str | bool]) -> list[str]:
 def anchor_length_options(anchor_type: str) -> tuple[str, ...]:
     if anchor_type in INSERT_ANCHOR_LABELS:
         return tuple(map(str, INSERT_ANCHOR_LENGTHS + M_ANCHOR_LENGTHS))
-    if anchor_type in ("M型", AnchorType.M_SHAPE.value):
+    if anchor_type in (AnchorType.M_SHAPE, AnchorType.WELDED_M):
         return tuple(map(str, M_ANCHOR_LENGTHS))
     if anchor_type == AnchorType.DIAMOND.value:
         return tuple(map(str, DIAMOND_ANCHOR_LENGTHS))
@@ -262,6 +266,8 @@ def _automatic_anchor_length(values: dict[str, str | bool], length: float | None
         height -= (height - small) * end / length
 
     anchor_type = str(values["anchor_type"]).strip()
+    if anchor_type == AnchorType.WELDED_DIAMOND:
+        return ""
     if anchor_type in INSERT_ANCHOR_LABELS:
         target = round(height - 50, 2)
         if target < 250:
@@ -357,6 +363,8 @@ def row_values_from_models(
             if anchor_values.embedment_depth_mm is not None
             else "50"
         ),
+        "bolt_exposure_mm": (f"{anchor_values.bolt_exposure_mm:g}"
+                             if anchor_values.bolt_exposure_mm is not None else ""),
         "density_kg_m3": (
             f"{module_values.density_kg_m3:g}" if module_values.density_kg_m3 is not None else ""
         ),
@@ -482,10 +490,13 @@ def _anchor_values(values: dict[str, str | bool], module_id: str) -> StandardAnc
     embedment = None
     if anchor_type == AnchorType.DIAMOND:
         embedment = _number(str(values["embedment_depth_mm"]), "嵌入深度", module_id)
+    exposure = None
+    if anchor_type in WELDED_ANCHOR_TYPES:
+        exposure = _optional_number(str(values.get("bolt_exposure_mm", "")), "螺栓外露长度", module_id)
     pin_text = str(values["pin_diameter_mm"]).strip()
     pin_diameter = (
         _number(pin_text, "插针直径", module_id)
-        if pin_text and anchor_type != AnchorType.DIAMOND
+        if pin_text and anchor_type not in (AnchorType.DIAMOND, AnchorType.WELDED_DIAMOND)
         else None
     )
     return StandardAnchorValues(
@@ -496,6 +507,7 @@ def _anchor_values(values: dict[str, str | bool], module_id: str) -> StandardAnc
         anchor_type=anchor_type,
         custom_type_label="" if type_label == "自定义" else type_label,
         embedment_depth_mm=embedment,
+        bolt_exposure_mm=exposure,
         material=str(values["anchor_material"]).strip(),
         thread_spec=str(values["thread_spec"]).strip(),
         pin_diameter_mm=pin_diameter,

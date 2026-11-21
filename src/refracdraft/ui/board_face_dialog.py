@@ -75,6 +75,7 @@ class OutlinePreview(QWidget):
 class CutControls:
     kind: QComboBox
     dimensions: dict[str, QLineEdit]
+    depth: QLineEdit
     rotate: QPushButton
     mirror: QPushButton
     remove: QPushButton
@@ -88,9 +89,16 @@ class CutControls:
                 values[letter] = float(self.dimensions[letter].text())
             except ValueError:
                 raise ValueError(f"请输入尺寸 {letter}（mm）") from None
+        depth_text = self.depth.text().strip()
+        try:
+            depth = None if depth_text in ("", "贯通") else float(depth_text)
+            if depth is not None and not (0 < depth < float("inf")):
+                raise ValueError
+        except ValueError:
+            raise ValueError("剪切深度须为正数，留空表示贯通") from None
         try:
             return BoardFaceFeature(
-                type=kind + 1, **values, rotation_deg=self.angle, mirror_x=self.mirror.isChecked(),
+                type=kind + 1, **values, cut_depth_mm=depth, rotation_deg=self.angle, mirror_x=self.mirror.isChecked(),
             )
         except ValueError:
             raise ValueError("切口尺寸必须是有限的正数") from None
@@ -100,15 +108,16 @@ class CutControls:
         self.rotate.setText(f"旋转 · {angle}°")
 
     def widgets(self) -> tuple[QWidget, ...]:
-        return (self.kind, *self.dimensions.values(), self.rotate, self.mirror, self.remove)
+        return (self.kind, *self.dimensions.values(), self.depth, self.rotate, self.mirror, self.remove)
 
 
 class BoardFaceDialog(QDialog):
     def __init__(self, module_id: str, width: float, height: float,
-                 profile: BoardFaceProfile | None, parent: QWidget):
+                 profile: BoardFaceProfile | None, parent: QWidget, *, max_depth: float | None = None):
         super().__init__(parent)
         self.setWindowTitle(f"异形模块 · {module_id}")
-        self.resize(710, 490)
+        self.resize(800, 490)
+        self.max_depth = max_depth
         self.profile: BoardFaceProfile | None = profile
         self.cuts: list[CutControls] = []
 
@@ -124,7 +133,7 @@ class BoardFaceDialog(QDialog):
         grid_widget = QWidget()
         self.grid = QGridLayout(grid_widget)
         self.grid.setAlignment(Qt.AlignmentFlag.AlignTop)
-        for column, label in enumerate(("轮廓类型", "a", "b", "c", "d", "方向", "镜像", "")):
+        for column, label in enumerate(("轮廓类型", "a", "b", "c", "d", "剪切深度", "方向", "镜像", "")):
             self.grid.addWidget(QLabel(label), 0, column)
         for column in range(1, 5):
             self.grid.setColumnStretch(column, 1)
@@ -173,6 +182,13 @@ class BoardFaceDialog(QDialog):
         for letter, field in inputs.items():
             field.setAccessibleName(f"尺寸 {letter}（mm）")
             field.setMinimumWidth(45)
+        depth = QLineEdit()
+        depth.setPlaceholderText("贯通")
+        depth.setAccessibleName("剪切深度（mm）")
+        depth.setToolTip("从夹板面向模块内部量取，留空表示贯通")
+        depth.setMinimumWidth(70)
+        if feature and feature.cut_depth_mm is not None:
+            depth.setText(f"{feature.cut_depth_mm:g}")
         rotate = QPushButton()
         rotate.setToolTip("逆时针旋转 90°")
         mirror = QPushButton("镜像")
@@ -182,7 +198,7 @@ class BoardFaceDialog(QDialog):
         remove = QPushButton("删除")
         for button in (rotate, mirror, remove):
             button.setAutoDefault(False)
-        cut = CutControls(kind, inputs, rotate, mirror, remove, 0)
+        cut = CutControls(kind, inputs, depth, rotate, mirror, remove, 0)
         cut.set_angle(feature.rotation_deg if feature else 0)
         self.cuts.append(cut)
         self._place_rows()
@@ -190,7 +206,7 @@ class BoardFaceDialog(QDialog):
         for widget in cut.widgets():
             widget.installEventFilter(self)
         kind.currentIndexChanged.connect(lambda: self._set_inputs(cut))
-        for field in inputs.values():
+        for field in (*inputs.values(), depth):
             field.textChanged.connect(lambda: self._refresh(cut))
         rotate.clicked.connect(lambda: self._rotate(cut))
         mirror.toggled.connect(lambda: self._refresh(cut))
@@ -243,7 +259,10 @@ class BoardFaceDialog(QDialog):
             features = []
             for index, cut in enumerate(self.cuts, 1):
                 try:
-                    features.append(cut.read())
+                    feature = cut.read()
+                    if self.max_depth is not None and feature.cut_depth_mm is not None and feature.cut_depth_mm > self.max_depth:
+                        raise ValueError(f"剪切深度不能超过 {self.max_depth:g} mm")
+                    features.append(feature)
                 except ValueError as exc:
                     raise ValueError(f"切口 {index}：{exc}") from exc
             self.profile = BoardFaceProfile(features=features) if features else None

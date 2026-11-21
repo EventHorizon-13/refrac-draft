@@ -20,15 +20,12 @@ from ezdxf.fonts import fonts
 from ezdxf.fonts.shapefile import GlyphCache, ShapeFileException, readfile as read_shx
 from ezdxf.math import BoundingBox2d
 
-from refracdraft.drawing.layout import DETAIL_TEXT_SIZE_MM
+from refracdraft.drawing.layout import DETAIL_TEXT_SIZE_MM, PAGE_WIDTH_MM, PAGE_HEIGHT_MM, PAGE_STRIDE_MM, page_model_origins
 from refracdraft.drawing.model import DrawingDocument
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.resources import resource_path
 
 
-PAGE_WIDTH_MM = 297.0
-PAGE_HEIGHT_MM = 210.0
-PAGE_STRIDE_MM = 230.0
 MODEL_SCALE = 10.0
 PDF_FONT_CANDIDATES = (
     Path(os.environ.get("REFRACDRAFT_CJK_FONT", "")),
@@ -242,15 +239,41 @@ def _normalize_title_fonts(doc) -> None:
                 entity.text = _TITLE_INLINE_FONT.sub("", entity.text).replace(r"\~", " ")
 
 
+def _fit_fallback_template_text(doc, font_path: Path) -> None:
+    """Fit reference MTEXT cells when the outline font is wider than the SHX font."""
+    fonts.font_manager.scan_folder(font_path.parent)
+    for name in ("图框-A4", "标题栏"):
+        block = doc.blocks.get(name)
+        if block is None:
+            continue
+        for entity in block.query("MTEXT"):
+            width = entity.dxf.width
+            if width <= 0:
+                continue
+            if name == "图框-A4":
+                width = min(width, 166.0 - entity.dxf.insert.x) if r"\P" in entity.text else width
+            if width <= 0:
+                continue
+            font = fonts.make_font(font_path.name, entity.dxf.char_height)
+            needed = max(map(font.text_width, entity.plain_text(split=True)), default=0.0)
+            if needed > width * 0.96:
+                factor = width * 0.96 / needed
+                paragraphs = entity.text.split(r"\P")
+                entity.text = r"\P".join(rf"{{\W{factor:.5f};{text}}}" for text in paragraphs)
+
+
 def _single_page_dxf(
     source_dxf: Path,
     page_index: int,
     target: Path,
     has_bigfont: bool,
+    denominator: int = MODEL_SCALE,
+    page_y: float | None = None,
 ) -> Path:
     doc = ezdxf.readfile(source_dxf)
-    page_y = -page_index * PAGE_STRIDE_MM * MODEL_SCALE
-    page_top = page_y + PAGE_HEIGHT_MM * MODEL_SCALE
+    if page_y is None:
+        page_y = -page_index * PAGE_STRIDE_MM * denominator
+    page_top = page_y + PAGE_HEIGHT_MM * denominator
     msp = doc.modelspace()
     for entity in list(msp):
         try:
@@ -281,7 +304,7 @@ _PDF_NUMBER = rb"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
 _SHX_PAGE_TRANSFORM = re.compile(rb"\A\s*q\s+(" + rb"\s+".join([_PDF_NUMBER] * 6) + rb")\s+cm\b")
 
 
-def _fix_shx_page_scale(page: pymupdf.Page) -> None:
+def _fix_shx_page_scale(page: pymupdf.Page, denominator: int = MODEL_SCALE) -> None:
     """Keep the model-space A4 origin and scale even if MLightCAD fits the artwork."""
     for xref in page.get_contents():
         stream = page.parent.xref_stream(xref)
@@ -291,7 +314,7 @@ def _fix_shx_page_scale(page: pymupdf.Page) -> None:
         sx, skew_y, skew_x, sy, _, _ = map(float, transform[1].split())
         if sx <= 0 or sx != sy or skew_x or skew_y:
             break
-        scale = 72 / 25.4 / MODEL_SCALE
+        scale = 72 / 25.4 / denominator
         fixed = f"{scale:.12f} 0 0 {scale:.12f} 0 0".encode("ascii")
         # Change the vector stream before merging so off-page content can be recovered.
         start, end = transform.span(1)
@@ -320,13 +343,16 @@ def _export_pdf_with_shx(
 
     merged = pymupdf.open()
     page_count = max(1, len(document.pages))
-    for page_index in range(page_count):
+    for page_index, page_y in enumerate(page_model_origins(document)):
+        denominator = document.pages[page_index].scale_denominator
         progress(f"正在渲染 PDF {page_index + 1}/{page_count}…")
         page_dxf = _single_page_dxf(
             source_dxf,
             page_index,
             temp_dir / f"page-{page_index + 1}.dxf",
             bigfont is not None,
+            denominator,
+            page_y,
         )
         page_pdf = temp_dir / f"page-{page_index + 1}.pdf"
         manifest_path = temp_dir / f"page-{page_index + 1}.json"
@@ -338,8 +364,8 @@ def _export_pdf_with_shx(
             "fitBox": {
                 "min": {"x": 0.0, "y": 0.0},
                 "max": {
-                    "x": PAGE_WIDTH_MM * MODEL_SCALE,
-                    "y": PAGE_HEIGHT_MM * MODEL_SCALE,
+                    "x": PAGE_WIDTH_MM * denominator,
+                    "y": PAGE_HEIGHT_MM * denominator,
                 },
             },
         }
@@ -361,7 +387,7 @@ def _export_pdf_with_shx(
         if not page_pdf.is_file() or page_pdf.stat().st_size < 8:
             raise RuntimeError("PDF 渲染器没有生成有效文件")
         with pymupdf.open(page_pdf) as one_page:
-            _fix_shx_page_scale(one_page[0])
+            _fix_shx_page_scale(one_page[0], denominator)
             merged.insert_pdf(one_page)
 
     merged.set_metadata(
@@ -395,10 +421,13 @@ def _render_page(
     page_index: int,
     font_path: Path | None,
     font_directory: Path | None = None,
+    denominator: int = MODEL_SCALE,
+    page_y: float | None = None,
 ) -> bytes:
-    page_y = -page_index * PAGE_STRIDE_MM * MODEL_SCALE
+    if page_y is None:
+        page_y = -page_index * PAGE_STRIDE_MM * denominator
     render_box = BoundingBox2d(
-        [(0, page_y), (PAGE_WIDTH_MM * MODEL_SCALE, page_y + PAGE_HEIGHT_MM * MODEL_SCALE)]
+        [(0, page_y), (PAGE_WIDTH_MM * denominator, page_y + PAGE_HEIGHT_MM * denominator)]
     )
     backend = PyMuPdfBackend()
     for folder in (font_directory, font_path.parent if font_path else None):
@@ -524,14 +553,18 @@ def export_pdf(
 
         dxf = ezdxf.readfile(source_dxf)
         _normalize_title_fonts(dxf)
+        if selected_font_path is not None:
+            _fit_fallback_template_text(dxf, selected_font_path)
         merged = pymupdf.open()
-        for page_index in range(len(document.pages)):
+        for page_index, page_y in enumerate(page_model_origins(document)):
             report(f"正在渲染 PDF {page_index + 1}/{len(document.pages)}…")
             page_bytes = _render_page(
                 dxf,
                 page_index,
                 selected_font_path,
                 external_font_directory,
+                document.pages[page_index].scale_denominator,
+                page_y,
             )
             with pymupdf.open(stream=page_bytes, filetype="pdf") as one_page:
                 merged.insert_pdf(one_page)

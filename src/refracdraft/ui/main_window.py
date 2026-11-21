@@ -28,7 +28,8 @@ from refracdraft.drawing.layout import (
     PAGE_HEIGHT_MM,
     SEPARATOR_BOTTOM_MM,
     SEPARATOR_TOP_MM,
-    VIEW_SCALE,
+    annotation_factor,
+    leader_text_height,
     detail_box,
     detail_lines,
     detail_vertical_anchor,
@@ -50,7 +51,7 @@ MODULE_COLUMNS = [
 BOARD_COLUMNS = ["module_id", "exists", "material", "thickness_mm", "opening_mode", "custom_opening", "source_note"]
 ANCHOR_COLUMNS = [
     "module_id", "exists", "anchor_type", "material", "thread_spec", "diameter_mm", "length_mm",
-    "embedment_depth_mm", "count", "layout_mode", "positions", "edge_offset_mm", "spacing_mm", "hose_spec",
+    "embedment_depth_mm", "bolt_exposure_mm", "count", "layout_mode", "positions", "edge_offset_mm", "spacing_mm", "hose_spec",
     "dimension_horizontal", "dimension_vertical", "source_note",
 ]
 MODULE_LABELS = ["模块编号", "模块名称", "结构类型", "几何类型", "正面宽度(mm)", "正面高度(mm)", "膨胀长度(mm)",
@@ -58,7 +59,7 @@ MODULE_LABELS = ["模块编号", "模块名称", "结构类型", "几何类型",
                  "夹板面宽(mm)", "夹板面高(mm)", "夹板面类型", "模块材质", "容重(kg/m³)", "生产数量", "备注"]
 BOARD_LABELS = ["模块编号", "有无夹板", "夹板材质", "夹板厚度(mm)", "开口模式", "自定义开口坐标(JSON)", "备注"]
 ANCHOR_LABELS = ["模块编号", "有无锚固件", "锚固件类型", "锚固件材质", "螺纹规格", "直径(mm)",
-                 "长度(mm)", "嵌入深度(mm)", "数量", "布置方式", "坐标(JSON)", "端部留边(mm)", "间距(mm)", "胶管规格",
+                 "长度(mm)", "嵌入深度(mm)", "螺栓外露长度(mm)", "数量", "布置方式", "坐标(JSON)", "端部留边(mm)", "间距(mm)", "胶管规格",
                  "标注水平定位尺寸", "标注垂直定位尺寸", "备注"]
 
 
@@ -138,21 +139,24 @@ class DrawingPreview(QGraphicsView):
         for placed in page.modules:
             drawing, px = placed.drawing, placed.content_x_mm
             placement = view_placement(drawing)
-            self._draw_view(scene, drawing.front_view, (px, placement.top_y), drawing.module_id, VIEW_SCALE)
+            denominator = page.scale_denominator
+            self._draw_view(scene, drawing.front_view, (px, placement.top_y), drawing.module_id, denominator)
             if drawing.side_view:
                 self._draw_view(
                     scene,
                     drawing.side_view,
                     (px + placement.side_x, placement.top_y),
                     drawing.module_id,
-                    VIEW_SCALE,
+                    annotation_factor,
+    leader_text_height,
                 )
             self._draw_view(
                 scene,
                 drawing.board_view,
                 (px, placement.board_y),
                 drawing.module_id,
-                VIEW_SCALE,
+                annotation_factor,
+    leader_text_height,
             )
             if drawing.details:
                 left, available_width = detail_box(placed)
@@ -164,6 +168,7 @@ class DrawingPreview(QGraphicsView):
                     available_width,
                     anchor_y,
                     align_bottom,
+                    annotation_factor(denominator),
                 )
         self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
@@ -182,12 +187,12 @@ class DrawingPreview(QGraphicsView):
         item.setPos(x, 210 - y - size)
         return item
 
-    def _add_multiline_text(self, scene, text, x, max_width, anchor_y, align_bottom):
+    def _add_multiline_text(self, scene, text, x, max_width, anchor_y, align_bottom, text_factor=1.0):
         item = scene.addText(text)
         font = QFont(self.font())
         font.setPixelSize(100)
         item.setFont(font)
-        scale = DETAIL_TEXT_SIZE_MM / QFontMetricsF(font).capHeight()
+        scale = DETAIL_TEXT_SIZE_MM * text_factor / QFontMetricsF(font).capHeight()
         item.setDefaultTextColor(QColor("#111111"))
         item.document().setDocumentMargin(0)
         options = item.document().defaultTextOption()
@@ -196,7 +201,7 @@ class DrawingPreview(QGraphicsView):
         cursor = item.textCursor()
         cursor.select(QTextCursor.SelectionType.Document)
         block = QTextBlockFormat()
-        block.setLineHeight(DETAIL_LINE_HEIGHT_MM / scale, QTextBlockFormat.LineHeightTypes.FixedHeight.value)
+        block.setLineHeight(DETAIL_LINE_HEIGHT_MM * text_factor / scale, QTextBlockFormat.LineHeightTypes.FixedHeight.value)
         cursor.mergeBlockFormat(block)
         bounds = item.boundingRect()
         if bounds.width() * scale > max_width:
@@ -207,8 +212,10 @@ class DrawingPreview(QGraphicsView):
             top -= bounds.height() * scale
         item.setPos(x, top)
 
-    def _draw_view(self, scene, view, origin, module_id, scale):
+    def _draw_view(self, scene, view, origin, module_id, denominator):
         ox, oy = origin
+        scale = 1 / denominator
+        text_factor = annotation_factor(denominator)
         pts = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in view.outline.points]
         if len(pts) >= 2:
             for a, b in zip(pts, pts[1:] + ([pts[0]] if view.outline.closed else [])):
@@ -218,10 +225,19 @@ class DrawingPreview(QGraphicsView):
             x2, y2 = ox + dim.end[0] * scale, oy + dim.end[1] * scale
             if dim.orientation == "horizontal":
                 y = oy + dim.line_position * scale
-                self._dim_line(scene, x1, y, x2, y, dim.label, True)
+                self._dim_line(scene, x1, y, x2, y, dim.label, True, text_factor)
             else:
                 x = ox + dim.line_position * scale
-                self._dim_line(scene, x, y1, x, y2, dim.label, False)
+                self._dim_line(scene, x, y1, x, y2, dim.label, False, text_factor)
+        for leader in view.leaders:
+            x, y = leader.tip
+            start_x, start_y = ox + x * scale, oy + y * scale
+            dx, dy = leader.offset_mm
+            end_x, end_y = start_x + dx, start_y + dy
+            pen = QPen(QColor("#111111"), 0.15)
+            scene.addLine(start_x, 210 - start_y, end_x - 1.5, 210 - end_y, pen)
+            scene.addLine(end_x - 1.5, 210 - end_y, end_x, 210 - end_y, pen)
+            self._add_text(scene, leader.text, end_x, end_y, leader_text_height(denominator), "#111111")
         for cutout in view.cutouts:
             p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in cutout.points]
             for a, b in zip(p, p[1:] + ([p[0]] if cutout.closed else [])):
@@ -265,12 +281,12 @@ class DrawingPreview(QGraphicsView):
         if view.view_type != "board-face" and (view.anchor_symbols or view.anchor_points):
             label_y = (view.outline.points[0][1] + view.outline.points[1][1]) * scale / 2 + 5.0
         center = ox + (min_x + max_x) * scale / 2
-        item = self._add_text(scene, label, center, oy + label_y, 4, "#111111")
+        item = self._add_text(scene, label, center, oy + label_y, 4 * text_factor, "#111111")
         item.setX(center - item.boundingRect().width() * item.scale() / 2)
         if view.view_type == "board-face":
             item.setY(PAGE_HEIGHT_MM - oy - label_y - item.boundingRect().height() * item.scale() / 2)
 
-    def _dim_line(self, scene, x1, y1, x2, y2, label, horizontal):
+    def _dim_line(self, scene, x1, y1, x2, y2, label, horizontal, text_factor=1.0):
         pen = QPen(QColor("#00ffff"), 0.25)
         scene.addLine(x1, 210 - y1, x2, 210 - y2, pen)
 
@@ -289,13 +305,13 @@ class DrawingPreview(QGraphicsView):
             arrow(x1, y1, -direction, 0)
             arrow(x2, y2, direction, 0)
             self._add_text(
-                scene, label, (x1 + x2) / 2 - 2, y1 + 1.5, DIMENSION_TEXT_SIZE_MM, "#00ff00"
+                scene, label, (x1 + x2) / 2 - 2, y1 + 1.5, DIMENSION_TEXT_SIZE_MM * text_factor, "#00ff00"
             )
         else:
             direction = 1.0 if y2 >= y1 else -1.0
             arrow(x1, y1, 0, -direction)
             arrow(x2, y2, 0, direction)
-            text = self._add_text(scene, label, x1, (y1 + y2) / 2, DIMENSION_TEXT_SIZE_MM, "#00ff00")
+            text = self._add_text(scene, label, x1, (y1 + y2) / 2, DIMENSION_TEXT_SIZE_MM * text_factor, "#00ff00")
             text.setRotation(-90)
             bounds = text.sceneBoundingRect()
             text.moveBy(x1 - 0.6 - bounds.right(), PAGE_HEIGHT_MM - (y1 + y2) / 2 - bounds.center().y())
@@ -392,7 +408,8 @@ class MainWindow(QMainWindow):
         row = table.rowCount()
         table.insertRow(row)
         for col, name in enumerate(columns):
-            item = QTableWidgetItem(str(values.get(name, "")))
+            value = values.get(name)
+            item = QTableWidgetItem("" if value is None else str(value))
             table.setItem(row, col, item)
 
     def _remove_row(self, table):

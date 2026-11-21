@@ -4,6 +4,69 @@ import os
 import sys
 
 
+def _smoke_test_welded_output(window) -> None:
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    import ezdxf
+    import pymupdf
+
+    from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, Project
+    from refracdraft.drawing.generator import DrawingGenerator
+    from refracdraft.exporters.dxf import export_dxf
+    from refracdraft.exporters.pdf import export_pdf
+    from refracdraft.reference.library import ReferenceLibrary
+    from refracdraft.standard_sheet import DEFAULT_ROW, STANDARD_LINK_VERSION, build_standard_row
+
+    common = {
+        **DEFAULT_ROW, "anchor_enabled": True, "thread_spec": "M8",
+        "source_note": "", "hose_spec": "无",
+    }
+    short = build_standard_row(
+        {**common, "module_id": "W1", "length_mm": "600", "anchor_type": "焊接M型",
+         "bolt_exposure_mm": "50"},
+        board_face_profile=BoardFaceProfile(features=[BoardFaceFeature(type=1, a=80, b=60, cut_depth_mm=75)]),
+    )
+    long = build_standard_row(
+        {**common, "module_id": "W2", "length_mm": "4700", "thickness_mm": "550", "board_exists": False,
+         "anchor_type": "焊接菱形", "anchor_length_mm": "320", "bolt_exposure_mm": "170",
+         "anchor_count": "12", "anchor_spacing_mm": "380"},
+    )
+    modules, boards, anchors = zip(short, long)
+    window.project = Project(
+        modules=modules, boards=boards, anchors=anchors, standard_link_version=STANDARD_LINK_VERSION,
+    )
+    window._populate_tables()
+    project = window._collect_project()
+    if [anchor.bolt_exposure_mm for anchor in project.anchors] != [50, 170]:
+        raise ValueError("焊接螺栓外露尺寸未从界面保存到项目")
+    if project.modules[0].board_face_outline.features[0].cut_depth_mm != 75:
+        raise ValueError("异形剪切深度未从界面保存到项目")
+
+    reference = window.reference_dxf
+    drawing = DrawingGenerator(ReferenceLibrary(reference)).generate(project)
+    if [page.scale_denominator for page in drawing.pages] != [10, 20]:
+        raise ValueError("焊接长模块未使用独立的 1:20 图页")
+    with TemporaryDirectory(prefix="refracdraft-welded-smoke-") as directory:
+        dxf_path = export_dxf(drawing, Path(directory) / "mixed.dxf", reference)
+        modelspace = ezdxf.readfile(dxf_path).modelspace()
+        dimensions = modelspace.query("DIMENSION")
+        if not any(dim.dxf.dimstyle == "_20" and dim.get_measurement() == 4700 for dim in dimensions):
+            raise ValueError("可编辑 DXF 中缺少 _20 样式或 4700 mm 实际尺寸")
+        if not modelspace.query("LEADER") or not any(dim.dxf.text == "75" for dim in dimensions):
+            raise ValueError("DXF 缺少焊接外露引线或剪切深度")
+        footer = {entity.dxf.text for entity in modelspace.query("TEXT")}
+        if not {"第1页 共2页", "第2页 共2页"} <= footer:
+            raise ValueError("混合比例 DXF 页码缺失")
+        pdf_path = export_pdf(drawing, Path(directory) / "mixed.pdf", dxf_path=dxf_path)
+        with pymupdf.open(pdf_path) as pdf:
+            if len(pdf) != 2 or not all(page.get_drawings() for page in pdf):
+                raise ValueError("混合比例 PDF 未生成两页矢量图")
+            length_pt = 4700 / 20 * 72 / 25.4
+            if not any(abs(path["rect"].width - length_pt) < 2 for path in pdf[1].get_drawings()):
+                raise ValueError("PDF 长模块的实际纸面比例不是 1:20")
+
+
 def main() -> None:
     from pathlib import Path
 
@@ -166,6 +229,7 @@ def main() -> None:
                     cut = dialog.cuts[0]
                     initial_outline = dialog.preview.outline
                     cut.dimensions["a"].setText("80")
+                    cut.depth.setText("75")
                     cut.rotate.click()
                     cut.mirror.click()
                     if not dialog.confirm.isEnabled() or dialog.preview.outline == initial_outline:
@@ -181,7 +245,10 @@ def main() -> None:
             if dialog_errors:
                 raise dialog_errors[0]
             profile = window._collect_project().modules[0].board_face_outline
-            if not profile or profile.features[0].rotation_deg != 90 or not profile.features[0].mirror_x:
+            if (
+                not profile or profile.features[0].rotation_deg != 90
+                or not profile.features[0].mirror_x or profile.features[0].cut_depth_mm != 75
+            ):
                 raise ValueError("异形夹板面参数未进入项目数据")
             window.undo()
             if window._collect_project().modules[0].board_face_outline is not None:
@@ -202,6 +269,13 @@ def main() -> None:
             type_cell.setText("M型")
             if not table.isColumnHidden(COLUMN_INDEX["embedment_depth_mm"]):
                 raise ValueError("非菱形锚固件仍显示嵌入深度")
+            for label in ("焊接M型", "焊接菱形"):
+                type_cell.setText(label)
+                if table.isColumnHidden(COLUMN_INDEX["bolt_exposure_mm"]):
+                    raise ValueError("焊接锚固件未显示螺栓外露长度")
+            type_cell.setText("M型")
+            if not table.isColumnHidden(COLUMN_INDEX["bolt_exposure_mm"]):
+                raise ValueError("普通锚固件仍显示螺栓外露长度")
             trace.write_text("conditional fields passed\n", encoding="utf-8")
 
             table.item(row, COLUMN_INDEX["module_id"]).setText("B2X")
@@ -321,6 +395,8 @@ def main() -> None:
             trace.write_text("fill handle passed\n", encoding="utf-8")
             _smoke_test(window)
             trace.write_text("exporters passed\n", encoding="utf-8")
+            _smoke_test_welded_output(window)
+            trace.write_text("welded anchors, blind cuts and mixed-scale exporters passed\n", encoding="utf-8")
             window.close()
             window.deleteLater()
             app.sendPostedEvents(window, QEvent.Type.DeferredDelete)

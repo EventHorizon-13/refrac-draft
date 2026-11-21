@@ -33,6 +33,13 @@ class Dimension:
 
 
 @dataclass(frozen=True)
+class LeaderNote:
+    tip: tuple[float, float]
+    text: str
+    offset_mm: tuple[float, float]
+
+
+@dataclass(frozen=True)
 class ViewDrawing:
     view_type: str
     label: str
@@ -51,6 +58,7 @@ class ViewDrawing:
     anchor_symbol_linetypes: tuple[str, ...] = ()
     anchor_marker_style: str = "target"
     hidden_lines: tuple[Polyline, ...] = ()
+    leaders: tuple[LeaderNote, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -62,6 +70,7 @@ class ModuleDrawing:
     side_view: ViewDrawing | None
     board_view: ViewDrawing
     warnings: tuple[str, ...] = ()
+    scale_denominator: int = 10
 
 
 @dataclass(frozen=True)
@@ -80,6 +89,7 @@ class SheetPage:
     page_number: int
     modules: tuple[PlacedModule, ...]
     column_count: int
+    scale_denominator: int = 10
 
 
 @dataclass(frozen=True)

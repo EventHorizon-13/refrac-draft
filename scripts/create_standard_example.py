@@ -47,6 +47,7 @@ def create_example(path: Path) -> None:
             "anchor_count": count,
             "anchor_type": "菱形" if diamond else "M型",
             "anchor_length_mm": 230,
+            "bolt_exposure_mm": None,
             "anchor_material": "304" if diamond else "310",
             "thread_spec": "M8" if diamond else "M10",
             "pin_diameter_mm": None if diamond else 8,

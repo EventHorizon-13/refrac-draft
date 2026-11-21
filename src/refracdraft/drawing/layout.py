@@ -4,13 +4,15 @@ from collections.abc import Callable
 
 from dataclasses import dataclass
 
-from refracdraft.drawing.model import ModuleDrawing, PlacedModule, ViewDrawing
+from refracdraft.drawing.model import DrawingDocument, ModuleDrawing, PlacedModule, ViewDrawing
 
 
 VIEW_SCALE = 0.0992
 SIDE_VIEW_GAP_MM = 14.0
 VIEW_CLEARANCE_MM = 10.0
+PAGE_WIDTH_MM = 297.0
 PAGE_HEIGHT_MM = 210.0
+PAGE_STRIDE_MM = 230.0
 PAGE_LEFT_MM = 7.0
 PAGE_CONTENT_WIDTH_MM = 283.0
 PANEL_INNER_MARGIN_MM = 8.0
@@ -51,30 +53,58 @@ class ViewPlacement:
     detail_on_side: bool
 
 
-def view_bounds(view: ViewDrawing) -> tuple[float, float, float, float]:
+def page_model_origins(document: DrawingDocument) -> tuple[float, ...]:
+    origins = []
+    y = 0.0
+    for index, page in enumerate(document.pages):
+        if index:
+            previous = document.pages[index - 1]
+            y -= PAGE_HEIGHT_MM * page.scale_denominator + (PAGE_STRIDE_MM - PAGE_HEIGHT_MM) * previous.scale_denominator
+        origins.append(y)
+    return tuple(origins)
+
+
+def annotation_factor(denominator: int) -> float:
+    return 1.1 if denominator == 20 else 1.0
+
+
+def leader_text_height(denominator: int) -> float:
+    return 3.2 * annotation_factor(denominator)
+
+
+def view_bounds(view: ViewDrawing, denominator: int = 10) -> tuple[float, float, float, float]:
     """Conservative paper-space bounds of the visible geometry and its dimensions."""
+    annotation_scale = annotation_factor(denominator)
     geometry = (view.outline, *view.internal_lines, *view.hidden_lines, *view.anchor_symbols, *view.cutouts)
     boxes = [line.bounds for line in geometry]
-    left = min(box[0] for box in boxes) / 10
-    bottom = min(box[1] for box in boxes) / 10
-    right = max(box[2] for box in boxes) / 10
-    top = max(box[3] for box in boxes) / 10
+    left = min(box[0] for box in boxes) / denominator
+    bottom = min(box[1] for box in boxes) / denominator
+    right = max(box[2] for box in boxes) / denominator
+    top = max(box[3] for box in boxes) / denominator
     for x, y in view.anchor_points:
-        left, right = min(left, x / 10 - 1.5), max(right, x / 10 + 1.5)
-        bottom, top = min(bottom, y / 10 - 1.5), max(top, y / 10 + 1.5)
+        left, right = min(left, x / denominator - 1.5), max(right, x / denominator + 1.5)
+        bottom, top = min(bottom, y / denominator - 1.5), max(top, y / denominator + 1.5)
+    for leader in view.leaders:
+        x, y = (value / denominator for value in leader.tip)
+        dx, dy = leader.offset_mm
+        text_width = sum(0.8 if char.isascii() else 1.15 for char in leader.text) * leader_text_height(denominator)
+        left = min(left, x, x + dx)
+        right = max(right, x, x + dx + text_width)
+        bottom = min(bottom, y, y + dy)
+        top = max(top, y, y + dy + leader_text_height(denominator))
     for dim in view.dimensions:
-        x1, y1 = (value / 10 for value in dim.start)
-        x2, y2 = (value / 10 for value in dim.end)
-        pad = max(1.6, len(dim.label) * DIMENSION_TEXT_SIZE_MM * 0.36)
+        x1, y1 = (value / denominator for value in dim.start)
+        x2, y2 = (value / denominator for value in dim.end)
+        pad = max(1.6, len(dim.label) * DIMENSION_TEXT_SIZE_MM * 0.36 * annotation_scale)
         if dim.orientation == "horizontal":
-            y = dim.line_position / 10
+            y = dim.line_position / denominator
             mid = (x1 + x2) / 2
             left, right = min(left, x1, x2, mid - pad), max(right, x1, x2, mid + pad)
-            bottom, top = min(bottom, y1, y2, y - 1.2), max(top, y1, y2, y + ANNOTATION_CLEARANCE_MM)
+            bottom, top = min(bottom, y1, y2, y - 1.2), max(top, y1, y2, y + ANNOTATION_CLEARANCE_MM * annotation_scale)
         else:
-            x = dim.line_position / 10
+            x = dim.line_position / denominator
             mid = (y1 + y2) / 2
-            left, right = min(left, x1, x2, x - ANNOTATION_CLEARANCE_MM), max(right, x1, x2, x + ANNOTATION_CLEARANCE_MM)
+            left, right = min(left, x1, x2, x - ANNOTATION_CLEARANCE_MM * annotation_scale), max(right, x1, x2, x + ANNOTATION_CLEARANCE_MM * annotation_scale)
             bottom, top = min(bottom, y1, y2, mid - pad), max(top, y1, y2, mid + pad)
     return left, bottom, right, top
 
@@ -82,19 +112,21 @@ def view_bounds(view: ViewDrawing) -> tuple[float, float, float, float]:
 def side_view_offset(drawing: ModuleDrawing) -> float:
     if drawing.side_view is None:
         return 0.0
+    denominator = drawing.scale_denominator
     return max(
-        drawing.front_view.outline.bounds[2] / 10 + SIDE_VIEW_GAP_MM,
-        view_bounds(drawing.front_view)[2] - view_bounds(drawing.side_view)[0] + VIEW_CLEARANCE_MM,
+        drawing.front_view.outline.bounds[2] / denominator + SIDE_VIEW_GAP_MM,
+        view_bounds(drawing.front_view, drawing.scale_denominator)[2] - view_bounds(drawing.side_view, drawing.scale_denominator)[0] + VIEW_CLEARANCE_MM,
     )
 
 
 def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
-    upper = [view_bounds(drawing.front_view)]
+    denominator = drawing.scale_denominator
+    upper = [view_bounds(drawing.front_view, denominator)]
     if drawing.side_view is not None:
-        upper.append(view_bounds(drawing.side_view))
+        upper.append(view_bounds(drawing.side_view, drawing.scale_denominator))
     upper_bottom = min(box[1] for box in upper)
     upper_top = max(box[3] for box in upper)
-    _, board_bottom, _, board_top = view_bounds(drawing.board_view)
+    _, board_bottom, _, board_top = view_bounds(drawing.board_view, drawing.scale_denominator)
     ceiling = PAGE_HEIGHT_MM - FRAME_INSET_MM - 2.0
     floor = TITLE_BLOCK_TOP_MM + DETAIL_TITLE_CLEARANCE_MM
     available = ceiling - floor
@@ -102,7 +134,7 @@ def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
     detail_height = _detail_block_height(drawing)
     below_height = detail_height + DETAIL_VIEW_CLEARANCE_MM if detail_height else 0.0
     detail_on_side = bool(detail_height and view_height + below_height > available + 1e-6)
-    outline_bottom = drawing.board_view.outline.bounds[1] / 10
+    outline_bottom = drawing.board_view.outline.bounds[1] / denominator
     if detail_on_side:
         # The side text starts at the outline bottom, above any lower dimensions.
         side_height = outline_bottom - board_bottom + detail_height
@@ -121,15 +153,15 @@ def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
     return ViewPlacement(top_y, board_y, side_view_offset(drawing), detail_y, detail_on_side)
 
 
-def outline_width(view) -> float:
+def outline_width(view, denominator: int = 10) -> float:
     min_x, _min_y, max_x, _max_y = view.outline.bounds
-    return (max_x - min_x) * VIEW_SCALE
+    return (max_x - min_x) * VIEW_SCALE * 10 / denominator
 
 
 def top_row_width(drawing: ModuleDrawing) -> float:
-    width = outline_width(drawing.front_view)
+    width = outline_width(drawing.front_view, drawing.scale_denominator)
     if drawing.side_view is not None:
-        width = side_view_offset(drawing) + outline_width(drawing.side_view)
+        width = side_view_offset(drawing) + outline_width(drawing.side_view, drawing.scale_denominator)
     return width
 
 
@@ -154,7 +186,7 @@ def _detail_block_height(drawing: ModuleDrawing) -> float:
     rows = len(_detail_rows(drawing))
     if rows == 0:
         return 0.0
-    return DETAIL_TEXT_SIZE_MM + (rows - 1) * DETAIL_LINE_HEIGHT_MM + 1.0
+    return (DETAIL_TEXT_SIZE_MM + (rows - 1) * DETAIL_LINE_HEIGHT_MM) * annotation_factor(drawing.scale_denominator) + 1.0
 
 
 def _detail_row_width(line: str) -> float:
@@ -164,13 +196,13 @@ def _detail_row_width(line: str) -> float:
 
 def _preferred_detail_width(drawing: ModuleDrawing, measure: Callable[[str], float] | None) -> float:
     longest = max(map(measure or _detail_row_width, _detail_rows(drawing)), default=0.0)
-    return longest + DETAIL_WIDTH_CLEARANCE_MM
+    return longest * annotation_factor(drawing.scale_denominator) + DETAIL_WIDTH_CLEARANCE_MM
 
 
 def _drawing_right(drawing: ModuleDrawing) -> float:
-    right = max(view_bounds(drawing.front_view)[2], view_bounds(drawing.board_view)[2])
+    right = max(view_bounds(drawing.front_view, drawing.scale_denominator)[2], view_bounds(drawing.board_view, drawing.scale_denominator)[2])
     if drawing.side_view is not None:
-        right = max(right, side_view_offset(drawing) + view_bounds(drawing.side_view)[2])
+        right = max(right, side_view_offset(drawing) + view_bounds(drawing.side_view, drawing.scale_denominator)[2])
     return right
 
 
@@ -185,14 +217,14 @@ def _side_detail_width(drawing: ModuleDrawing, measure: Callable[[str], float] |
 
 
 def geometry_width(drawing: ModuleDrawing, measure: Callable[[str], float] | None = None) -> float:
-    width = max(top_row_width(drawing), outline_width(drawing.board_view))
+    width = max(top_row_width(drawing), outline_width(drawing.board_view, drawing.scale_denominator))
     if _side_details(drawing):
         return _drawing_right(drawing) + SIDE_DETAIL_GAP_MM + _side_detail_width(drawing, measure)
     return width
 
 
 def _panel_inner_margin(drawing: ModuleDrawing) -> float:
-    left = min(view_bounds(drawing.front_view)[0], view_bounds(drawing.board_view)[0])
+    left = min(view_bounds(drawing.front_view, drawing.scale_denominator)[0], view_bounds(drawing.board_view, drawing.scale_denominator)[0])
     return max(PANEL_INNER_MARGIN_MM, 0.5 - left)
 
 
@@ -230,6 +262,12 @@ def module_required_width(drawing: ModuleDrawing, measure: Callable[[str], float
     return max(PANEL_MIN_WIDTH_MM, geometry_span, text_span)
 
 
+def fits_sheet_height(drawing: ModuleDrawing) -> bool:
+    placement = view_placement(drawing)
+    lower = placement.board_y + view_bounds(drawing.board_view, drawing.scale_denominator)[1]
+    return lower >= TITLE_BLOCK_TOP_MM + DETAIL_TITLE_CLEARANCE_MM - 1e-6
+
+
 def _center_details(drawing: ModuleDrawing) -> bool:
     left, _, right, _ = drawing.front_view.outline.bounds
     return right - left <= CENTERED_MODULE_MAX_LENGTH_MM
@@ -243,7 +281,7 @@ def detail_box(placed: PlacedModule) -> tuple[float, float]:
         return left, available
     right = placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM
     if _center_details(drawing):
-        center = placed.content_x_mm + max(top_row_width(drawing), outline_width(drawing.board_view)) / 2
+        center = placed.content_x_mm + max(top_row_width(drawing), outline_width(drawing.board_view, drawing.scale_denominator)) / 2
         ideal_left = center - details_width(drawing) / 2
         preferred_width = _preferred_detail_width(drawing, placed.measure_detail)
         left = max(placed.x_mm + PANEL_INNER_MARGIN_MM, min(ideal_left, right - preferred_width))
@@ -262,7 +300,8 @@ def detail_lines(placed: PlacedModule) -> tuple[str, ...]:
     return _detail_rows(placed.drawing)
 
 
-def detail_line_width_factor(line: str, available: float, measure: Callable[[str], float] | None = None) -> float:
+def detail_line_width_factor(line: str, available: float, measure: Callable[[str], float] | None = None,
+                             text_scale: float = 1.0) -> float:
     usable = max(1.0, available - DETAIL_WIDTH_CLEARANCE_MM)
-    width = (measure or _detail_row_width)(line)
+    width = (measure or _detail_row_width)(line) * text_scale
     return usable / width if width > usable else 1.0

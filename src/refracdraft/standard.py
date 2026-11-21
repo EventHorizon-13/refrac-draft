@@ -6,6 +6,7 @@ import re
 
 from refracdraft.domain.models import (
     AnchorParameters,
+    WELDED_ANCHOR_TYPES,
     AnchorType,
     BoardFaceProfile,
     BoardParameters,
@@ -53,6 +54,7 @@ class StandardAnchorValues:
     hose_spec: str = "32胶管"
     length_mm: float | None = 230.0
     custom_type_label: str = ""
+    bolt_exposure_mm: float | None = None
 
 
 def _positive(value: float | None, label: str, module_id: str) -> float:
@@ -190,7 +192,8 @@ def build_standard_anchor(
     values: StandardAnchorValues,
 ) -> AnchorParameters:
     data = base.model_dump(mode="python") if base else {}
-    pin_diameter = None if values.anchor_type == AnchorType.DIAMOND else values.pin_diameter_mm
+    pin_diameter = (None if values.anchor_type in (AnchorType.DIAMOND, AnchorType.WELDED_DIAMOND)
+                    else values.pin_diameter_mm)
     data.update(
         module_id=module_id,
         material=values.material.strip(),
@@ -199,6 +202,7 @@ def build_standard_anchor(
         length_mm=None,
         hose_spec=values.hose_spec.strip(),
         dimension_horizontal=True,
+        bolt_exposure_mm=values.bolt_exposure_mm if values.enabled and values.anchor_type in WELDED_ANCHOR_TYPES else None,
         dimension_vertical=False,
         custom_type_label=(
             values.custom_type_label.strip()
@@ -305,6 +309,7 @@ def standard_anchor_values(anchor: AnchorParameters) -> StandardAnchorValues:
         count=anchor.count,
         anchor_type=anchor.anchor_type,
         embedment_depth_mm=anchor.embedment_depth_mm,
+        bolt_exposure_mm=anchor.bolt_exposure_mm,
         material=anchor.material,
         thread_spec=anchor.thread_spec,
         pin_diameter_mm=anchor.diameter_mm,

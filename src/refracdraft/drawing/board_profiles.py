@@ -124,6 +124,10 @@ def _oriented_cut(
     return path, tuple(dimensions)
 
 
+def board_cut_path(width: float, height: float, feature: BoardFaceFeature) -> tuple[Point, ...]:
+    return _oriented_cut(width, height, feature)[0]
+
+
 def _perimeter_position(point: Point, width: float, height: float) -> float:
     x, y = point
     if y == 0:
