@@ -293,7 +293,10 @@ def resolve_automatic_values(
     suggestions = {
         "structure_type": "半折叠" if length is not None and length > 600 else "折叠",
         "board_material": defaults["board_material"] if density is None else ("8厘" if density <= 192 else "9厘"),
-        "anchor_material": "310" if grade is not None and grade >= 1430 else defaults["anchor_material"],
+        "anchor_material": (
+            ("310" if grade >= 1430 else "304")
+            if grade is not None else defaults["anchor_material"]
+        ),
         "hose_spec": {"M10": "32", "M8": "25"}.get(thread, defaults["hose_spec"]),
         "source_note": _insert_anchor_note(values),
     }
