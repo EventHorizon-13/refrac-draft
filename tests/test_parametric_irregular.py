@@ -148,6 +148,19 @@ def test_machining_dimension_chain_aligns_and_separates_overlapping_total():
     assert height.line_position <= cut_height.line_position - 85 + 1e-6
 
 
+def test_keep_existing_anchor_chain_on_one_row_when_cut_dimension_blocks_one_end():
+    dims = (
+        Dimension((0, 220), (50, 220), "50", "horizontal", 24, machining=True),
+        Dimension((0, 220), (150, 220), "150", "horizontal", 60),
+        Dimension((150, 220), (450, 220), "300", "horizontal", 60),
+        Dimension((450, 220), (600, 220), "150", "horizontal", 60),
+    )
+    drawing = ViewDrawing("board-face", "夹板面", rectangle(600, 220), dims)
+    cut, *chain = place_machining_dimensions(drawing, 10).dimensions
+    assert len({dim.line_position for dim in chain}) == 1
+    assert chain[0].line_position >= cut.line_position + 85 - 1e-6
+
+
 def test_board_profile_rejects_overlapping_cuts():
     profile = BoardFaceProfile.model_validate({"features": [
         {"type": 1, "a": 85, "b": 35},

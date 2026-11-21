@@ -194,19 +194,37 @@ def _space_cut_dimension_lanes(view: ViewDrawing, denominator: int) -> ViewDrawi
 
         for sign, boundary in ((-1, bounds[cross]), (1, bounds[cross + 2])):
             distance = {i: sign * (dimensions[i].line_position - boundary) for i in extents}
-            outside = sorted((i for i in extents if distance[i] > 1e-6), key=distance.get)
+            outside = sorted((i for i in extents if distance[i] > 1e-6),
+                             key=lambda i: (round(distance[i], 6), extents[i][0]))
             inside = {i: d for i, d in distance.items() if d <= 1e-6}
-            placed = {}
+
+            def overlaps(i: int, j: int) -> bool:
+                return extents[i][2] < extents[j][3] - 1e-6 and extents[i][3] > extents[j][2] + 1e-6
+
+            def adjoins(i: int, j: int) -> bool:
+                return (abs(extents[i][0] - extents[j][1]) < 1e-6
+                        or abs(extents[i][1] - extents[j][0]) < 1e-6)
+
+            # A chain that already shares a baseline moves as one row.
+            chains: list[list[int]] = []
             for i in outside:
-                dim = dimensions[i]
-                lo, hi, left, right = extents[i]
+                chain = next((row for row in reversed(chains)
+                              if abs(distance[i] - distance[row[0]]) < 1e-6
+                              and adjoins(i, row[-1]) and not any(overlaps(i, j) for j in row)), None)
+                if chain is None:
+                    chains.append([i])
+                else:
+                    chain.append(i)
+
+            placed = {}
+            for chain in chains:
                 conflicts = [lane for j, lane in (inside | placed).items()
-                             if left < extents[j][3] - 1e-6 and right > extents[j][2] + 1e-6]
+                             if any(overlaps(i, j) for i in chain)]
                 clear_of_outline = 4.0 if (axis == 0 and sign < 0) or (axis == 1 and sign > 0) else 1.0
-                preferred = max(distance[i], clear_of_outline * scale)
+                preferred = max(distance[chain[0]], clear_of_outline * scale)
                 adjoining = [
                     lane for j, lane in placed.items()
-                    if (abs(lo - extents[j][1]) < 1e-6 or abs(hi - extents[j][0]) < 1e-6)
+                    if any(adjoins(i, j) for i in chain)
                     and abs(lane - preferred) <= clearance
                     and lane >= clear_of_outline * scale
                     and all(abs(lane - other) >= clearance - 1e-6 for other in conflicts)
@@ -214,9 +232,11 @@ def _space_cut_dimension_lanes(view: ViewDrawing, denominator: int) -> ViewDrawi
                 lane = min(adjoining, key=lambda value: abs(value - preferred)) if adjoining else preferred
                 while any(abs(lane - other) < clearance - 1e-6 for other in conflicts):
                     lane = max(other + clearance for other in conflicts if abs(lane - other) < clearance - 1e-6)
-                placed[i] = lane
-                shift = boundary + sign * lane - dim.line_position
-                dimensions[i] = replace(dim, offset=dim.offset + shift * (1 if axis == 0 else -1))
+                for i in chain:
+                    dim = dimensions[i]
+                    placed[i] = lane
+                    shift = boundary + sign * lane - dim.line_position
+                    dimensions[i] = replace(dim, offset=dim.offset + shift * (1 if axis == 0 else -1))
     return replace(view, dimensions=tuple(dimensions))
 
 
