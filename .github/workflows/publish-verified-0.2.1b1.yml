@@ -1,0 +1,49 @@
+name: Publish verified Standard v0.2.1b1
+
+on:
+  push:
+    branches:
+      - beta/standard-v0.2.1b1
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERIFIED_RUN: "44860688830"
+      VERIFIED_SHA: "81c9028c6d849d81a02396e74e57202e56c7c0ad"
+      RELEASE_TAG: standard-v0.2.1b1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Windows build provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual=$(gh run view "$VERIFIED_RUN" --json headSha,conclusion --jq '.headSha + " " + .conclusion')
+          test "$actual" = "$VERIFIED_SHA success"
+      - uses: actions/download-artifact@v4
+        with:
+          name: RefracDraft-Standard-Windows-x64-portable
+          path: release/RefracDraft-Standard
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ env.VERIFIED_RUN }}
+      - name: Publish Beta assets without replacing the stable release
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="RefracDraft-Standard-Windows-x64-portable-v0.2.1b1.zip"
+          app="release/RefracDraft-Standard"
+          test -s "$app/RefracDraft-Standard.exe"
+          test "$(tr -d '\r\n' < "$app/_internal/assets/build-version.txt")" = "0.2.1b1"
+          (cd release && zip -q -r "$GITHUB_WORKSPACE/$package" RefracDraft-Standard)
+          gh release create "$RELEASE_TAG" "$package" \
+            "examples/standard_example_6_modules.xlsx#模块加工图示例_6模块.xlsx" \
+            --target "$VERIFIED_SHA" \
+            --prerelease --latest=false \
+            --title "RefracDraft Standard v0.2.1b1 (Beta)" \
+            --notes-file "docs/releases/$RELEASE_TAG.md"
