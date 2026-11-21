@@ -6,7 +6,7 @@ from openpyxl import load_workbook
 
 from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, CutStart, Project
 from refracdraft.drawing.generator import DrawingGenerator
-from refracdraft.drawing.layout import page_model_origins
+from refracdraft.drawing.layout import detail_box, page_model_origins, view_bounds, view_placement
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.project import export_standard_excel
 from refracdraft.importers.excel import import_project_xlsx
@@ -73,9 +73,9 @@ def test_exposure_and_blind_cut_round_trip_and_depth_controls_projection(tmp_pat
         assert (0, 0) in board_view.outline.points
         walls = board_view.internal_lines if side == CutStart.UPPER else board_view.hidden_lines
         assert ((0, 65), (120, 65)) in [wall.points for wall in walls]
-        expected = "上夹板切缺口，下夹板不切缺口" if side == CutStart.UPPER else "上夹板不切缺口，下夹板切缺口"
-        assert expected in drawn.details
-        assert not any("剪切深度" in detail for detail in drawn.details)
+        note, = board_view.leaders
+        assert note.machining and note.text == f"{side.value}切缺口"
+        assert not any("剪切深度" in detail or "切缺口" in detail for detail in drawn.details)
         depth_dim, = (dim for dim in view.dimensions if dim.label == str(depth))
         assert (depth_dim.start[1], depth_dim.end[1]) == (bottom, top)
 
@@ -86,7 +86,6 @@ def test_exposure_and_blind_cut_round_trip_and_depth_controls_projection(tmp_pat
 
 def test_welded_diamond_depth_and_remark_are_independent_of_anchor_length(tmp_path: Path):
     from dataclasses import replace
-    from refracdraft.drawing.layout import view_bounds
     from refracdraft.reference.library import ReferenceLibrary
 
     values = {
@@ -115,7 +114,10 @@ def test_welded_diamond_depth_and_remark_are_independent_of_anchor_length(tmp_pa
     assert page.scale_denominator == 20
     leader, = view.leaders
     assert "外露190" in leader.text
-    assert min(line.bounds[1] for line in view.anchor_symbols) == 460
+    shoe_count = len(generator.reference_library.welded_diamond_shoe.polylines)
+    assert max(line.bounds[3] for line in view.anchor_symbols[:shoe_count]) == pytest.approx(460)
+    assert min(line.bounds[1] for line in view.anchor_symbols[:shoe_count]) < 460
+    assert any(line.points == ((250, 460), (250, 790)) for line in view.anchor_symbols)
     assert max(line.bounds[3] for line in view.anchor_symbols) == 790
     assert "4、锚固件长度：245mm" in data.details
     assert data.details[-1] == "8、螺栓长度330mm，外露190mm"
@@ -146,6 +148,28 @@ def test_welded_diamond_depth_and_remark_are_independent_of_anchor_length(tmp_pa
     for value in (190, 140, 330):
         assert any(dim.dxf.text == str(value) and dim.get_measurement() == pytest.approx(value)
                    for dim in modelspace.query("DIMENSION"))
+
+    for kind, depth in (("焊接M型", 0), ("焊接菱形", 50)):
+        taper, plate, hardware = build_standard_row({
+            **DEFAULT_ROW, "length_mm": "600", "thickness_mm": "300",
+            "taper_enabled": True, "taper_type": "侧敲", "big_head_mm": "300", "small_head_mm": "220",
+            "anchor_enabled": True, "anchor_length_mm": "220", "anchor_type": kind,
+            "bolt_exposure_mm": "50", "embedment_depth_mm": "50",
+        })
+        taper_project = Project(modules=[taper], boards=[plate], anchors=[hardware])
+        placed, = generator.generate(taper_project).pages[0].modules
+        module_drawing = placed.drawing
+        side = module_drawing.side_view
+        *body, shaft, axis = side.anchor_symbols
+        assert body and min(line.bounds[0] for line in body) == pytest.approx(depth)
+        assert max(line.bounds[3] for line in body) - min(line.bounds[1] for line in body) == pytest.approx(220)
+        assert shaft.bounds[0] == -50 and shaft.bounds[2] == depth
+        assert axis.points == ((-50, 150), (depth, 150))
+        placement = view_placement(module_drawing)
+        detail_left, _ = detail_box(placed)
+        assert placement.detail_on_side
+        assert detail_left > placed.content_x_mm + view_bounds(module_drawing.board_view)[2]
+        assert detail_left < placed.content_x_mm + placement.side_x + view_bounds(side)[2]
 
     legacy = anchor.model_copy(update={"embedment_depth_mm": None})
     incomplete = project.model_copy(update={"anchors": [legacy]})

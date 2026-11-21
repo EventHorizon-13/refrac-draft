@@ -200,12 +200,14 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
             msp.add_leader(vertices, dimstyle=f"_{denominator}", override={"dimclrd": 7},
                            dxfattribs={"layer": "TEXT", "has_arrowhead": 0})
         end = (ox + x + leader.offset_mm[0] * denominator, oy + y + leader.offset_mm[1] * denominator)
-        msp.add_text(leader.text, dxfattribs={
+        text_entity = msp.add_text(leader.text, dxfattribs={
             "height": leader_text_height(denominator) * denominator,
             "style": TEXT_STYLE,
             "layer": "TEXT",
             "insert": end,
         })
+        if leader.align_right:
+            text_entity.set_placement(end, align=TextEntityAlignment.RIGHT)
     min_x, min_y, max_x, max_y = view.outline.bounds
     for cutout in view.cutouts:
         pts = [(ox + x, oy + y) for x, y in cutout.points]

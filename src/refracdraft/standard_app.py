@@ -23,8 +23,8 @@ def _smoke_test_welded_output(window) -> None:
         "source_note": "自动", "hose_spec": "无",
     }
     short = build_standard_row(
-        {**common, "module_id": "W1", "length_mm": "600", "anchor_type": "焊接M型",
-         "bolt_exposure_mm": "50"},
+        {**common, "module_id": "W1", "length_mm": "600", "anchor_type": "焊接M型", "bolt_exposure_mm": "50",
+         "taper_enabled": True, "taper_type": "侧敲", "big_head_mm": "300", "small_head_mm": "220"},
         board_face_profile=BoardFaceProfile(features=[
             BoardFaceFeature(type=1, a=80, b=60, cut_depth_mm=75, cut_start="上夹板"),
         ]),
@@ -57,8 +57,12 @@ def _smoke_test_welded_output(window) -> None:
     if [page.scale_denominator for page in drawing.pages] != [10, 20]:
         raise ValueError("焊接长模块未使用独立的 1:20 图页")
     short_drawing = drawing.pages[0].modules[0].drawing
-    if not short_drawing.board_view.internal_lines or "上夹板切缺口，下夹板不切缺口" not in short_drawing.details:
-        raise ValueError("上夹板缺口线或上下夹板加工说明缺失")
+    if not short_drawing.board_view.internal_lines or not any(
+        leader.machining and leader.text == "上夹板切缺口" for leader in short_drawing.board_view.leaders
+    ):
+        raise ValueError("上夹板缺口线或缺口引线缺失")
+    if not short_drawing.side_view or len(short_drawing.side_view.anchor_symbols) <= 2:
+        raise ValueError("焊接 M 型侧视图缺少锚固件本体")
     long_board = drawing.pages[1].modules[0].drawing.board_view
     leader, = long_board.leaders
     if leader.text != "焊接M8螺栓 外露170":

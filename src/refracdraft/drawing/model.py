@@ -41,6 +41,8 @@ class LeaderNote:
     text: str
     offset_mm: tuple[float, float]
     dimension_crossings: tuple[float, ...] = ()
+    machining: bool = False
+    align_right: bool = False
 
     @property
     def vertices_mm(self) -> tuple[tuple[float, float], ...]:

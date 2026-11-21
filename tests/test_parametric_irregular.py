@@ -140,6 +140,7 @@ def test_board_profile_hidden_projection_and_dimension_lanes():
         board_face_width_mm=300, board_face_height_mm=230, board_face_outline=profile,
     )
     drawing = DrawingGenerator().build_module(Project(modules=[module]), module)
+    assert not drawing.board_view.leaders
     assert not drawing.front_view.internal_lines
     assert [line.points for line in drawing.front_view.hidden_lines] == [
         ((45, 0), (45, 300)), ((90, 0), (90, 300)),

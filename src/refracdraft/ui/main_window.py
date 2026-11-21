@@ -238,7 +238,9 @@ class DrawingPreview(QGraphicsView):
                 for (x1, y1), (x2, y2) in zip(points, points[1:]):
                     scene.addLine(x1, 210 - y1, x2, 210 - y2, pen)
             end_x, end_y = start_x + leader.offset_mm[0], start_y + leader.offset_mm[1]
-            self._add_text(scene, leader.text, end_x, end_y, leader_text_height(denominator), "#111111")
+            item = self._add_text(scene, leader.text, end_x, end_y, leader_text_height(denominator), "#111111")
+            if leader.align_right:
+                item.setX(end_x - item.boundingRect().width() * item.scale())
         for cutout in view.cutouts:
             p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in cutout.points]
             for a, b in zip(p, p[1:] + ([p[0]] if cutout.closed else [])):

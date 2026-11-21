@@ -31,12 +31,13 @@ from refracdraft.drawing.layout import (
     panel_content_left,
     panel_gap,
     place_bolt_note,
+    place_cut_notes,
     place_machining_dimensions,
     view_placement,
 )
 from refracdraft.geometry.primitives import Polyline, equal_anchor_positions, module_front_outline, module_side_outline, parametric_outline, point_in_outline, rectangle, scale_template
 from refracdraft.reference.library import ReferenceLibrary, SymbolGeometry
-from refracdraft.drawing.welded_anchors import welded_bolt_symbol
+from refracdraft.drawing.welded_anchors import welded_bolt_symbol, welded_side_symbol
 
 
 ANCHOR_SYMBOL_ID = {
@@ -256,7 +257,7 @@ def _anchor_chain_endpoints(
     return datum(top_left, left, first, True), datum(top_right, right, last, False)
 
 
-def _details(module, board, anchor, profile: BoardFaceProfile | None) -> tuple[str, ...]:
+def _details(module, board, anchor) -> tuple[str, ...]:
     name = module.custom_structure_label or module.name or module.structure_type.value
     display_name = name if module.module_id in name else f"{name}{module.module_id}"
     material = module.material.strip().removesuffix("材质").strip()
@@ -281,13 +282,6 @@ def _details(module, board, anchor, profile: BoardFaceProfile | None) -> tuple[s
     hose = anchor.hose_spec if anchor.exists else "无胶管"
     board_text = board.material if board.exists else "无夹板"
     lines.append(f"7、{hose or '未填写胶管'}，{board_text}")
-    if board.exists and module.board_face_outline is not None:
-        if profile is None or any(feature.cut_depth_mm is None for feature in profile.features):
-            faces = set(CutStart)
-        else:
-            faces = {feature.cut_start for feature in profile.features}
-        lines.append("，".join(f"{face.value}{'切缺口' if face in faces else '不切缺口'}"
-                              for face in (CutStart.UPPER, CutStart.LOWER)))
     remark = module.source_note
     bolt_length = anchor.bolt_length_mm
     if anchor.exists and anchor.count and bolt_length is not None:
@@ -472,20 +466,7 @@ class DrawingGenerator:
             side_symbol_lineweights: list[int] = []
             side_symbol_linetypes: list[str] = []
             side_internal: tuple[Polyline, ...] = ()
-            if positions and bolt is not None:
-                side_symbols.extend(
-                    Polyline(tuple((-y, side_overall_h / 2 + x) for x, y in line.points),
-                             line.closed, line.bulges)
-                    for line in bolt.polylines
-                )
-                bolt_left = min(line.bounds[0] for line in side_symbols)
-                left_dimension = side_dims[1]
-                if bolt_left <= left_dimension.line_position + 10:
-                    side_dims = (*side_dims[:1], replace(left_dimension, offset=-bolt_left + 18), side_dims[2])
-                side_symbol_colors.extend(bolt.colors)
-                side_symbol_lineweights.extend(bolt.lineweights)
-                side_symbol_linetypes.extend(bolt.linetypes)
-            elif positions and self.reference_library:
+            if positions and self.reference_library and bolt is None:
                 try:
                     side_profile = self.reference_library.side_anchor_symbol(front_anchor_type.value)
                     profile_colors = side_profile.colors if len(side_profile.colors) == len(side_profile.polylines) else (7,) * len(side_profile.polylines)
@@ -509,7 +490,7 @@ class DrawingGenerator:
                     side_symbol_linetypes.extend(profile_linetypes)
                 except KeyError as exc:
                     warnings.append(str(exc))
-            elif self.reference_library:
+            elif not positions and self.reference_library:
                 side_internal = self.reference_library.side_expansion_lines(
                     module.side_length_mm or module.board_face_width_mm,
                     side_overall_h,
@@ -527,6 +508,7 @@ class DrawingGenerator:
         profile_dimensions = ()
         cut_lines: list[Polyline] = []
         hidden_cut_lines: list[Polyline] = []
+        cut_notes: list[LeaderNote] = []
         profile = module.board_face_outline
         near_board_outline = None
         if isinstance(profile, BoardFaceProfile):
@@ -560,7 +542,14 @@ class DrawingGenerator:
                 for feature in profile.features:
                     if feature.cut_depth_mm is not None:
                         lines = cut_lines if feature.cut_start == CutStart.UPPER else hidden_cut_lines
-                        lines.extend(Polyline(edge, closed=False) for edge in board_cut_edges(width, height, feature))
+                        edges = board_cut_edges(width, height, feature)
+                        lines.extend(Polyline(edge, closed=False) for edge in edges)
+                        if board.exists and edges:
+                            start, end = max(edges, key=lambda edge: sum(
+                                (a - b) ** 2 for a, b in zip(*edge)
+                            ))
+                            tip = tuple((a + b) / 2 for a, b in zip(start, end))
+                            cut_notes.append(LeaderNote(tip, f"{feature.cut_start.value}切缺口", (4.0, 6.0), machining=True))
             except ValueError as exc:
                 raise ValueError(f"{module.module_id}: {exc}") from exc
             front_view = _project_profile_cuts(front_view, width, height, profile, cut_outline, through_outline)
@@ -605,6 +594,24 @@ class DrawingGenerator:
                 (x, section[-1] if (section := _section_intersections(anchor_outline, x)) else y)
                 for x, y in positions
             ]
+            if side_view is not None and positions:
+                left, bottom, right, top = side_view.outline.bounds
+                _, mounting_y = min(positions)
+                mounting_x = left + (1 - mounting_y / module.board_face_height_mm) * (right - left)
+                side_symbol = welded_side_symbol(
+                    self.reference_library, anchor, mounting_x, (bottom + top) / 2, exposure, embedded,
+                )
+                left_size = side_view.dimensions[1]
+                tip = mounting_x - exposure
+                side_dimensions = side_view.dimensions
+                if tip <= left_size.line_position + 10:
+                    side_dimensions = (side_dimensions[0], replace(left_size, offset=left - tip + 18), side_dimensions[2])
+                side_view = replace(
+                    side_view, dimensions=side_dimensions, anchor_symbols=side_symbol.polylines,
+                    anchor_symbol_colors=side_symbol.colors,
+                    anchor_symbol_lineweights=side_symbol.lineweights,
+                    anchor_symbol_linetypes=side_symbol.linetypes,
+                )
             symbol = bolt
             if anchor.anchor_type == AnchorType.WELDED_M:
                 body = self.reference_library.anchor_symbol("m-shaped")
@@ -661,10 +668,10 @@ class DrawingGenerator:
                       max(70, -left_cut_dim + 44) if profile_dimensions else 40),
         ]
         board_dims.extend(profile_dimensions)
-        leaders = ()
+        leaders = tuple(cut_notes)
         if bolt is not None and positions:
             x, y = max(positions, key=lambda point: (point[1], -point[0]))
-            leaders = (LeaderNote((x, y + exposure), f"焊接{anchor.thread_spec}螺栓 外露{exposure:g}", (1.5, 3)),)
+            leaders = (*leaders, LeaderNote((x, y + exposure), f"焊接{anchor.thread_spec}螺栓 外露{exposure:g}", (1.5, 3)))
         if bolt is not None and anchor.anchor_type == AnchorType.WELDED_DIAMOND and positions:
             # Place axial sizes between the first bolt and the outer callout,
             # away from the central cutting and chain dimension labels.
@@ -738,7 +745,7 @@ class DrawingGenerator:
         )
         return ModuleDrawing(
             module.module_id, module.name or module.structure_type.value,
-            _details(module, board, anchor, profile if isinstance(profile, BoardFaceProfile) else None),
+            _details(module, board, anchor),
             front_view, side_view, board_view, tuple(warnings),
         )
 
@@ -755,15 +762,19 @@ class DrawingGenerator:
             drawing = replace(
                 original,
                 front_view=place_machining_dimensions(original.front_view, 10),
-                board_view=place_bolt_note(place_machining_dimensions(original.board_view, 10), 10),
+                board_view=place_cut_notes(
+                    place_bolt_note(place_machining_dimensions(original.board_view, 10), 10), 10, module.module_id,
+                ),
             )
             width = module_required_width(drawing, measure_detail)
             if width > PAGE_CONTENT_WIDTH_MM + 1e-6 or not fits_sheet_height(drawing):
                 drawing = replace(
                     original, scale_denominator=20,
                     front_view=place_machining_dimensions(_space_long_dimensions(original.front_view, 20), 20),
-                    board_view=place_bolt_note(
-                        place_machining_dimensions(_space_long_dimensions(original.board_view, 20), 20), 20,
+                    board_view=place_cut_notes(
+                        place_bolt_note(
+                            place_machining_dimensions(_space_long_dimensions(original.board_view, 20), 20), 20,
+                        ), 20, module.module_id,
                     ),
                     side_view=(_space_long_dimensions(original.side_view, 20)
                                if original.side_view is not None else None),
