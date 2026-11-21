@@ -5,6 +5,7 @@ on:
     branches:
       - feat/standard-edition
       - beta/standard-v*
+      - build/standard-v*
       - release/standard-v*
     paths:
       - .github/workflows/windows-standard.yml

@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   test:
-    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/beta/standard-v')
+    if: github.event_name != 'push' || (!startsWith(github.ref, 'refs/heads/beta/standard-v') && !startsWith(github.ref, 'refs/heads/build/standard-v'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
