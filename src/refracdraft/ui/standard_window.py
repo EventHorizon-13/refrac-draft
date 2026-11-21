@@ -59,6 +59,7 @@ from PySide6.QtWidgets import (
 from refracdraft.domain.models import (
     AnchorParameters,
     AnchorType,
+    DIAMOND_ANCHOR_TYPES,
     WELDED_ANCHOR_TYPES,
     BoardFaceProfile,
     BoardParameters,
@@ -602,6 +603,24 @@ class ParameterTable(QTableWidget):
             self._clear_selection()
             event.accept()
             return
+        text = event.text()
+        modifiers = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.MetaModifier
+        index = self.currentIndex()
+        required_flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsEditable
+        if (
+            text and text.isprintable() and not event.modifiers() & modifiers
+            and self.state() != QAbstractItemView.State.EditingState
+            and (index.flags() & required_flags) == required_flags
+        ):
+            # Open the editor without forwarding the triggering key. Insert its
+            # text explicitly after the editor has selected the old cell value.
+            if self.edit(index, QAbstractItemView.EditTrigger.AllEditTriggers, None):
+                editor = self.indexWidget(index) or self.focusWidget()
+                if isinstance(editor, QLineEdit):
+                    editor.selectAll()
+                    editor.insert(text)
+                    event.accept()
+                    return
         super().keyPressEvent(event)
 
     def _clear_selection(self) -> None:
@@ -1253,7 +1272,7 @@ class StandardWindow(MainWindow):
             return
         any_anchor = any(self._cell_bool(row, "anchor_enabled") for row in range(table.rowCount()))
         any_diamond = any(
-            self._cell_bool(row, "anchor_enabled") and self._cell_text(row, "anchor_type") == "菱形"
+            self._cell_bool(row, "anchor_enabled") and self._cell_text(row, "anchor_type") in DIAMOND_ANCHOR_TYPES
             for row in range(table.rowCount())
         )
         any_welded = any(
@@ -1261,7 +1280,7 @@ class StandardWindow(MainWindow):
             for row in range(table.rowCount())
         )
         any_pin_anchor = any(
-            self._cell_bool(row, "anchor_enabled") and self._cell_text(row, "anchor_type") not in ("菱形", "焊接菱形")
+            self._cell_bool(row, "anchor_enabled") and self._cell_text(row, "anchor_type") not in DIAMOND_ANCHOR_TYPES
             for row in range(table.rowCount())
         )
         for key in ANCHOR_SETTING_KEYS:
@@ -1278,19 +1297,20 @@ class StandardWindow(MainWindow):
                 board = self._cell_bool(row, "board_exists")
                 anchor = self._cell_bool(row, "anchor_enabled")
                 anchor_type = self._cell_text(row, "anchor_type")
-                is_diamond = anchor_type == AnchorType.DIAMOND
+                is_diamond = anchor_type in DIAMOND_ANCHOR_TYPES
                 self._set_cell_enabled(row, "expansion_length_mm", not taper)
                 for key in TAPER_SETTING_KEYS:
                     self._set_cell_enabled(row, key, taper)
                 self._set_cell_enabled(row, "board_material", board)
                 for key in ANCHOR_SETTING_KEYS:
-                    enabled = anchor and not (key == "pin_diameter_mm" and anchor_type in (AnchorType.DIAMOND, AnchorType.WELDED_DIAMOND))
+                    enabled = anchor and not (key == "pin_diameter_mm" and is_diamond)
                     enabled = enabled and not (key == "embedment_depth_mm" and not is_diamond)
                     enabled = enabled and not (key == "bolt_exposure_mm" and anchor_type not in WELDED_ANCHOR_TYPES)
                     self._set_cell_enabled(row, key, enabled)
                 if taper:
                     self._sync_expansion_length(row)
-                suggestions = resolve_automatic_values(self._sheet_values(row), self._row_bases[row].automatic_fallback)
+                values = self._sheet_values(row)
+                suggestions = resolve_automatic_values(values, self._row_bases[row].automatic_fallback)
                 for key in AUTOMATIC_FIELDS:
                     item = table.item(row, COLUMN_INDEX[key])
                     if key in EMPTY_SELECTS_AUTOMATIC and not item.text().strip():
@@ -1298,7 +1318,9 @@ class StandardWindow(MainWindow):
                     suggestion = suggestions.get(key)
                     item.setData(AUTOMATIC_PREVIEW_ROLE, suggestion)
                     if key == "source_note":
-                        item.setToolTip("随锚固件类型自动填写" if key in suggestions else item.text())
+                        item.setToolTip(
+                            (suggestion or "随锚固件参数自动填写") if key in suggestions else item.text()
+                        )
                     else:
                         item.setToolTip(f"自动计算 · {suggestion or '待填写参数'}" if key in suggestions else "")
         finally:

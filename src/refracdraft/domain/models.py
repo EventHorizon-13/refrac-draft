@@ -31,7 +31,12 @@ class AnchorType(StrEnum):
     CUSTOM = "自定义"
 
 
+DIAMOND_ANCHOR_TYPES = frozenset({AnchorType.DIAMOND, AnchorType.WELDED_DIAMOND})
 WELDED_ANCHOR_TYPES = frozenset({AnchorType.WELDED_M, AnchorType.WELDED_DIAMOND})
+
+
+def format_bolt_remark(length_mm: float, exposure_mm: float) -> str:
+    return f"螺栓长度{length_mm:g}mm，外露{exposure_mm:g}mm"
 
 
 class LayoutMode(StrEnum):
@@ -222,7 +227,7 @@ class AnchorParameters(BaseModel):
     diameter_mm: float | None = Field(default=None, gt=0)
     length_mm: float | None = Field(default=None, gt=0)
     # Source dynamic-block parameter used by diamond anchors.
-    embedment_depth_mm: float | None = Field(default=None, gt=0)
+    embedment_depth_mm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     bolt_exposure_mm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     count: int = Field(default=1, ge=0)
     layout_mode: LayoutMode = LayoutMode.EXPLICIT
@@ -233,6 +238,16 @@ class AnchorParameters(BaseModel):
     dimension_horizontal: bool = False
     dimension_vertical: bool = False
     source_note: str = ""
+
+    @property
+    def bolt_length_mm(self) -> float | None:
+        if self.anchor_type not in WELDED_ANCHOR_TYPES or self.bolt_exposure_mm is None:
+            return None
+        if self.anchor_type == AnchorType.WELDED_M:
+            return self.bolt_exposure_mm
+        if self.embedment_depth_mm is None:
+            return None
+        return self.bolt_exposure_mm + self.embedment_depth_mm
 
     @field_validator("material", "thread_spec", mode="before")
     @classmethod

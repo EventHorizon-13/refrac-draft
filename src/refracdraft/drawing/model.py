@@ -24,6 +24,7 @@ class Dimension:
     label: str
     orientation: str = "horizontal"
     offset: float = 8.0
+    fixed_extension_mm: float | None = None
 
     @property
     def line_position(self) -> float:

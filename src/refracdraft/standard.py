@@ -6,6 +6,7 @@ import re
 
 from refracdraft.domain.models import (
     AnchorParameters,
+    DIAMOND_ANCHOR_TYPES,
     WELDED_ANCHOR_TYPES,
     AnchorType,
     BoardFaceProfile,
@@ -192,7 +193,7 @@ def build_standard_anchor(
     values: StandardAnchorValues,
 ) -> AnchorParameters:
     data = base.model_dump(mode="python") if base else {}
-    pin_diameter = (None if values.anchor_type in (AnchorType.DIAMOND, AnchorType.WELDED_DIAMOND)
+    pin_diameter = (None if values.anchor_type in DIAMOND_ANCHOR_TYPES
                     else values.pin_diameter_mm)
     data.update(
         module_id=module_id,
@@ -234,7 +235,12 @@ def build_standard_anchor(
         raise ValueError(f"{module_id}: 锚固件位置与间距超出模块长度")
     embedment = None
     if values.anchor_type == AnchorType.DIAMOND:
-        embedment = _positive(values.embedment_depth_mm or 50.0, "嵌入深度", module_id)
+        embedment = _positive(
+            50.0 if values.embedment_depth_mm is None else values.embedment_depth_mm,
+            "嵌入深度", module_id,
+        )
+    elif values.anchor_type == AnchorType.WELDED_DIAMOND and values.embedment_depth_mm is not None:
+        embedment = _positive(values.embedment_depth_mm, "嵌入深度", module_id)
     data.update(
         exists=True,
         anchor_type=values.anchor_type,

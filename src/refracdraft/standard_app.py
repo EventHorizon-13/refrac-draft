@@ -20,7 +20,7 @@ def _smoke_test_welded_output(window) -> None:
 
     common = {
         **DEFAULT_ROW, "anchor_enabled": True, "thread_spec": "M8",
-        "source_note": "", "hose_spec": "无",
+        "source_note": "自动", "hose_spec": "无",
     }
     short = build_standard_row(
         {**common, "module_id": "W1", "length_mm": "600", "anchor_type": "焊接M型",
@@ -29,7 +29,8 @@ def _smoke_test_welded_output(window) -> None:
     )
     long = build_standard_row(
         {**common, "module_id": "W2", "length_mm": "4700", "thickness_mm": "550", "board_exists": False,
-         "anchor_type": "焊接菱形", "anchor_length_mm": "320", "bolt_exposure_mm": "170",
+         "anchor_type": "焊接菱形", "anchor_length_mm": "220", "bolt_exposure_mm": "170",
+         "embedment_depth_mm": "150",
          "anchor_count": "12", "anchor_spacing_mm": "380"},
     )
     modules, boards, anchors = zip(short, long)
@@ -40,6 +41,11 @@ def _smoke_test_welded_output(window) -> None:
     project = window._collect_project()
     if [anchor.bolt_exposure_mm for anchor in project.anchors] != [50, 170]:
         raise ValueError("焊接螺栓外露尺寸未从界面保存到项目")
+    diamond = project.anchors[1]
+    if (diamond.embedment_depth_mm, diamond.bolt_length_mm, diamond.length_mm) != (150, 320, 220):
+        raise ValueError("焊接菱形的嵌入深度、螺栓长度和锚固件长度未正确保存")
+    if project.modules[1].source_note != "螺栓长度320mm，外露170mm":
+        raise ValueError("焊接菱形的螺栓长度和外露长度未进入备注")
     if project.modules[0].board_face_outline.features[0].cut_depth_mm != 75:
         raise ValueError("异形剪切深度未从界面保存到项目")
 
@@ -47,6 +53,12 @@ def _smoke_test_welded_output(window) -> None:
     drawing = DrawingGenerator(ReferenceLibrary(reference)).generate(project)
     if [page.scale_denominator for page in drawing.pages] != [10, 20]:
         raise ValueError("焊接长模块未使用独立的 1:20 图页")
+    long_board = drawing.pages[1].modules[0].drawing.board_view
+    leader, = long_board.leaders
+    if leader.text != "焊接M8螺栓 外露170":
+        raise ValueError("焊接菱形图上只应标注螺栓外露长度")
+    if not any(dim.fixed_extension_mm is not None for dim in long_board.dimensions):
+        raise ValueError("焊接标注与上方尺寸标注未分开")
     with TemporaryDirectory(prefix="refracdraft-welded-smoke-") as directory:
         dxf_path = export_dxf(drawing, Path(directory) / "mixed.dxf", reference)
         modelspace = ezdxf.readfile(dxf_path).modelspace()
@@ -72,6 +84,7 @@ def main() -> None:
 
     from PySide6.QtCore import QEvent, QPointF, QTimer, Qt
     from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QKeyEvent, QMouseEvent
+    from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QWidget
 
     from refracdraft.app import _smoke_test
@@ -273,6 +286,12 @@ def main() -> None:
                 type_cell.setText(label)
                 if table.isColumnHidden(COLUMN_INDEX["bolt_exposure_mm"]):
                     raise ValueError("焊接锚固件未显示螺栓外露长度")
+                depth_column = COLUMN_INDEX["embedment_depth_mm"]
+                if label == "焊接菱形" and (
+                    table.isColumnHidden(depth_column)
+                    or not table.item(row, depth_column).flags() & Qt.ItemFlag.ItemIsEditable
+                ):
+                    raise ValueError("焊接菱形嵌入深度无法编辑")
             type_cell.setText("M型")
             if not table.isColumnHidden(COLUMN_INDEX["bolt_exposure_mm"]):
                 raise ValueError("普通锚固件仍显示螺栓外露长度")
@@ -301,22 +320,24 @@ def main() -> None:
             if table.currentRow() != added:
                 raise ValueError("选中单元格后方向键未切换到下一行")
             table.setCurrentCell(row, length_column)
-            QApplication.sendEvent(table, QKeyEvent(
-                QEvent.Type.KeyPress, Qt.Key.Key_4, Qt.KeyboardModifier.NoModifier, "4"
-            ))
+            app.processEvents()
+            length_point = table.visualItemRect(table.item(row, length_column)).center()
+            QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=length_point)
+            QTest.keyClick(table, Qt.Key.Key_5)
+            app.processEvents()
             editor = table.focusWidget()
-            if not isinstance(editor, QLineEdit) or editor.text() != "4":
-                raise ValueError("按键未进入编辑并替换原值")
-            editor.setText("456")
-            QApplication.sendEvent(editor, QKeyEvent(
-                QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
-            ))
+            if not isinstance(editor, QLineEdit) or editor.text() != "5":
+                raise ValueError("选中单元格直接输入时丢失了首位 5")
+            QTest.keyClicks(editor, "60")
+            if editor.text() != "560":
+                raise ValueError("连续输入 560 后编辑器内容错误")
+            QTest.keyClick(editor, Qt.Key.Key_Return)
             if (
                 table.currentRow() != added
                 or table.currentColumn() != length_column
-                or window._cell_text(row, "length_mm") != "456"
+                or window._cell_text(row, "length_mm") != "560"
             ):
-                raise ValueError("回车未提交并切换到同列下一行")
+                raise ValueError("未提交完整的 560 或未移到同列下一行")
             structure = COLUMN_INDEX["structure_type"]
             table.setFocus(Qt.FocusReason.OtherFocusReason)
             table.setCurrentCell(row, structure)

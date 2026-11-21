@@ -6,7 +6,7 @@ from math import isfinite
 
 from refracdraft.domain.models import (
     AnchorParameters, AnchorType, BoardFaceProfile, BoardParameters, GeometryType, ModuleParameters,
-    StructureType, WELDED_ANCHOR_TYPES,
+    StructureType, DIAMOND_ANCHOR_TYPES, WELDED_ANCHOR_TYPES, format_bolt_remark,
 )
 from refracdraft.standard import (
     StandardAnchorValues, StandardModuleValues, build_standard_anchor, build_standard_board,
@@ -245,6 +245,15 @@ def _input_number(value: str | bool) -> float | None:
     return parsed if isfinite(parsed) and parsed > 0 else None
 
 
+def _anchor_remark(values: dict[str, str | bool]) -> str:
+    anchor_type = values["anchor_type"]
+    if not values["anchor_enabled"] or anchor_type not in WELDED_ANCHOR_TYPES:
+        return _insert_anchor_note(values)
+    exposure = _input_number(values["bolt_exposure_mm"])
+    depth = _input_number(values["embedment_depth_mm"]) if anchor_type == AnchorType.WELDED_DIAMOND else 0.0
+    return format_bolt_remark(exposure + depth, exposure) if exposure is not None and depth is not None else ""
+
+
 def _automatic_anchor_length(values: dict[str, str | bool], length: float | None) -> str:
     tapered = bool(values["taper_enabled"])
     height = _input_number(values["big_head_mm"] if tapered else values["expansion_length_mm"])
@@ -304,7 +313,7 @@ def resolve_automatic_values(
             if grade is not None else defaults["anchor_material"]
         ),
         "hose_spec": {"M10": "32", "M8": "25"}.get(thread, defaults["hose_spec"]),
-        "source_note": _insert_anchor_note(values),
+        "source_note": _anchor_remark(values),
     }
     if "anchor_length_mm" in fields:
         suggestions["anchor_length_mm"] = _automatic_anchor_length(values, length)
@@ -361,7 +370,7 @@ def row_values_from_models(
         "embedment_depth_mm": (
             f"{anchor_values.embedment_depth_mm:g}"
             if anchor_values.embedment_depth_mm is not None
-            else "50"
+            else "" if anchor_values.anchor_type == AnchorType.WELDED_DIAMOND else "50"
         ),
         "bolt_exposure_mm": (f"{anchor_values.bolt_exposure_mm:g}"
                              if anchor_values.bolt_exposure_mm is not None else ""),
@@ -490,13 +499,15 @@ def _anchor_values(values: dict[str, str | bool], module_id: str) -> StandardAnc
     embedment = None
     if anchor_type == AnchorType.DIAMOND:
         embedment = _number(str(values["embedment_depth_mm"]), "嵌入深度", module_id)
+    elif anchor_type == AnchorType.WELDED_DIAMOND:
+        embedment = _optional_number(str(values["embedment_depth_mm"]), "嵌入深度", module_id)
     exposure = None
     if anchor_type in WELDED_ANCHOR_TYPES:
         exposure = _optional_number(str(values.get("bolt_exposure_mm", "")), "螺栓外露长度", module_id)
     pin_text = str(values["pin_diameter_mm"]).strip()
     pin_diameter = (
         _number(pin_text, "插针直径", module_id)
-        if pin_text and anchor_type not in (AnchorType.DIAMOND, AnchorType.WELDED_DIAMOND)
+        if pin_text and anchor_type not in DIAMOND_ANCHOR_TYPES
         else None
     )
     return StandardAnchorValues(

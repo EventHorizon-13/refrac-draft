@@ -13,6 +13,7 @@ from refracdraft.domain.models import (
     OutlineKind,
     Project,
     WELDED_ANCHOR_TYPES,
+    format_bolt_remark,
 )
 from refracdraft.drawing.board_profiles import board_cut_path, build_board_profile, machining_dimensions
 from refracdraft.drawing.model import Dimension, DrawingDocument, LeaderNote, ModuleDrawing, SheetPage, PlacedModule, ViewDrawing
@@ -27,6 +28,7 @@ from refracdraft.drawing.layout import (
     module_required_width,
     panel_content_left,
     panel_gap,
+    place_bolt_note,
 )
 from refracdraft.geometry.primitives import Polyline, equal_anchor_positions, module_front_outline, module_side_outline, parametric_outline, point_in_outline, rectangle, scale_template
 from refracdraft.reference.library import ReferenceLibrary, SymbolGeometry
@@ -250,8 +252,6 @@ def _details(module, board, anchor) -> tuple[str, ...]:
             AnchorType.CUSTOM: anchor.custom_type_label or "自定义",
         }.get(anchor.anchor_type, "")
         length = f"{anchor.length_mm:g}mm" if anchor.length_mm is not None else ""
-        if anchor.anchor_type == AnchorType.WELDED_DIAMOND and anchor.bolt_exposure_mm is not None:
-            length += f"（外露{anchor.bolt_exposure_mm:g}mm）"
         lines.extend((f"3、锚固件：{anchor.material}{anchor_name.removesuffix('锚固件')}{spec}",
                       f"4、锚固件长度：{length}"))
     lines.append(f"5、数量：{module.production_quantity} Pcs")
@@ -263,8 +263,14 @@ def _details(module, board, anchor) -> tuple[str, ...]:
         for index, feature in enumerate(module.board_face_outline.features, 1):
             if feature.cut_depth_mm is not None:
                 lines.append(f"夹板面切口{index}：剪切深度{feature.cut_depth_mm:g}mm")
-    if module.source_note:
-        lines.append(f"8、{module.source_note}")
+    remark = module.source_note
+    bolt_length = anchor.bolt_length_mm
+    if anchor.exists and anchor.count and bolt_length is not None:
+        bolt_note = format_bolt_remark(bolt_length, anchor.bolt_exposure_mm)
+        if bolt_note not in remark:
+            remark = "，".join(filter(None, (bolt_note, remark)))
+    if remark:
+        lines.append(f"8、{remark}")
     return tuple(lines)
 
 
@@ -333,9 +339,9 @@ class DrawingGenerator:
             if exposure is None:
                 raise ValueError(f"{module.module_id}: 请填写焊接锚固件的螺栓外露长度")
             if anchor.anchor_type == AnchorType.WELDED_DIAMOND:
-                if anchor.length_mm is None or anchor.length_mm <= exposure:
-                    raise ValueError(f"{module.module_id}: 焊接菱形锚固件长度必须大于螺栓外露长度")
-                embedded = anchor.length_mm - exposure
+                if anchor.embedment_depth_mm is None:
+                    raise ValueError(f"{module.module_id}: 请填写焊接菱形的嵌入深度")
+                embedded = anchor.embedment_depth_mm
             if self.reference_library is None:
                 raise ValueError(f"{module.module_id}: 焊接锚固件需要参考 DXF 中的动态螺栓-L形图块")
             try:
@@ -599,20 +605,8 @@ class DrawingGenerator:
         board_dims.extend(profile_dimensions)
         leaders = ()
         if bolt is not None and positions:
-            x, y = min(positions)
-            tip_y = y + exposure
-            if anchor.anchor_type == AnchorType.WELDED_M:
-                leaders = (LeaderNote((x, tip_y), f"焊接{anchor.thread_spec}螺栓 外露{exposure:g}", (8, 10)),)
-            else:
-                # One representative bolt carries the three axial dimensions.
-                if len(positions) > 1:
-                    x, y = sorted(positions)[1]
-                    tip_y = y + exposure
-                board_dims.extend((
-                    Dimension((x, y), (x, tip_y), f"{exposure:g}", "vertical", 54),
-                    Dimension((x, y - embedded), (x, y), f"{embedded:g}", "vertical", 54),
-                    Dimension((x, y - embedded), (x, tip_y), f"{anchor.length_mm:g}", "vertical", 144),
-                ))
+            x, y = max(positions, key=lambda point: (point[1], -point[0]))
+            leaders = (LeaderNote((x, y + exposure), f"焊接{anchor.thread_spec}螺栓 外露{exposure:g}", (1.5, 3)),)
         if anchor.dimension_horizontal and positions:
             ordered = sorted(positions)
             top = module.board_face_height_mm
@@ -682,15 +676,16 @@ class DrawingGenerator:
     ) -> DrawingDocument:
         drawings = []
         for count, module in enumerate(project.modules, start=1):
-            drawing = self.build_module(project, module)
+            original = self.build_module(project, module)
+            drawing = replace(original, board_view=place_bolt_note(original.board_view, 10))
             width = module_required_width(drawing, measure_detail)
             if width > PAGE_CONTENT_WIDTH_MM + 1e-6 or not fits_sheet_height(drawing):
                 drawing = replace(
-                    drawing, scale_denominator=20,
-                    front_view=_space_long_dimensions(drawing.front_view, 20),
-                    board_view=_space_long_dimensions(drawing.board_view, 20),
-                    side_view=(_space_long_dimensions(drawing.side_view, 20)
-                               if drawing.side_view is not None else None),
+                    original, scale_denominator=20,
+                    front_view=_space_long_dimensions(original.front_view, 20),
+                    board_view=place_bolt_note(_space_long_dimensions(original.board_view, 20), 20),
+                    side_view=(_space_long_dimensions(original.side_view, 20)
+                               if original.side_view is not None else None),
                 )
                 width = module_required_width(drawing, measure_detail)
                 if width > PAGE_CONTENT_WIDTH_MM + 1e-6 or not fits_sheet_height(drawing):

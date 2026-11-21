@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from refracdraft.drawing.model import DrawingDocument, ModuleDrawing, PlacedModule, ViewDrawing
 
@@ -87,7 +87,7 @@ def view_bounds(view: ViewDrawing, denominator: int = 10) -> tuple[float, float,
     for leader in view.leaders:
         x, y = (value / denominator for value in leader.tip)
         dx, dy = leader.offset_mm
-        text_width = sum(0.8 if char.isascii() else 1.15 for char in leader.text) * leader_text_height(denominator)
+        text_width = sum(0.9 if char.isascii() else 1.39 for char in leader.text) * leader_text_height(denominator)
         left = min(left, x, x + dx)
         right = max(right, x, x + dx + text_width)
         bottom = min(bottom, y, y + dy)
@@ -107,6 +107,37 @@ def view_bounds(view: ViewDrawing, denominator: int = 10) -> tuple[float, float,
             left, right = min(left, x1, x2, x - ANNOTATION_CLEARANCE_MM * annotation_scale), max(right, x1, x2, x + ANNOTATION_CLEARANCE_MM * annotation_scale)
             bottom, top = min(bottom, y1, y2, mid - pad), max(top, y1, y2, mid + pad)
     return left, bottom, right, top
+
+
+def place_bolt_note(view: ViewDrawing, denominator: int) -> ViewDrawing:
+    """Keep the exposure callout in a clear strip below the upper dimensions."""
+    if not view.leaders:
+        return view
+    note, = view.leaders
+    tip_y = note.tip[1] / denominator
+    scale = annotation_factor(denominator)
+    clearance = ANNOTATION_CLEARANCE_MM * scale
+    # Include geometry and vertical annotation before choosing the callout baseline.
+    vertical = tuple(dim for dim in view.dimensions if dim.orientation == "vertical")
+    avoid_top = view_bounds(replace(view, leaders=(), dimensions=vertical), denominator)[3]
+    baseline = max(tip_y + 3.0, avoid_top + 2.0)
+    note = replace(note, offset_mm=(1.5, baseline - tip_y))
+    dimensions = list(view.dimensions)
+    horizontal_rows: dict[float, list[int]] = {}
+    for index, dim in enumerate(dimensions):
+        if dim.orientation == "horizontal" and dim.line_position / denominator + clearance >= tip_y:
+            horizontal_rows.setdefault(dim.line_position, []).append(index)
+    fixed_extension = 1.4
+    lane = baseline + leader_text_height(denominator) + 2.0 + fixed_extension
+    for position, indices in sorted(horizontal_rows.items()):
+        lane = max(lane, position / denominator)
+        for index in indices:
+            dim = dimensions[index]
+            dimensions[index] = replace(
+                dim, offset=dim.offset + lane * denominator - position, fixed_extension_mm=fixed_extension,
+            )
+        lane += clearance
+    return replace(view, leaders=(note,), dimensions=tuple(dimensions))
 
 
 def side_view_offset(drawing: ModuleDrawing) -> float:
