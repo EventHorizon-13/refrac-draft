@@ -778,19 +778,19 @@ def test_measured_side_details_pack_the_450mm_pair_without_compressing_text(tmp_
     path = export_dxf(drawing, tmp_path / "packed.dxf")
     msp = ezdxf.readfile(path).modelspace()
     assert all(r"\W" not in text.text for text in msp.query("MTEXT"))
-    labels = [text for text in msp.query("TEXT") if text.dxf.text == drawing.filename_label]
-    assert [text.dxf.insert.y for text in labels] == pytest.approx([190, -2110])
-    assert [text.dxf.height for text in labels] == pytest.approx([24, 24])
-    page_labels = [
+    # The page count must be immediately beside the filename in all renderers,
+    # rather than positioned using a coarse estimate of Chinese glyph widths.
+    footer_labels = [
         text for text in msp.query("TEXT")
-        if text.dxf.text in ("第1页 共2页", "第2页 共2页")
+        if text.dxf.text.startswith(f"{drawing.filename_label}  第")
     ]
-    assert [text.dxf.text for text in page_labels] == ["第1页 共2页", "第2页 共2页"]
-    assert [text.dxf.insert.y for text in page_labels] == pytest.approx([190, -2110])
-    assert all(
-        filename.dxf.insert.x < page_label.dxf.insert.x < 1687
-        for filename, page_label in zip(labels, page_labels)
-    )
+    assert [text.dxf.text for text in footer_labels] == [
+        "加工图_1120  第1页 共2页", "加工图_1120  第2页 共2页",
+    ]
+    assert [text.dxf.insert.x for text in footer_labels] == pytest.approx([90, 90])
+    assert [text.dxf.insert.y for text in footer_labels] == pytest.approx([190, -2110])
+    assert [text.dxf.height for text in footer_labels] == pytest.approx([24, 24])
+    assert not any(text.dxf.text == drawing.filename_label for text in msp.query("TEXT"))
 
     no_filename = export_dxf(
         replace(drawing, filename_label=""), tmp_path / "packed-no-filename.dxf",
@@ -802,6 +802,21 @@ def test_measured_side_details_pack_the_450mm_pair_without_compressing_text(tmp_
         if text.dxf.text in ("第1页 共2页", "第2页 共2页")
     ]
     assert [text.dxf.insert.x for text in bare_page_labels] == pytest.approx([90, 90])
+
+    # Match the reported customer case and verify no independent far-right
+    # page-number TEXT object can be created by the DXF export.
+    sample_filename = "模块加工图__1121__测试"
+    sample_drawing = replace(drawing, filename_label=sample_filename)
+    sample_path = export_dxf(sample_drawing, tmp_path / "customer-footer.dxf")
+    sample_labels = [
+        entity for entity in ezdxf.readfile(sample_path).modelspace().query("TEXT")
+        if "页 共" in entity.dxf.text
+    ]
+    assert [entity.dxf.text for entity in sample_labels] == [
+        f"{sample_filename}  第1页 共2页",
+        f"{sample_filename}  第2页 共2页",
+    ]
+    assert all(entity.dxf.insert.x == pytest.approx(90) for entity in sample_labels)
 
 
 @pytest.mark.parametrize(
