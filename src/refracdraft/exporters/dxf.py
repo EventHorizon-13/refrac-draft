@@ -156,21 +156,27 @@ def _ensure_anchor_linetypes(doc) -> None:
             doc.linetypes.add(name, pattern=pattern, description="RefracDraft reference center line")
 
 
-def _add_dimension(msp, x1, y1, x2, y2, label, horizontal=True, offset=6.0, denominator=10):
+def _add_dimension(msp, x1, y1, x2, y2, label, horizontal=True, offset=6.0,
+                   denominator=10, short_witness_mm=None):
     if horizontal:
         base = ((x1 + x2) / 2.0, max(y1, y2) + offset)
         angle = 0
     else:
         base = (min(x1, x2) - offset, (y1 + y2) / 2.0)
         angle = 90
+    style_name = f"_{denominator}"
+    override = DIMENSION_OVERRIDE
+    if short_witness_mm is not None:
+        dimscale = msp.doc.dimstyles.get(style_name).dxf.dimscale or 1.0
+        override = {**override, "dimfxlon": 1, "dimfxl": short_witness_mm * denominator / dimscale}
     dimension = msp.add_linear_dim(
         base=base,
         p1=(x1, y1),
         p2=(x2, y2),
         text=label,
         angle=angle,
-        dimstyle=f"_{denominator}",
-        override=DIMENSION_OVERRIDE,
+        dimstyle=style_name,
+        override=override,
     )
     dimension.dimension.dxf.layer = "DIMENSIONS"
     dimension.render()
@@ -185,7 +191,7 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
             msp,
             ox + dim.start[0], oy + dim.start[1],
             ox + dim.end[0], oy + dim.end[1],
-            dim.label, dim.orientation == "horizontal", dim.offset, denominator,
+            dim.label, dim.orientation == "horizontal", dim.offset, denominator, dim.short_witness_mm,
         )
     for leader in view.leaders:
         x, y = leader.tip

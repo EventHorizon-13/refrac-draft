@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from dataclasses import dataclass, field
+from math import hypot
 
 from refracdraft.geometry.primitives import Polyline
 
@@ -24,6 +25,8 @@ class Dimension:
     label: str
     orientation: str = "horizontal"
     offset: float = 8.0
+    machining: bool = False
+    short_witness_mm: float | None = None
 
     @property
     def line_position(self) -> float:
@@ -37,32 +40,29 @@ class LeaderNote:
     tip: tuple[float, float]
     text: str
     offset_mm: tuple[float, float]
-    elbows_mm: tuple[tuple[float, float], ...] = ()
-    bridge_gaps_mm: tuple[float, ...] = ()
+    dimension_crossings: tuple[float, ...] = ()
 
     @property
     def vertices_mm(self) -> tuple[tuple[float, float], ...]:
-        dx, dy = self.offset_mm
-        elbows = self.elbows_mm or ((dx - 1.5, dy),)
-        return ((0.0, 0.0), *elbows, self.offset_mm)
-
+        return ((0.0, 0.0), self.offset_mm)
 
     @property
     def paths_mm(self) -> tuple[tuple[tuple[float, float], ...], ...]:
         vertices = self.vertices_mm
-        if not self.bridge_gaps_mm:
+        if not self.dimension_crossings:
             return (vertices,)
         dx, dy = vertices[1]
-        # Leave the witness line intact by interrupting only the crossing bridge.
+        # All visible segments stay collinear and leave the dimensions intact.
         paths = []
         start = 0.0
-        half_gap = 0.7 / abs(dx)
-        for t in sorted(x / dx for x in self.bridge_gaps_mm):
+        half_gap = 0.55 / hypot(dx, dy)
+        for t in self.dimension_crossings:
             end = max(0.0, t - half_gap)
             if end > start:
                 paths.append(((dx * start, dy * start), (dx * end, dy * end)))
             start = min(1.0, t + half_gap)
-        paths.append(((dx * start, dy * start), *vertices[1:]))
+        if start < 1.0:
+            paths.append(((dx * start, dy * start), vertices[1]))
         return tuple(paths)
 
 

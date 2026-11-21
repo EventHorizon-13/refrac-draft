@@ -2,8 +2,9 @@ from pathlib import Path
 
 import ezdxf
 import pytest
+from openpyxl import load_workbook
 
-from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, Project
+from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, CutStart, Project
 from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.drawing.layout import page_model_origins
 from refracdraft.exporters.dxf import export_dxf
@@ -35,7 +36,7 @@ def test_mixed_scale_frames_and_dimensions_keep_the_real_model_width(tmp_path: P
 
 
 def test_exposure_and_blind_cut_round_trip_and_depth_controls_projection(tmp_path: Path):
-    cut = BoardFaceFeature(type=1, a=120, b=65, cut_depth_mm=80)
+    cut = BoardFaceFeature(type=1, a=120, b=65, cut_depth_mm=80, cut_start=CutStart.UPPER)
     profile = BoardFaceProfile(features=(cut,))
     values = {
         **DEFAULT_ROW, "anchor_enabled": True, "anchor_type": "焊接M型",
@@ -49,15 +50,34 @@ def test_exposure_and_blind_cut_round_trip_and_depth_controls_projection(tmp_pat
     assert reloaded.anchors[0].bolt_exposure_mm == 50
     assert reloaded.modules[0].board_face_outline == profile
     assert Project.model_validate_json(project.model_dump_json()).modules[0].board_face_outline == profile
+    old_workbook = load_workbook(excel)
+    old_workbook["异形参数"].delete_cols(10)
+    old_workbook.save(excel)
+    assert import_project_xlsx(excel).modules[0].board_face_outline.features[0].cut_start == CutStart.LOWER
+    old_json = project.model_dump(mode="json")
+    del old_json["modules"][0]["board_face_outline"]["features"][0]["cut_start"]
+    assert Project.model_validate(old_json).modules[0].board_face_outline.features[0].cut_start == CutStart.LOWER
 
-    for depth in (80, 120):
-        cut_profile = BoardFaceProfile(features=(cut.model_copy(update={"cut_depth_mm": depth}),))
-        body, _, _ = build_standard_row(DEFAULT_ROW, board_face_profile=cut_profile)
-        view = DrawingGenerator().build_module(Project(), body).front_view
+    for side, depth in ((CutStart.LOWER, 80), (CutStart.UPPER, 120)):
+        cut_profile = BoardFaceProfile(features=(cut.model_copy(update={"cut_depth_mm": depth, "cut_start": side}),))
+        body, board, _ = build_standard_row(DEFAULT_ROW, board_face_profile=cut_profile)
+        drawn = DrawingGenerator().build_module(Project(modules=[body], boards=[board]), body)
+        view = drawn.front_view
         projected = {line.points for line in view.internal_lines + view.hidden_lines}
-        assert ((120, 0), (120, depth)) in projected
-        assert ((0, depth), (120, depth)) in projected
+        bottom, top = (0, depth) if side == CutStart.LOWER else (300 - depth, 300)
+        assert ((120, bottom), (120, top)) in projected
+        stop = top if side == CutStart.LOWER else bottom
+        assert ((0, stop), (120, stop)) in projected
         assert ((120, 0), (120, 300)) not in projected
+        board_view = drawn.board_view
+        assert (0, 0) in board_view.outline.points
+        walls = board_view.internal_lines if side == CutStart.UPPER else board_view.hidden_lines
+        assert ((0, 65), (120, 65)) in [wall.points for wall in walls]
+        expected = "上夹板切缺口，下夹板不切缺口" if side == CutStart.UPPER else "上夹板不切缺口，下夹板切缺口"
+        assert expected in drawn.details
+        assert not any("剪切深度" in detail for detail in drawn.details)
+        depth_dim, = (dim for dim in view.dimensions if dim.label == str(depth))
+        assert (depth_dim.start[1], depth_dim.end[1]) == (bottom, top)
 
     invalid = BoardFaceProfile(features=(cut.model_copy(update={"cut_depth_mm": 301}),))
     with pytest.raises(ValueError, match="剪切深度"):
@@ -100,8 +120,10 @@ def test_welded_diamond_depth_and_remark_are_independent_of_anchor_length(tmp_pa
     assert "4、锚固件长度：245mm" in data.details
     assert data.details[-1] == "8、螺栓长度330mm，外露190mm"
     denominator = page.scale_denominator
-    left, _, _, top = view_bounds(replace(view, leaders=()), denominator)
-    assert leader.tip[0] / denominator + leader.vertices_mm[1][0] < left
+    _, _, _, top = view_bounds(replace(view, leaders=()), denominator)
+    assert len(leader.vertices_mm) == 2
+    dx, dy = leader.offset_mm
+    assert all(x * dy == pytest.approx(y * dx) for path in leader.paths_mm for x, y in path)
     assert leader.tip[1] / denominator + leader.offset_mm[1] > top
     assert {"140", "190", "330"} <= {dim.label for dim in view.dimensions if dim.orientation == "vertical"}
 
@@ -119,7 +141,8 @@ def test_welded_diamond_depth_and_remark_are_independent_of_anchor_length(tmp_pa
     recovered = import_project_xlsx(excel).anchors[0]
     assert (recovered.length_mm, recovered.embedment_depth_mm, recovered.bolt_length_mm) == (245, 140, 330)
     modelspace = ezdxf.readfile(export_dxf(drawing, tmp_path / "welded.dxf")).modelspace()
-    assert modelspace.query("LEADER")
+    leaders = modelspace.query("LEADER")
+    assert leaders and all(len(leader.vertices) == 2 for leader in leaders)
     for value in (190, 140, 330):
         assert any(dim.dxf.text == str(value) and dim.get_measurement() == pytest.approx(value)
                    for dim in modelspace.query("DIMENSION"))

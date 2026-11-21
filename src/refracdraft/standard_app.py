@@ -25,7 +25,9 @@ def _smoke_test_welded_output(window) -> None:
     short = build_standard_row(
         {**common, "module_id": "W1", "length_mm": "600", "anchor_type": "焊接M型",
          "bolt_exposure_mm": "50"},
-        board_face_profile=BoardFaceProfile(features=[BoardFaceFeature(type=1, a=80, b=60, cut_depth_mm=75)]),
+        board_face_profile=BoardFaceProfile(features=[
+            BoardFaceFeature(type=1, a=80, b=60, cut_depth_mm=75, cut_start="上夹板"),
+        ]),
     )
     long = build_standard_row(
         {**common, "module_id": "W2", "length_mm": "4700", "thickness_mm": "550", "board_exists": False,
@@ -46,19 +48,23 @@ def _smoke_test_welded_output(window) -> None:
         raise ValueError("焊接菱形的嵌入深度、螺栓长度和锚固件长度未正确保存")
     if project.modules[1].source_note != "螺栓长度320mm，外露170mm":
         raise ValueError("焊接菱形的螺栓长度和外露长度未进入备注")
-    if project.modules[0].board_face_outline.features[0].cut_depth_mm != 75:
-        raise ValueError("异形剪切深度未从界面保存到项目")
+    cut = project.modules[0].board_face_outline.features[0]
+    if (cut.cut_depth_mm, cut.cut_start) != (75, "上夹板"):
+        raise ValueError("异形剪切深度或起切夹板未从界面保存到项目")
 
     reference = window.reference_dxf
     drawing = DrawingGenerator(ReferenceLibrary(reference)).generate(project)
     if [page.scale_denominator for page in drawing.pages] != [10, 20]:
         raise ValueError("焊接长模块未使用独立的 1:20 图页")
+    short_drawing = drawing.pages[0].modules[0].drawing
+    if not short_drawing.board_view.internal_lines or "上夹板切缺口，下夹板不切缺口" not in short_drawing.details:
+        raise ValueError("上夹板缺口线或上下夹板加工说明缺失")
     long_board = drawing.pages[1].modules[0].drawing.board_view
     leader, = long_board.leaders
     if leader.text != "焊接M8螺栓 外露170":
         raise ValueError("焊接菱形外露引线缺失")
-    if not {"150", "170", "320"} <= {dim.label for dim in long_board.dimensions} or len(leader.vertices_mm) < 4:
-        raise ValueError("焊接菱形轴向尺寸缺失或引线未绕开尺寸线")
+    if not {"150", "170", "320"} <= {dim.label for dim in long_board.dimensions} or len(leader.vertices_mm) != 2:
+        raise ValueError("焊接菱形轴向尺寸缺失或引线不是直线")
     with TemporaryDirectory(prefix="refracdraft-welded-smoke-") as directory:
         dxf_path = export_dxf(drawing, Path(directory) / "mixed.dxf", reference)
         modelspace = ezdxf.readfile(dxf_path).modelspace()
@@ -243,6 +249,7 @@ def main() -> None:
                     initial_outline = dialog.preview.outline
                     cut.dimensions["a"].setText("80")
                     cut.depth.setText("75")
+                    cut.start.setCurrentText("上夹板")
                     cut.rotate.click()
                     cut.mirror.click()
                     if not dialog.confirm.isEnabled() or dialog.preview.outline == initial_outline:
@@ -261,6 +268,7 @@ def main() -> None:
             if (
                 not profile or profile.features[0].rotation_deg != 90
                 or not profile.features[0].mirror_x or profile.features[0].cut_depth_mm != 75
+                or profile.features[0].cut_start != "上夹板"
             ):
                 raise ValueError("异形夹板面参数未进入项目数据")
             window.undo()

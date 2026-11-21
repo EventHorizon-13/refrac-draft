@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile
+from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, CutStart
 from refracdraft.drawing.board_profiles import build_board_profile
 from refracdraft.drawing.model import Dimension
 from refracdraft.geometry.primitives import Polyline, rectangle
@@ -76,6 +76,7 @@ class CutControls:
     kind: QComboBox
     dimensions: dict[str, QLineEdit]
     depth: QLineEdit
+    start: QComboBox
     rotate: QPushButton
     mirror: QPushButton
     remove: QPushButton
@@ -98,7 +99,8 @@ class CutControls:
             raise ValueError("剪切深度须为正数，留空表示贯通") from None
         try:
             return BoardFaceFeature(
-                type=kind + 1, **values, cut_depth_mm=depth, rotation_deg=self.angle, mirror_x=self.mirror.isChecked(),
+                type=kind + 1, **values, cut_depth_mm=depth, cut_start=self.start.currentData(),
+                rotation_deg=self.angle, mirror_x=self.mirror.isChecked(),
             )
         except ValueError:
             raise ValueError("切口尺寸必须是有限的正数") from None
@@ -108,7 +110,7 @@ class CutControls:
         self.rotate.setText(f"旋转 · {angle}°")
 
     def widgets(self) -> tuple[QWidget, ...]:
-        return (self.kind, *self.dimensions.values(), self.depth, self.rotate, self.mirror, self.remove)
+        return (self.kind, *self.dimensions.values(), self.depth, self.start, self.rotate, self.mirror, self.remove)
 
 
 class BoardFaceDialog(QDialog):
@@ -116,7 +118,7 @@ class BoardFaceDialog(QDialog):
                  profile: BoardFaceProfile | None, parent: QWidget, *, max_depth: float | None = None):
         super().__init__(parent)
         self.setWindowTitle(f"异形模块 · {module_id}")
-        self.resize(800, 490)
+        self.resize(900, 490)
         self.max_depth = max_depth
         self.profile: BoardFaceProfile | None = profile
         self.cuts: list[CutControls] = []
@@ -133,7 +135,7 @@ class BoardFaceDialog(QDialog):
         grid_widget = QWidget()
         self.grid = QGridLayout(grid_widget)
         self.grid.setAlignment(Qt.AlignmentFlag.AlignTop)
-        for column, label in enumerate(("轮廓类型", "a", "b", "c", "d", "剪切深度", "方向", "镜像", "")):
+        for column, label in enumerate(("轮廓类型", "a", "b", "c", "d", "剪切深度", "起切夹板", "旋转", "镜像", "")):
             self.grid.addWidget(QLabel(label), 0, column)
         for column in range(1, 5):
             self.grid.setColumnStretch(column, 1)
@@ -185,10 +187,16 @@ class BoardFaceDialog(QDialog):
         depth = QLineEdit()
         depth.setPlaceholderText("贯通")
         depth.setAccessibleName("剪切深度（mm）")
-        depth.setToolTip("从夹板面向模块内部量取，留空表示贯通")
+        depth.setToolTip("从选定夹板向模块内部量取，留空表示贯通")
         depth.setMinimumWidth(70)
         if feature and feature.cut_depth_mm is not None:
             depth.setText(f"{feature.cut_depth_mm:g}")
+        start = QComboBox()
+        start.setAccessibleName("起切夹板")
+        for face in CutStart:
+            start.addItem(face.value, face.value)
+        start.setCurrentIndex(start.findData((feature.cut_start if feature else CutStart.LOWER).value))
+        start.setEnabled(bool(depth.text()))
         rotate = QPushButton()
         rotate.setToolTip("逆时针旋转 90°")
         mirror = QPushButton("镜像")
@@ -198,7 +206,7 @@ class BoardFaceDialog(QDialog):
         remove = QPushButton("删除")
         for button in (rotate, mirror, remove):
             button.setAutoDefault(False)
-        cut = CutControls(kind, inputs, depth, rotate, mirror, remove, 0)
+        cut = CutControls(kind, inputs, depth, start, rotate, mirror, remove, 0)
         cut.set_angle(feature.rotation_deg if feature else 0)
         self.cuts.append(cut)
         self._place_rows()
@@ -208,6 +216,8 @@ class BoardFaceDialog(QDialog):
         kind.currentIndexChanged.connect(lambda: self._set_inputs(cut))
         for field in (*inputs.values(), depth):
             field.textChanged.connect(lambda: self._refresh(cut))
+        depth.textChanged.connect(lambda value: start.setEnabled(value.strip() not in ("", "贯通")))
+        start.currentIndexChanged.connect(lambda: self._refresh(cut))
         rotate.clicked.connect(lambda: self._rotate(cut))
         mirror.toggled.connect(lambda: self._refresh(cut))
         remove.clicked.connect(lambda: self._remove_cut(cut))

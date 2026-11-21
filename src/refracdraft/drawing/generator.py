@@ -7,6 +7,7 @@ from refracdraft.domain.models import (
     AnchorParameters,
     AnchorType,
     BoardFaceProfile,
+    CutStart,
     GeometryType,
     LayoutMode,
     OpeningMode,
@@ -30,6 +31,7 @@ from refracdraft.drawing.layout import (
     panel_content_left,
     panel_gap,
     place_bolt_note,
+    place_machining_dimensions,
     view_placement,
 )
 from refracdraft.geometry.primitives import Polyline, equal_anchor_positions, module_front_outline, module_side_outline, parametric_outline, point_in_outline, rectangle, scale_template
@@ -145,18 +147,14 @@ def _add_board_projection(view: ViewDrawing, board: Polyline) -> ViewDrawing:
     return replace(view, internal_lines=view.internal_lines + tuple(visible), hidden_lines=tuple(hidden))
 
 
-def _project_profile_cuts(view: ViewDrawing, width: float, height: float,
-                          profile: BoardFaceProfile, outline: Polyline) -> ViewDrawing:
+def _project_profile_cuts(view: ViewDrawing, width: float, height: float, profile: BoardFaceProfile,
+                          outline: Polyline, through_outline: Polyline | None) -> ViewDrawing:
     side = view.view_type == "side"
 
     def orient(points):
         return tuple((-y, -x) for x, y in points) if side else points
 
-    old_cuts = tuple(feature for feature in profile.features if feature.cut_depth_mm is None)
-    if old_cuts:
-        through_outline = outline if len(old_cuts) == len(profile.features) else build_board_profile(
-            width, height, BoardFaceProfile(features=old_cuts),
-        )[0]
+    if through_outline is not None:
         view = _add_board_projection(view, Polyline(orient(through_outline.points)))
 
     visible = list(view.internal_lines)
@@ -180,6 +178,11 @@ def _project_profile_cuts(view: ViewDrawing, width: float, height: float,
         depth = feature.cut_depth_mm
         if depth is None:
             continue
+        upper = feature.cut_start == CutStart.UPPER
+
+        def cut_limits(bottom: float, top: float) -> tuple[float, float]:
+            return (max(bottom, top - depth), top) if upper else (bottom, min(top, bottom + depth))
+
         edges = tuple(orient(edge) for edge in board_cut_edges(width, height, feature))
         corners: dict[float, bool] = {}
         for edge in edges:
@@ -188,7 +191,8 @@ def _project_profile_cuts(view: ViewDrawing, width: float, height: float,
                     corners[station] = corners.get(station, False) or is_exposed(station, transverse)
         for station, exposed in sorted(corners.items()):
             x, bottom, top = projected(station)
-            line = Polyline(((x, bottom), (x, min(top, bottom + depth))), closed=False)
+            cut_bottom, cut_top = cut_limits(bottom, top)
+            line = Polyline(((x, cut_bottom), (x, cut_top)), closed=False)
             (visible if exposed else hidden).append(line)
 
         stations = {point[0] for edge in edges for point in edge}
@@ -207,12 +211,18 @@ def _project_profile_cuts(view: ViewDrawing, width: float, height: float,
             if bottom1 + depth >= top1 - 1e-6 and bottom2 + depth >= top2 - 1e-6:
                 continue
             lines = visible if exposed else hidden
-            lines.append(Polyline(((x1, min(top1, bottom1 + depth)),
-                                   (x2, min(top2, bottom2 + depth))), closed=False))
+            floor_end = 0 if upper else 1
+            lines.append(Polyline(((x1, cut_limits(bottom1, top1)[floor_end]),
+                                   (x2, cut_limits(bottom2, top2)[floor_end])), closed=False))
         if floors and not side:
             start, end = max(floors, key=lambda span: span[1] - span[0])
-            x, bottom, _ = projected((start + end) / 2)
-            dimensions.append(Dimension((x, bottom), (x, bottom + depth), f"{depth:g}", "vertical", 30))
+            toward_left = (start + end) / 2 <= (board_left + board_right) / 2
+            x, bottom, top = projected(start if toward_left else end)
+            cut_bottom, cut_top = cut_limits(bottom, top)
+            dimensions.append(Dimension(
+                (x, cut_bottom), (x, cut_top), f"{depth:g}", "vertical",
+                30 if toward_left else -30, machining=True,
+            ))
     # A projection line visible in any of the cuts should be plotted once.
     visible_lines = tuple(dict.fromkeys(visible))
     visible_set = set(visible_lines)
@@ -246,7 +256,7 @@ def _anchor_chain_endpoints(
     return datum(top_left, left, first, True), datum(top_right, right, last, False)
 
 
-def _details(module, board, anchor) -> tuple[str, ...]:
+def _details(module, board, anchor, profile: BoardFaceProfile | None) -> tuple[str, ...]:
     name = module.custom_structure_label or module.name or module.structure_type.value
     display_name = name if module.module_id in name else f"{name}{module.module_id}"
     material = module.material.strip().removesuffix("材质").strip()
@@ -271,10 +281,13 @@ def _details(module, board, anchor) -> tuple[str, ...]:
     hose = anchor.hose_spec if anchor.exists else "无胶管"
     board_text = board.material if board.exists else "无夹板"
     lines.append(f"7、{hose or '未填写胶管'}，{board_text}")
-    if isinstance(module.board_face_outline, BoardFaceProfile):
-        for index, feature in enumerate(module.board_face_outline.features, 1):
-            if feature.cut_depth_mm is not None:
-                lines.append(f"夹板面切口{index}：剪切深度{feature.cut_depth_mm:g}mm")
+    if board.exists and module.board_face_outline is not None:
+        if profile is None or any(feature.cut_depth_mm is None for feature in profile.features):
+            faces = set(CutStart)
+        else:
+            faces = {feature.cut_start for feature in profile.features}
+        lines.append("，".join(f"{face.value}{'切缺口' if face in faces else '不切缺口'}"
+                              for face in (CutStart.UPPER, CutStart.LOWER)))
     remark = module.source_note
     bolt_length = anchor.bolt_length_mm
     if anchor.exists and anchor.count and bolt_length is not None:
@@ -296,8 +309,8 @@ def _feature_dimensions(spec, width: float) -> tuple[Dimension, Dimension]:
     if spec.mirror_x:
         left, right = width - right, width - left
     return (
-        Dimension((left, fh), (right, fh), f"{fw:g}", "horizontal", -18),
-        Dimension((left, 0), (left, fh), f"{fh:g}", "vertical", 18),
+        Dimension((left, fh), (right, fh), f"{fw:g}", "horizontal", -18, machining=True),
+        Dimension((left, 0), (left, fh), f"{fh:g}", "vertical", 18, machining=True),
     )
 
 
@@ -512,14 +525,47 @@ class DrawingGenerator:
                                     internal_lines=side_internal)
 
         profile_dimensions = ()
-        if isinstance(module.board_face_outline, BoardFaceProfile):
+        cut_lines: list[Polyline] = []
+        hidden_cut_lines: list[Polyline] = []
+        profile = module.board_face_outline
+        near_board_outline = None
+        if isinstance(profile, BoardFaceProfile):
+            width, height = module.board_face_width_mm, module.board_face_height_mm
+            _, front_bottom, _, front_top = front.bounds
+            max_depth = front_top - front_bottom
+            if side_view is not None:
+                _, side_bottom, _, side_top = side_view.outline.bounds
+                max_depth = max(max_depth, side_top - side_bottom)
+            profile = BoardFaceProfile(features=tuple(
+                feature.model_copy(update={"cut_depth_mm": None})
+                if feature.cut_depth_mm is not None and feature.cut_depth_mm >= max_depth else feature
+                for feature in profile.features
+            ))
             try:
-                board_outline, profile_dimensions = build_board_profile(
-                    module.board_face_width_mm, module.board_face_height_mm, module.board_face_outline
-                )
-                profile_dimensions += machining_dimensions(board_outline, profile_dimensions)
+                cut_outline, profile_dimensions = build_board_profile(width, height, profile)
+                profile_dimensions += machining_dimensions(cut_outline, profile_dimensions)
+
+                def outline_for(features):
+                    if features == profile.features:
+                        return cut_outline
+                    return build_board_profile(width, height, BoardFaceProfile(features=features))[0]
+
+                through = tuple(feature for feature in profile.features if feature.cut_depth_mm is None)
+                upper = tuple(feature for feature in profile.features
+                              if feature.cut_depth_mm is None or feature.cut_start == CutStart.UPPER)
+                through_outline = outline_for(through) if through else None
+                # From the upper plate, blind openings leave the far plate's silhouette intact.
+                board_outline = through_outline or rectangle(width, height)
+                near_board_outline = outline_for(upper) if upper != through else board_outline
+                for feature in profile.features:
+                    if feature.cut_depth_mm is not None:
+                        lines = cut_lines if feature.cut_start == CutStart.UPPER else hidden_cut_lines
+                        lines.extend(Polyline(edge, closed=False) for edge in board_cut_edges(width, height, feature))
             except ValueError as exc:
                 raise ValueError(f"{module.module_id}: {exc}") from exc
+            front_view = _project_profile_cuts(front_view, width, height, profile, cut_outline, through_outline)
+            if side_view is not None:
+                side_view = _project_profile_cuts(side_view, width, height, profile, cut_outline, through_outline)
         elif module.board_face_outline:
             board_outline = parametric_outline(module.board_face_width_mm, module.board_face_height_mm,
                                                module.board_face_outline)
@@ -533,12 +579,7 @@ class DrawingGenerator:
             warnings.append(f"未加载参考 DXF，夹板面模板 {module.board_face_template_id} 暂以矩形代替")
             board_outline = rectangle(module.board_face_width_mm, module.board_face_height_mm)
 
-        if isinstance(module.board_face_outline, BoardFaceProfile):
-            width, height = module.board_face_width_mm, module.board_face_height_mm
-            front_view = _project_profile_cuts(front_view, width, height, module.board_face_outline, board_outline)
-            if side_view is not None:
-                side_view = _project_profile_cuts(side_view, width, height, module.board_face_outline, board_outline)
-        elif module.board_face_outline is not None:
+        if module.board_face_outline is not None and not isinstance(profile, BoardFaceProfile):
             front_view = _add_board_projection(front_view, board_outline)
             if side_view is not None:
                 # First-angle projection places the left view to the right of the front view.
@@ -557,10 +598,11 @@ class DrawingGenerator:
             module.board_face_height_mm,
             board_face=True,
         )
+        anchor_outline = near_board_outline or board_outline
         if bolt is not None:
             # The bolt starts at the actual edge at each anchor station.
             positions = [
-                (x, section[-1] if (section := _section_intersections(board_outline, x)) else y)
+                (x, section[-1] if (section := _section_intersections(anchor_outline, x)) else y)
                 for x, y in positions
             ]
             symbol = bolt
@@ -586,7 +628,7 @@ class DrawingGenerator:
                 for x, _y in positions
             ]
         for x, y in positions:
-            if not point_in_outline(board_outline, (x, y)) or (embedded and not point_in_outline(board_outline, (x, y - embedded))):
+            if not point_in_outline(anchor_outline, (x, y)) or (embedded and not point_in_outline(anchor_outline, (x, y - embedded))):
                 raise ValueError(f"{module.module_id}: 锚固件坐标 ({x:g}, {y:g}) 位于夹板面轮廓之外")
         if positions and symbol is not None:
             profile_colors = symbol.colors if len(symbol.colors) == len(symbol.polylines) else (5,) * len(symbol.polylines)
@@ -643,13 +685,13 @@ class DrawingGenerator:
                 default=top,
             )
             chain_offset = max(35.0, cut_dim_top - top + 62) if cut_dim_top > top else 35.0
-            left, right = _anchor_chain_endpoints(board_outline, ordered[0], ordered[-1])
+            left, right = _anchor_chain_endpoints(anchor_outline, ordered[0], ordered[-1])
             if bolt is not None:
                 cut_dim_top = max(cut_dim_top, max(y + exposure for _, y in ordered))
                 chain_offset = max(chain_offset, cut_dim_top - top + 28)
             stations = ((x, y + (exposure if bolt is not None else 0)) for x, y in ordered)
             if bolt is None:
-                stations = ((x, _section_intersections(board_outline, x)[-1]) for x, _ in ordered)
+                stations = ((x, _section_intersections(anchor_outline, x)[-1]) for x, _ in ordered)
             chain = [left, *stations, right]
             for start, end in zip(chain, chain[1:]):
                 distance = end[0] - start[0]
@@ -688,6 +730,7 @@ class DrawingGenerator:
         board_view = ViewDrawing(
             "board-face", "夹板面", board_outline, tuple(board_dims),
             tuple(symbol_lines), (), board_note, tuple(cutouts),
+            internal_lines=tuple(cut_lines), hidden_lines=tuple(hidden_cut_lines),
             anchor_symbol_colors=tuple(symbol_colors),
             anchor_symbol_lineweights=tuple(symbol_lineweights),
             anchor_symbol_linetypes=tuple(symbol_linetypes),
@@ -695,7 +738,8 @@ class DrawingGenerator:
         )
         return ModuleDrawing(
             module.module_id, module.name or module.structure_type.value,
-            _details(module, board, anchor), front_view, side_view, board_view, tuple(warnings),
+            _details(module, board, anchor, profile if isinstance(profile, BoardFaceProfile) else None),
+            front_view, side_view, board_view, tuple(warnings),
         )
 
     def generate(
@@ -708,13 +752,19 @@ class DrawingGenerator:
         drawings = []
         for count, module in enumerate(project.modules, start=1):
             original = self.build_module(project, module)
-            drawing = replace(original, board_view=place_bolt_note(original.board_view, 10))
+            drawing = replace(
+                original,
+                front_view=place_machining_dimensions(original.front_view, 10),
+                board_view=place_bolt_note(place_machining_dimensions(original.board_view, 10), 10),
+            )
             width = module_required_width(drawing, measure_detail)
             if width > PAGE_CONTENT_WIDTH_MM + 1e-6 or not fits_sheet_height(drawing):
                 drawing = replace(
                     original, scale_denominator=20,
-                    front_view=_space_long_dimensions(original.front_view, 20),
-                    board_view=place_bolt_note(_space_long_dimensions(original.board_view, 20), 20),
+                    front_view=place_machining_dimensions(_space_long_dimensions(original.front_view, 20), 20),
+                    board_view=place_bolt_note(
+                        place_machining_dimensions(_space_long_dimensions(original.board_view, 20), 20), 20,
+                    ),
                     side_view=(_space_long_dimensions(original.side_view, 20)
                                if original.side_view is not None else None),
                 )

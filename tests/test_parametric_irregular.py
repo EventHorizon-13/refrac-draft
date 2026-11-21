@@ -7,9 +7,10 @@ from refracdraft.domain.models import (
 from refracdraft.drawing.board_profiles import build_board_profile
 from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.drawing.layout import (
-    FRAME_INSET_MM, PAGE_HEIGHT_MM, VIEW_CLEARANCE_MM, view_bounds, view_placement,
+    FRAME_INSET_MM, PAGE_HEIGHT_MM, VIEW_CLEARANCE_MM, place_machining_dimensions, view_bounds, view_placement,
 )
-from refracdraft.geometry.primitives import module_front_outline, parametric_outline
+from refracdraft.drawing.model import Dimension, ViewDrawing
+from refracdraft.geometry.primitives import module_front_outline, parametric_outline, rectangle
 
 
 def module_with_outline(kind, width=300, height=230, **kwargs):
@@ -243,3 +244,15 @@ def test_partial_rotated_notch_projects_only_the_cut_span(
         ((x, 0), (x, depth)) for x in expected
     }
     assert len(projected) == 3
+
+
+def test_machining_dimension_preserves_measured_points_when_anchor_blocks_both_witness_routes():
+    cut = Dimension((150, 100), (150, 220), "120", "vertical", 20, machining=True)
+    drawing = ViewDrawing(
+        "front", "正面", rectangle(300, 300), (cut,),
+        anchor_symbols=(rectangle(60, 40).transformed(tx=120, ty=80),),
+    )
+    placed, = place_machining_dimensions(drawing, 10).dimensions
+    assert (placed.start, placed.end, placed.label) == (cut.start, cut.end, cut.label)
+    assert placed.line_position < 0 or placed.line_position > 300
+    assert placed.short_witness_mm == 1.6

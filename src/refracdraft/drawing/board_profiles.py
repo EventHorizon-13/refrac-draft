@@ -51,7 +51,7 @@ def machining_dimensions(
             while any(overlaps(dim, lane) for dim in matches):
                 lane += direction * 45
             offset = lane - max(start[1], end[1]) if axis == 0 else min(start[0], end[0]) - lane
-            dimension = Dimension(start, end, f"{b - a:g}", orientation, offset)
+            dimension = Dimension(start, end, f"{b - a:g}", orientation, offset, machining=True)
             added.append(dimension)
             matches.append(dimension)
             measured.add((a, b))
@@ -119,7 +119,7 @@ def _oriented_cut(
         distance = abs(first[0] - last[0]) if horizontal else abs(first[1] - last[1])
         signed_offset = offset[1] - first[1] if horizontal else first[0] - offset[0]
         dimensions.append(Dimension(
-            first, last, f"{distance:g}", "horizontal" if horizontal else "vertical", signed_offset,
+            first, last, f"{distance:g}", "horizontal" if horizontal else "vertical", signed_offset, machining=True,
         ))
     return path, tuple(dimensions)
 

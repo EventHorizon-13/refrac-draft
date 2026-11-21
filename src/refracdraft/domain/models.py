@@ -72,6 +72,11 @@ class OutlineSpec(BaseModel):
     mirror_x: bool = False
 
 
+class CutStart(StrEnum):
+    LOWER = "下夹板"
+    UPPER = "上夹板"
+
+
 class BoardFaceFeature(BaseModel):
     """One perimeter cut from the illustrated board-face templates, in mm."""
 
@@ -82,6 +87,7 @@ class BoardFaceFeature(BaseModel):
     c: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     d: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     cut_depth_mm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    cut_start: CutStart = CutStart.LOWER
     rotation_deg: Literal[0, 90, 180, 270] = 0
     mirror_x: bool = False
 

@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 from dataclasses import dataclass, replace
 
-from refracdraft.drawing.model import DrawingDocument, ModuleDrawing, PlacedModule, ViewDrawing
+from refracdraft.drawing.model import Dimension, DrawingDocument, ModuleDrawing, PlacedModule, ViewDrawing
 
 
 VIEW_SCALE = 0.0992
@@ -113,37 +113,113 @@ def view_bounds(view: ViewDrawing, denominator: int = 10) -> tuple[float, float,
     return left, bottom, right, top
 
 
+def place_machining_dimensions(view: ViewDrawing, denominator: int) -> ViewDrawing:
+    """Keep machining dimensions and their witnesses away from the anchors."""
+    if not any(dim.machining for dim in view.dimensions):
+        return view
+    boxes = [line.bounds for line in view.anchor_symbols]
+    boxes.extend((x - 1.5 * denominator, y - 1.5 * denominator,
+                  x + 1.5 * denominator, y + 1.5 * denominator) for x, y in view.anchor_points)
+    if not boxes:
+        return view
+
+    clearance = ANNOTATION_CLEARANCE_MM * annotation_factor(denominator) * denominator
+    dimensions = list(view.dimensions)
+    for index, dim in enumerate(dimensions):
+        if not dim.machining:
+            continue
+        axis = 0 if dim.orientation == "horizontal" else 1
+        cross = 1 - axis
+        low, high = sorted((dim.start[axis], dim.end[axis]))
+        obstacles = [(box[axis], box[axis + 2], box[cross], box[cross + 2]) for box in boxes]
+
+        def line_clear(lane: float) -> bool:
+            return not any(
+                a - clearance < high and b + clearance > low and c - clearance < lane < d + clearance
+                for a, b, c, d in obstacles
+            )
+
+        def witnesses_clear(lane: float) -> bool:
+            margin = 0.6 * denominator
+            return not any(
+                a - margin <= point[axis] <= b + margin
+                and min(point[cross], lane) <= d + margin and max(point[cross], lane) >= c - margin
+                for point in (dim.start, dim.end) for a, b, c, d in obstacles
+            )
+
+        position = dim.line_position
+        if line_clear(position) and witnesses_clear(position):
+            continue
+        other_lanes = [
+            other.line_position for j, other in enumerate(dimensions)
+            if j != index and other.orientation == dim.orientation
+            and min(other.start[axis], other.end[axis]) < high + clearance
+            and max(other.start[axis], other.end[axis]) > low - clearance
+        ]
+        bounds = view.outline.bounds
+        left = min(bounds[cross], *other_lanes, *(box[2] for box in obstacles)) - clearance
+        right = max(bounds[cross + 2], *other_lanes, *(box[3] for box in obstacles)) + clearance
+        lane = min((left, right), key=lambda value: (not witnesses_clear(value), abs(value - position)))
+        dimensions[index] = replace(
+            dim,
+            offset=dim.offset + (lane - position) * (1 if axis == 0 else -1),
+            short_witness_mm=None if witnesses_clear(lane) else 1.6,
+        )
+    return replace(view, dimensions=tuple(dimensions))
+
+
+def _dimension_plot_lines(dim: Dimension, denominator: int):
+    axis = 0 if dim.orientation == "horizontal" else 1
+    cross = 1 - axis
+    lane = dim.line_position / denominator
+    low, high = sorted((dim.start[axis] / denominator, dim.end[axis] / denominator))
+    yield cross, lane, low, high
+    for point in (dim.start, dim.end):
+        datum = point[cross] / denominator
+        direction = 1 if lane >= datum else -1
+        start = lane - direction * dim.short_witness_mm if dim.short_witness_mm else datum + direction * 0.8
+        end = lane + direction * 0.8
+        yield axis, point[axis] / denominator, min(start, end), max(start, end)
+
+
 def place_bolt_note(view: ViewDrawing, denominator: int) -> ViewDrawing:
-    """Put the callout outside the existing dimensions and route around them."""
+    """Aim one straight callout at the clear row above the dimension text."""
     if not view.leaders:
         return view
     note, = view.leaders
     tip_x, tip_y = (value / denominator for value in note.tip)
-    left, _, _, top = view_bounds(replace(view, leaders=()), denominator)
-    bridge_x = left - 2.0
-    bridge_y = tip_y + 0.7
-    text_y = top + 1.5
-    bridge_gaps = set()
-    for dim in view.dimensions:
-        if dim.orientation != "horizontal":
-            continue
-        dimension_y = dim.line_position / denominator
-        for point_x, point_y in (dim.start, dim.end):
-            line_x = point_x / denominator
-            if bridge_x < line_x < tip_x:
-                bridge_height = tip_y + (bridge_y - tip_y) * (line_x - tip_x) / (bridge_x - tip_x)
-                start_y = point_y / denominator
-                if start_y + 0.8 < bridge_height < dimension_y + 0.8:
-                    bridge_gaps.add(line_x - tip_x)
-    # The first segment stays below the upper dimension chain. The vertical
-    # segment runs outside the dimension extents, so the dimension lanes keep
-    # their measured endpoints, offsets, and complete extension lines.
-    note = replace(
-        note,
-        offset_mm=(max(0.0, bridge_x + 5.0) - tip_x, text_y - tip_y),
-        elbows_mm=((bridge_x - tip_x, bridge_y - tip_y), (bridge_x - tip_x, text_y - tip_y)),
-        bridge_gaps_mm=tuple(sorted(bridge_gaps)),
+    _, _, _, top = view_bounds(replace(view, leaders=()), denominator)
+    rise = top + 1.5 - tip_y
+    start = (tip_x, tip_y)
+    lines = tuple(line for dim in view.dimensions for line in _dimension_plot_lines(dim, denominator))
+
+    def crossings(run: float) -> tuple[float, ...]:
+        delta = (run, rise)
+        result = set()
+        for axis, lane, low, high in lines:
+            t = (lane - start[axis]) / delta[axis]
+            station = start[1 - axis] + t * delta[1 - axis]
+            if 0.02 < t < 0.98 and low - 0.25 <= station <= high + 0.25:
+                result.add(t)
+        return tuple(sorted(result))
+
+    def label_collisions(run: float) -> int:
+        count = 0
+        for dim in view.dimensions:
+            if dim.orientation != "horizontal":
+                continue
+            y = dim.line_position / denominator + DIMENSION_TEXT_SIZE_MM / 2
+            t = (y - tip_y) / rise
+            x = (dim.start[0] + dim.end[0]) / (2 * denominator)
+            width = len(dim.label) * DIMENSION_TEXT_SIZE_MM * 0.36 + 0.8
+            count += 0 < t < 1 and abs(tip_x + run * t - x) <= width
+        return count
+
+    run, gaps = min(
+        ((run, crossings(run)) for run in (-6.0, -3.0, 3.0, 6.0)),
+        key=lambda candidate: (label_collisions(candidate[0]), len(candidate[1]), candidate[0]),
     )
+    note = replace(note, offset_mm=(run, rise), dimension_crossings=gaps)
     return replace(view, leaders=(note,))
 
 
