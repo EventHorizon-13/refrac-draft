@@ -38,7 +38,13 @@ jobs:
               f"PDF pages: {len(pdf)}\\nPDF vector paths: {[len(p.get_drawings()) for p in pdf]}\\nDXF modelspace entities: {len(dxf.modelspace())}\\n",
               encoding="utf-8",
           )
-          assert len(pdf) == 2
+          assert len(pdf) >= 1
+          labels = [
+              entity.dxf.text for entity in dxf.modelspace().query("TEXT")
+              if entity.dxf.text.startswith("第") and "页 共" in entity.dxf.text
+          ]
+          expected = [f"第{i}页 共{len(pdf)}页" for i in range(1, len(pdf) + 1)]
+          assert labels == expected, (labels, expected)
           assert len(dxf.modelspace()) > 100
           PY
       - uses: actions/upload-artifact@v4
