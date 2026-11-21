@@ -58,6 +58,7 @@ from refracdraft.exporters.project import export_standard_excel
 from refracdraft.release import latest_portable_release
 from refracdraft.standard_sheet import (
     AUTOMATIC, AUTOMATIC_FIELDS, COLUMN_SPECS, DEFAULT_ROW, anchor_length_options, build_standard_row,
+    resolve_automatic_values,
 )
 from refracdraft.standard import (
     StandardAnchorValues,
@@ -713,6 +714,28 @@ def test_standard_associations_keep_manual_choices_and_roundtrip(
     assert Project.model_validate_json(project.model_dump_json()).standard_auto_fields == project.standard_auto_fields
 
 
+@pytest.mark.parametrize(
+    ("grade", "expected_material"),
+    [("1260", "304"), ("1400", "304"), ("1430", "310"), ("1500", "310")],
+)
+def test_automatic_anchor_material_tracks_module_grade(grade, expected_material):
+    values = dict(DEFAULT_ROW, anchor_enabled=True, anchor_material=AUTOMATIC, material=grade)
+    assert resolve_automatic_values(values)["anchor_material"] == expected_material
+    assert build_standard_row(values)[2].material == expected_material
+    values["anchor_material"] = "309"
+    assert build_standard_row(values)[2].material == "309"
+
+
+def test_automatic_anchor_material_updates_after_grade_changes():
+    values = dict(DEFAULT_ROW, anchor_enabled=True, anchor_material=AUTOMATIC, material="1430")
+    for grade, expected in (("1430", "310"), ("1260", "304"), ("1600", "310"), ("1050", "304")):
+        values["material"] = grade
+        assert resolve_automatic_values(values)["anchor_material"] == expected
+        assert build_standard_row(values)[2].material == expected
+    values["material"] = "铬锆复合"
+    assert resolve_automatic_values(values, {"anchor_material": "201"})["anchor_material"] == "201"
+
+
 def test_legacy_excel_resolves_associations_and_keeps_custom_values(tmp_path):
     workbook = Workbook()
     sheet = workbook.active
@@ -758,6 +781,27 @@ def test_measured_side_details_pack_the_450mm_pair_without_compressing_text(tmp_
     labels = [text for text in msp.query("TEXT") if text.dxf.text == drawing.filename_label]
     assert [text.dxf.insert.y for text in labels] == pytest.approx([190, -2110])
     assert [text.dxf.height for text in labels] == pytest.approx([24, 24])
+    page_labels = [
+        text for text in msp.query("TEXT")
+        if text.dxf.text in ("第1页 共2页", "第2页 共2页")
+    ]
+    assert [text.dxf.text for text in page_labels] == ["第1页 共2页", "第2页 共2页"]
+    assert [text.dxf.insert.y for text in page_labels] == pytest.approx([190, -2110])
+    assert all(
+        filename.dxf.insert.x < page_label.dxf.insert.x < 1687
+        for filename, page_label in zip(labels, page_labels)
+    )
+
+    no_filename = export_dxf(
+        replace(drawing, filename_label=""), tmp_path / "packed-no-filename.dxf",
+    )
+    footer_texts = list(ezdxf.readfile(no_filename).modelspace().query("TEXT"))
+    assert not any(text.dxf.text == drawing.filename_label for text in footer_texts)
+    bare_page_labels = [
+        text for text in footer_texts
+        if text.dxf.text in ("第1页 共2页", "第2页 共2页")
+    ]
+    assert [text.dxf.insert.x for text in bare_page_labels] == pytest.approx([90, 90])
 
 
 @pytest.mark.parametrize(
