@@ -144,8 +144,8 @@ def test_machining_dimension_chain_aligns_and_separates_overlapping_total():
     ))
     total, first, second, height, cut_height = place_machining_dimensions(drawing, 10).dimensions
     assert first.line_position == second.line_position
-    assert total.line_position <= first.line_position - 48 + 1e-6
-    assert height.line_position <= cut_height.line_position - 48 + 1e-6
+    assert total.line_position <= first.line_position - 85 + 1e-6
+    assert height.line_position <= cut_height.line_position - 85 + 1e-6
 
 
 def test_board_profile_rejects_overlapping_cuts():

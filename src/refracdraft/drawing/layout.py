@@ -47,6 +47,7 @@ DETAIL_TITLE_CLEARANCE_MM = 4.0
 DETAIL_VIEW_CLEARANCE_MM = 2.0
 DETAIL_WIDTH_CLEARANCE_MM = 2.0
 ANNOTATION_CLEARANCE_MM = DIMENSION_TEXT_SIZE_MM + 1.6
+DIMENSION_LANE_GAP_MM = 8.5
 
 
 @dataclass(frozen=True)
@@ -179,7 +180,8 @@ def _space_cut_dimension_lanes(view: ViewDrawing, denominator: int) -> ViewDrawi
     """Use common lanes for adjoining sizes and separate overlapping spans."""
     bounds = view.outline.bounds
     scale = annotation_factor(denominator) * denominator
-    clearance = ANNOTATION_CLEARANCE_MM * scale
+    # CAD can fit the text on either side of its line, especially in a chain.
+    clearance = DIMENSION_LANE_GAP_MM * scale
     dimensions = list(view.dimensions)
     for axis, orientation in ((0, "horizontal"), (1, "vertical")):
         cross = 1 - axis
@@ -187,9 +189,8 @@ def _space_cut_dimension_lanes(view: ViewDrawing, denominator: int) -> ViewDrawi
         for index, dim in enumerate(dimensions):
             if dim.orientation == orientation:
                 lo, hi = sorted((dim.start[axis], dim.end[axis]))
-                center = (lo + hi) / 2
-                pad = max(1.6, len(dim.label) * DIMENSION_TEXT_SIZE_MM * 0.36) * scale
-                extents[index] = (lo, hi, min(lo, center - pad), max(hi, center + pad))
+                label_low, label_high = _dimension_label_span(lo, hi, dim.label, scale)
+                extents[index] = (lo, hi, min(lo, label_low), max(hi, label_high))
 
         for sign, boundary in ((-1, bounds[cross]), (1, bounds[cross + 2])):
             distance = {i: sign * (dimensions[i].line_position - boundary) for i in extents}
@@ -233,18 +234,27 @@ def _dimension_plot_lines(dim: Dimension, denominator: int):
         yield axis, point[axis] / denominator, min(start, end), max(start, end)
 
 
+def _dimension_label_span(low: float, high: float, label: str, scale: float) -> tuple[float, float]:
+    pad = max(1.6, len(label) * 1.05 + 0.35) * scale
+    if high - low < 2 * (pad + DIMENSION_ARROW_SIZE_MM * scale):
+        return low - 2 * pad, high + 2 * pad
+    center = (low + high) / 2
+    return center - pad, center + pad
+
+
 def _dimension_text_boxes(view: ViewDrawing, denominator: int):
     factor = annotation_factor(denominator)
     for dim in view.dimensions:
-        x = (dim.start[0] + dim.end[0]) / (2 * denominator)
-        y = (dim.start[1] + dim.end[1]) / (2 * denominator)
+        horizontal = dim.orientation == "horizontal"
+        axis = 0 if horizontal else 1
+        low, high = sorted((dim.start[axis] / denominator, dim.end[axis] / denominator))
+        low, high = _dimension_label_span(low, high, dim.label, factor)
         lane = dim.line_position / denominator
-        pad = max(2.0, len(dim.label) * 1.25 * factor + 0.55)
         height = ANNOTATION_CLEARANCE_MM * factor
-        if dim.orientation == "horizontal":
-            yield (x - pad, lane - 0.4, x + pad, lane + height)
+        if horizontal:
+            yield (low, lane - height, high, lane + height)
         else:
-            yield (lane - height, y - pad, lane + 0.55, y + pad)
+            yield (lane - height, low, lane + height, high)
 
 
 def _dimension_stroke_boxes(view: ViewDrawing, denominator: int):
@@ -321,6 +331,11 @@ def view_label_position(view: ViewDrawing, module_id: str, denominator: int) -> 
     for line in (*view.anchor_symbols, *view.cutouts):
         x1, y1, x2, y2 = (value / denominator for value in line.bounds)
         boxes.append((x1 - 0.4, y1 - 0.4, x2 + 0.4, y2 + 0.4))
+    for line in (*view.internal_lines, *view.hidden_lines):
+        for a, b in zip(line.points, line.points[1:]):
+            left_edge, right_edge = sorted((a[0] / denominator, b[0] / denominator))
+            bottom_edge, top_edge = sorted((a[1] / denominator, b[1] / denominator))
+            boxes.append((left_edge - 0.15, bottom_edge - 0.15, right_edge + 0.15, top_edge + 0.15))
     boxes.extend((px / denominator - 2.0, py / denominator - 2.0,
                   px / denominator + 2.0, py / denominator + 2.0) for px, py in view.anchor_points)
     step = half_width + 2.0
