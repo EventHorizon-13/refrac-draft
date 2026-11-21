@@ -71,10 +71,11 @@ def _cut_path(
         )
     if feature.type == 2:
         assert b is not None and c is not None and d is not None
-        if a + c >= height or b >= width or d > b:
-            raise ValueError("类型 2 要求 a + c < 厚度、b < 长度、d ≤ b")
         upper = b - d
-        notch_center_x = upper / 2 if upper >= 32 else -26
+        if a + c >= height or b >= width or not 0 <= upper < width:
+            raise ValueError("类型 2 要求 a + c < 厚度、b < 长度，且 0 ≤ b - d < 长度")
+        inner = min(upper, b)
+        notch_center_x = inner / 2 if inner >= 32 else -26
         shoulder_offset = height - (a + c) + 12
         return ((upper, height), (upper, a + c), (b, a + c), (b, a), (0, a)), (
             ((0, 0), (0, a), 26), ((0, a), (b, a), -a - 62),
@@ -110,6 +111,7 @@ def _oriented_cut(
         return {0: (x, y), 90: (h - y, x), 180: (w - x, h - y), 270: (y, w - x)}[angle]
 
     path = tuple(map(transform, reversed(cut) if feature.mirror_x else cut))
+    path = tuple(point for index, point in enumerate(path) if index == 0 or point != path[index - 1])
     dimensions = []
     for start, end, inset in measures:
         horizontal = start[1] == end[1]
@@ -117,6 +119,8 @@ def _oriented_cut(
         first, last, offset = transform(start), transform(end), transform(displaced)
         horizontal = first[1] == last[1]
         distance = abs(first[0] - last[0]) if horizontal else abs(first[1] - last[1])
+        if distance <= EPSILON:
+            continue
         signed_offset = offset[1] - first[1] if horizontal else first[0] - offset[0]
         dimensions.append(Dimension(
             first, last, f"{distance:g}", "horizontal" if horizontal else "vertical", signed_offset, machining=True,

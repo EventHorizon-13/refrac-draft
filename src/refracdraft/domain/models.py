@@ -85,7 +85,7 @@ class BoardFaceFeature(BaseModel):
     a: float = Field(gt=0, allow_inf_nan=False)
     b: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     c: float | None = Field(default=None, gt=0, allow_inf_nan=False)
-    d: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    d: float | None = Field(default=None, allow_inf_nan=False)
     cut_depth_mm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     cut_start: CutStart = CutStart.LOWER
     rotation_deg: Literal[0, 90, 180, 270] = 0

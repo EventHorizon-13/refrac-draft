@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 from refracdraft.drawing.model import Dimension, DrawingDocument, LeaderNote, ModuleDrawing, PlacedModule, ViewDrawing
+from refracdraft.geometry.primitives import point_in_outline
 
 
 VIEW_SCALE = 0.0992
@@ -127,7 +128,7 @@ def place_machining_dimensions(view: ViewDrawing, denominator: int) -> ViewDrawi
     boxes.extend((x - 1.5 * denominator, y - 1.5 * denominator,
                   x + 1.5 * denominator, y + 1.5 * denominator) for x, y in view.anchor_points)
     if not boxes:
-        return view
+        return _space_cut_dimension_lanes(view, denominator)
 
     clearance = ANNOTATION_CLEARANCE_MM * annotation_factor(denominator) * denominator
     dimensions = list(view.dimensions)
@@ -171,6 +172,50 @@ def place_machining_dimensions(view: ViewDrawing, denominator: int) -> ViewDrawi
             offset=dim.offset + (lane - position) * (1 if axis == 0 else -1),
             short_witness_mm=None if witnesses_clear(lane) else 1.6,
         )
+    return _space_cut_dimension_lanes(replace(view, dimensions=tuple(dimensions)), denominator)
+
+
+def _space_cut_dimension_lanes(view: ViewDrawing, denominator: int) -> ViewDrawing:
+    """Use common lanes for adjoining sizes and separate overlapping spans."""
+    bounds = view.outline.bounds
+    scale = annotation_factor(denominator) * denominator
+    clearance = ANNOTATION_CLEARANCE_MM * scale
+    dimensions = list(view.dimensions)
+    for axis, orientation in ((0, "horizontal"), (1, "vertical")):
+        cross = 1 - axis
+        extents = {}
+        for index, dim in enumerate(dimensions):
+            if dim.orientation == orientation:
+                lo, hi = sorted((dim.start[axis], dim.end[axis]))
+                center = (lo + hi) / 2
+                pad = max(1.6, len(dim.label) * DIMENSION_TEXT_SIZE_MM * 0.36) * scale
+                extents[index] = (lo, hi, min(lo, center - pad), max(hi, center + pad))
+
+        for sign, boundary in ((-1, bounds[cross]), (1, bounds[cross + 2])):
+            distance = {i: sign * (dimensions[i].line_position - boundary) for i in extents}
+            outside = sorted((i for i in extents if distance[i] > 1e-6), key=distance.get)
+            inside = {i: d for i, d in distance.items() if d <= 1e-6}
+            placed = {}
+            for i in outside:
+                dim = dimensions[i]
+                lo, hi, left, right = extents[i]
+                conflicts = [lane for j, lane in (inside | placed).items()
+                             if left < extents[j][3] - 1e-6 and right > extents[j][2] + 1e-6]
+                clear_of_outline = 4.0 if (axis == 0 and sign < 0) or (axis == 1 and sign > 0) else 1.0
+                preferred = max(distance[i], clear_of_outline * scale)
+                adjoining = [
+                    lane for j, lane in placed.items()
+                    if (abs(lo - extents[j][1]) < 1e-6 or abs(hi - extents[j][0]) < 1e-6)
+                    and abs(lane - preferred) <= clearance
+                    and lane >= clear_of_outline * scale
+                    and all(abs(lane - other) >= clearance - 1e-6 for other in conflicts)
+                ]
+                lane = min(adjoining, key=lambda value: abs(value - preferred)) if adjoining else preferred
+                while any(abs(lane - other) < clearance - 1e-6 for other in conflicts):
+                    lane = max(other + clearance for other in conflicts if abs(lane - other) < clearance - 1e-6)
+                placed[i] = lane
+                shift = boundary + sign * lane - dim.line_position
+                dimensions[i] = replace(dim, offset=dim.offset + shift * (1 if axis == 0 else -1))
     return replace(view, dimensions=tuple(dimensions))
 
 
@@ -188,6 +233,52 @@ def _dimension_plot_lines(dim: Dimension, denominator: int):
         yield axis, point[axis] / denominator, min(start, end), max(start, end)
 
 
+def _dimension_text_boxes(view: ViewDrawing, denominator: int):
+    factor = annotation_factor(denominator)
+    for dim in view.dimensions:
+        x = (dim.start[0] + dim.end[0]) / (2 * denominator)
+        y = (dim.start[1] + dim.end[1]) / (2 * denominator)
+        lane = dim.line_position / denominator
+        pad = max(2.0, len(dim.label) * 1.25 * factor + 0.55)
+        height = ANNOTATION_CLEARANCE_MM * factor
+        if dim.orientation == "horizontal":
+            yield (x - pad, lane - 0.4, x + pad, lane + height)
+        else:
+            yield (lane - height, y - pad, lane + 0.55, y + pad)
+
+
+def _dimension_stroke_boxes(view: ViewDrawing, denominator: int):
+    for dim in view.dimensions:
+        for axis, lane, lo, hi in _dimension_plot_lines(dim, denominator):
+            if axis == 0:
+                yield (lane - 0.4, lo - 0.25, lane + 0.4, hi + 0.25)
+            else:
+                yield (lo - 0.25, lane - 0.4, hi + 0.25, lane + 0.4)
+
+
+def _segment_interval(origin, delta, box) -> tuple[float, float] | None:
+    """Return the fraction of a segment contained in a rectangular plot area."""
+    enter, leave = 0.0, 1.0
+    for axis in (0, 1):
+        point, step = origin[axis], delta[axis]
+        low, high = box[axis], box[axis + 2]
+        if abs(step) < 1e-9:
+            if point < low or point > high:
+                return None
+        else:
+            a, b = sorted(((low - point) / step, (high - point) / step))
+            enter, leave = max(enter, a), min(leave, b)
+            if enter >= leave:
+                return None
+    return enter, leave
+
+
+def _leader_with_clear_dimensions(note: LeaderNote, denominator: int, boxes) -> LeaderNote:
+    tip = tuple(value / denominator for value in note.tip)
+    gaps = sorted(interval for box in boxes if (interval := _segment_interval(tip, note.offset_mm, box)))
+    return replace(note, interruptions=tuple(gaps))
+
+
 def place_bolt_note(view: ViewDrawing, denominator: int) -> ViewDrawing:
     """Aim one straight callout at the clear row above the dimension text."""
     note = next((leader for leader in view.leaders if not leader.machining), None)
@@ -197,40 +288,53 @@ def place_bolt_note(view: ViewDrawing, denominator: int) -> ViewDrawing:
     _, _, _, top = view_bounds(replace(view, leaders=()), denominator)
     rise = top + 1.5 - tip_y
     start = (tip_x, tip_y)
-    lines = tuple(line for dim in view.dimensions for line in _dimension_plot_lines(dim, denominator))
+    labels = tuple(_dimension_text_boxes(view, denominator))
+    strokes = tuple(_dimension_stroke_boxes(view, denominator))
 
-    def crossings(run: float) -> tuple[float, ...]:
+    def score(run: float):
         delta = (run, rise)
-        result = set()
-        for axis, lane, low, high in lines:
-            t = (lane - start[axis]) / delta[axis]
-            station = start[1 - axis] + t * delta[1 - axis]
-            if 0.02 < t < 0.98 and low - 0.25 <= station <= high + 0.25:
-                result.add(t)
-        return tuple(sorted(result))
+        return (sum(_segment_interval(start, delta, box) is not None for box in labels),
+                sum(_segment_interval(start, delta, box) is not None for box in strokes), run)
 
-    def label_collisions(run: float) -> int:
-        count = 0
-        for dim in view.dimensions:
-            if dim.orientation != "horizontal":
-                continue
-            y = dim.line_position / denominator + DIMENSION_TEXT_SIZE_MM / 2
-            t = (y - tip_y) / rise
-            x = (dim.start[0] + dim.end[0]) / (2 * denominator)
-            width = len(dim.label) * DIMENSION_TEXT_SIZE_MM * 0.36 + 0.8
-            count += 0 < t < 1 and abs(tip_x + run * t - x) <= width
-        return count
-
-    run, gaps = min(
-        ((run, crossings(run)) for run in (-6.0, -3.0, 3.0, 6.0)),
-        key=lambda candidate: (label_collisions(candidate[0]), len(candidate[1]), candidate[0]),
-    )
-    note = replace(note, offset_mm=(run, rise), dimension_crossings=gaps)
+    run = min((-9.0, -6.0, -3.0, 3.0, 6.0, 9.0), key=score)
+    note = _leader_with_clear_dimensions(replace(note, offset_mm=(run, rise)), denominator, (*labels, *strokes))
     return replace(view, leaders=(note, *(leader for leader in view.leaders if leader.machining)))
 
 
 def _overlaps(a, b) -> bool:
     return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
+
+
+def view_label_position(view: ViewDrawing, module_id: str, denominator: int) -> tuple[float, float]:
+    left, bottom, right, top = (value / denominator for value in view.outline.bounds)
+    x, y = (left + right) / 2, (bottom + top) / 2
+    board = view.view_type == "board-face"
+    if not board and (view.anchor_symbols or view.anchor_points):
+        y = (view.outline.points[0][1] + view.outline.points[1][1]) / (2 * denominator) + 5.0
+    if view.note:
+        return x, y
+
+    font_height = 4.0 * annotation_factor(denominator)
+    half_width = max(2.5, 0.43 * font_height * len(module_id))
+    boxes = [*(_dimension_text_boxes(view, denominator)),
+             *(_leader_text_bounds(note, denominator) for note in view.leaders)]
+    for line in (*view.anchor_symbols, *view.cutouts):
+        x1, y1, x2, y2 = (value / denominator for value in line.bounds)
+        boxes.append((x1 - 0.4, y1 - 0.4, x2 + 0.4, y2 + 0.4))
+    boxes.extend((px / denominator - 2.0, py / denominator - 2.0,
+                  px / denominator + 2.0, py / denominator + 2.0) for px, py in view.anchor_points)
+    step = half_width + 2.0
+    for dy in (0.0, 5.0, -5.0, 10.0, -10.0):
+        for dx in (0.0, -step, step, -2 * step, 2 * step):
+            label_bottom = y + dy - (font_height / 2 if board else 0.5)
+            x1, x2 = x + dx - half_width, x + dx + half_width
+            label = (x1, label_bottom, x2, label_bottom + font_height + 0.7)
+            if any(_overlaps(label, box) for box in boxes):
+                continue
+            if all(point_in_outline(view.outline, (px * denominator, py * denominator))
+                   for px in (label[0], label[2]) for py in (label[1], label[3])):
+                return x + dx, y + dy
+    return x, y
 
 
 def place_cut_notes(view: ViewDrawing, denominator: int, module_id: str) -> ViewDrawing:
@@ -248,18 +352,8 @@ def place_cut_notes(view: ViewDrawing, denominator: int, module_id: str) -> View
         boxes.append((x1 - 0.5, y1 - 0.5, x2 + 0.5, y2 + 0.5))
     for x, y in view.anchor_points:
         boxes.append((x / denominator - 2, y / denominator - 2, x / denominator + 2, y / denominator + 2))
-    dimension_lines = tuple(line for dim in view.dimensions for line in _dimension_plot_lines(dim, denominator))
-    for dim in view.dimensions:
-        x = (dim.start[0] + dim.end[0]) / (2 * denominator)
-        y = (dim.start[1] + dim.end[1]) / (2 * denominator)
-        lane = dim.line_position / denominator
-        pad = max(2.0, len(dim.label) * 1.25)
-        if dim.orientation == "horizontal":
-            boxes.append((x - pad, lane - 0.3, x + pad, lane + ANNOTATION_CLEARANCE_MM))
-        else:
-            boxes.append((lane - ANNOTATION_CLEARANCE_MM, y - pad, lane + 0.5, y + pad))
-    for axis, lane, lo, hi in dimension_lines:
-        boxes.append((lane - 0.25, lo, lane + 0.25, hi) if axis == 0 else (lo, lane - 0.25, hi, lane + 0.25))
+    labels = tuple(_dimension_text_boxes(view, denominator))
+    strokes = tuple(_dimension_stroke_boxes(view, denominator))
     edges = []
     for line in (view.outline, *view.internal_lines, *view.hidden_lines):
         points = line.points
@@ -271,26 +365,28 @@ def place_cut_notes(view: ViewDrawing, denominator: int, module_id: str) -> View
     for note in (item for item in view.leaders if item.machining):
         x, y = (value / denominator for value in note.tip)
 
-        def candidate(dx: float, dy: float) -> LeaderNote:
-            return replace(note, offset_mm=(dx, dy), align_right=dx < 0)
-
         def cost(item: LeaderNote):
             x1, y1, x2, y2 = _leader_text_bounds(item, denominator)
             label = (x1 - 0.5, y1 - 0.5, x2 + 0.5, y2 + 0.5)
             dx, dy = item.offset_mm
-            run = (min(x + 0.1 * dx, x + dx), min(y + 0.1 * dy, y + dy),
-                   max(x + 0.1 * dx, x + dx), max(y + 0.1 * dy, y + dy))
             overflow = max(0.0, left - x1, x2 - right) + max(0.0, bottom - y1, y2 - top)
-            return (sum(_overlaps(label, box) for box in (*boxes, *edges)),
-                    sum(_overlaps(run, box) for box in boxes), overflow, abs(dx) + abs(dy))
+            return (sum(_overlaps(label, box) for box in (*boxes, *labels, *strokes, *edges)),
+                    sum(_segment_interval((x, y), (dx, dy), box) is not None for box in (*boxes, *labels)),
+                    sum(_segment_interval((x, y), (dx, dy), box) is not None for box in strokes),
+                    overflow, abs(dx) + abs(dy))
 
-        selected = min(
-            (candidate(dx, dy) for dx in (left - x - 2.0, -10.0, -6.0, -3.0, -1.0,
-                                         1.0, 3.0, 6.0, 10.0, right - x + 2.0)
-             for dy in (-18.0, -12.0, -8.0, -5.0, 5.0, 8.0, 12.0, 18.0)),
-            key=cost,
+        candidates = [
+            replace(note, offset_mm=(dx, dy), align_right=dx < 0)
+            for dx in (left - x - 2.0, -10.0, -6.0, -3.0, -1.0, 1.0, 3.0, 6.0, 10.0, right - x + 2.0)
+            for dy in (-18.0, -12.0, -8.0, -5.0, 5.0, 8.0, 12.0, 18.0)
+        ]
+        candidates.extend(
+            replace(note, offset_mm=(end_x - x, dy), align_right=right_aligned)
+            for end_x, right_aligned in ((left + 1.2, False), (right - 1.2, True))
+            for dy in (5.0, 8.0, 12.0, 18.0)
         )
-        placed.append(selected)
+        selected = min(candidates, key=cost)
+        placed.append(_leader_with_clear_dimensions(selected, denominator, (*labels, *strokes)))
         boxes.append(_leader_text_bounds(selected, denominator))
     return replace(view, leaders=tuple(placed))
 

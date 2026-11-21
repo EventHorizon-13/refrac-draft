@@ -251,7 +251,9 @@ def main() -> None:
                         raise ValueError("异形模块按钮未打开编辑窗口")
                     cut = dialog.cuts[0]
                     initial_outline = dialog.preview.outline
+                    cut.kind.setCurrentIndex(1)
                     cut.dimensions["a"].setText("80")
+                    cut.dimensions["d"].setText("-20")
                     cut.depth.setText("75")
                     cut.start.setCurrentText("上夹板")
                     cut.rotate.click()
@@ -273,6 +275,7 @@ def main() -> None:
                 not profile or profile.features[0].rotation_deg != 90
                 or not profile.features[0].mirror_x or profile.features[0].cut_depth_mm != 75
                 or profile.features[0].cut_start != "上夹板"
+                or profile.features[0].d != -20
             ):
                 raise ValueError("异形夹板面参数未进入项目数据")
             window.undo()

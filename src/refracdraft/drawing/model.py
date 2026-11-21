@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from dataclasses import dataclass, field
-from math import hypot
 
 from refracdraft.geometry.primitives import Polyline
 
@@ -40,7 +39,7 @@ class LeaderNote:
     tip: tuple[float, float]
     text: str
     offset_mm: tuple[float, float]
-    dimension_crossings: tuple[float, ...] = ()
+    interruptions: tuple[tuple[float, float], ...] = ()
     machining: bool = False
     align_right: bool = False
 
@@ -51,18 +50,16 @@ class LeaderNote:
     @property
     def paths_mm(self) -> tuple[tuple[tuple[float, float], ...], ...]:
         vertices = self.vertices_mm
-        if not self.dimension_crossings:
+        if not self.interruptions:
             return (vertices,)
         dx, dy = vertices[1]
         # All visible segments stay collinear and leave the dimensions intact.
         paths = []
         start = 0.0
-        half_gap = 0.55 / hypot(dx, dy)
-        for t in self.dimension_crossings:
-            end = max(0.0, t - half_gap)
+        for end, restart in self.interruptions:
             if end > start:
                 paths.append(((dx * start, dy * start), (dx * end, dy * end)))
-            start = min(1.0, t + half_gap)
+            start = max(start, restart)
         if start < 1.0:
             paths.append(((dx * start, dy * start), vertices[1]))
         return tuple(paths)

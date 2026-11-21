@@ -123,6 +123,28 @@ def _section_intersections(outline: Polyline, station: float) -> tuple[float, ..
     return tuple(sorted(depths))
 
 
+def _anchor_mount_height(outline: Polyline, x: float, left: float, right: float) -> float:
+    """Find the lowest upper face crossed by the anchor's mounting footprint."""
+    x_min, _, x_max, _ = outline.bounds
+    start = max(x_min, x + min(left, -1e-6))
+    stop = min(x_max, x + max(right, 1e-6))
+    stations = sorted({start, stop, *(px for px, _ in outline.points if start < px < stop)})
+    edges = tuple((a, b) for a, b in zip(outline.points, outline.points[1:] + outline.points[:1]) if a[0] != b[0])
+
+    def height_at(edge, px):
+        (x1, y1), (x2, y2) = edge
+        return y1 + (y2 - y1) * (px - x1) / (x2 - x1)
+
+    heights = []
+    for a, b in zip(stations, stations[1:]):
+        mid = (a + b) / 2
+        spanning = [edge for edge in edges if min(edge[0][0], edge[1][0]) < mid < max(edge[0][0], edge[1][0])]
+        if spanning:
+            upper = max(spanning, key=lambda edge: height_at(edge, mid))
+            heights.append(min(height_at(upper, a), height_at(upper, b)))
+    return min(heights) if heights else _section_intersections(outline, x)[-1]
+
+
 def _add_board_projection(view: ViewDrawing, board: Polyline) -> ViewDrawing:
     """Project each edge using the exposed boundary from that view's direction."""
     left, _, right, _ = view.outline.bounds
@@ -589,29 +611,6 @@ class DrawingGenerator:
         )
         anchor_outline = near_board_outline or board_outline
         if bolt is not None:
-            # The bolt starts at the actual edge at each anchor station.
-            positions = [
-                (x, section[-1] if (section := _section_intersections(anchor_outline, x)) else y)
-                for x, y in positions
-            ]
-            if side_view is not None and positions:
-                left, bottom, right, top = side_view.outline.bounds
-                _, mounting_y = min(positions)
-                mounting_x = left + (1 - mounting_y / module.board_face_height_mm) * (right - left)
-                side_symbol = welded_side_symbol(
-                    self.reference_library, anchor, mounting_x, (bottom + top) / 2, exposure, embedded,
-                )
-                left_size = side_view.dimensions[1]
-                tip = mounting_x - exposure
-                side_dimensions = side_view.dimensions
-                if tip <= left_size.line_position + 10:
-                    side_dimensions = (side_dimensions[0], replace(left_size, offset=left - tip + 18), side_dimensions[2])
-                side_view = replace(
-                    side_view, dimensions=side_dimensions, anchor_symbols=side_symbol.polylines,
-                    anchor_symbol_colors=side_symbol.colors,
-                    anchor_symbol_lineweights=side_symbol.lineweights,
-                    anchor_symbol_linetypes=side_symbol.linetypes,
-                )
             symbol = bolt
             if anchor.anchor_type == AnchorType.WELDED_M:
                 body = self.reference_library.anchor_symbol("m-shaped")
@@ -627,16 +626,53 @@ class DrawingGenerator:
                 symbol = self.reference_library.insert_anchor_board_symbol()
             elif symbol_id:
                 symbol = self.reference_library.anchor_symbol(symbol_id)
-        if symbol is not None and anchor.anchor_type == AnchorType.DIAMOND and anchor.embedment_depth_mm:
-            symbol_ys = [point[1] for line in symbol.polylines for point in line.points]
-            symbol_top = max(symbol_ys, default=0.0)
-            positions = [
-                (x, module.board_face_height_mm - anchor.embedment_depth_mm - symbol_top)
-                for x, _y in positions
-            ]
+        board_height = module.board_face_height_mm
+        symbol_bounds = [line.bounds for line in symbol.polylines] if symbol is not None else []
+        symbol_left = min((box[0] for box in symbol_bounds), default=0.0)
+        symbol_right = max((box[2] for box in symbol_bounds), default=0.0)
+        symbol_top = max((box[3] for box in symbol_bounds), default=0.0)
+        min_x, _, max_x, _ = anchor_outline.bounds
+        mounts = {}
+        seated = []
         for x, y in positions:
+            if not min_x <= x <= max_x:
+                raise ValueError(f"{module.module_id}: 锚固件坐标 ({x:g}, {y:g}) 位于夹板面轮廓之外")
+            mounting_y = _anchor_mount_height(anchor_outline, x, symbol_left, symbol_right)
+            mounts[x] = mounting_y
+            if bolt is not None:
+                y = mounting_y
+            elif anchor.anchor_type == AnchorType.DIAMOND and anchor.embedment_depth_mm:
+                y = mounting_y - anchor.embedment_depth_mm - symbol_top
+            elif mounting_y < board_height - 1e-6:
+                nominal_offset = BOARD_ANCHOR_TOP_OFFSET_MM.get(anchor.anchor_type, 35.4391501542)
+                y = min(y, mounting_y - max(symbol_top, nominal_offset))
             if not point_in_outline(anchor_outline, (x, y)) or (embedded and not point_in_outline(anchor_outline, (x, y - embedded))):
                 raise ValueError(f"{module.module_id}: 锚固件坐标 ({x:g}, {y:g}) 位于夹板面轮廓之外")
+            seated.append((x, y))
+        positions = seated
+
+        if side_view is not None and positions:
+            left, bottom, right, top = side_view.outline.bounds
+            mounting_x = (1 - mounts[min(mounts)] / board_height) * (right - left)
+            if bolt is not None:
+                side_symbol = welded_side_symbol(
+                    self.reference_library, anchor, left + mounting_x, (bottom + top) / 2, exposure, embedded,
+                )
+                left_size = side_view.dimensions[1]
+                tip = left + mounting_x - exposure
+                side_dimensions = side_view.dimensions
+                if tip <= left_size.line_position + 10:
+                    side_dimensions = (side_dimensions[0], replace(left_size, offset=left - tip + 18), side_dimensions[2])
+                side_view = replace(
+                    side_view, dimensions=side_dimensions, anchor_symbols=side_symbol.polylines,
+                    anchor_symbol_colors=side_symbol.colors,
+                    anchor_symbol_lineweights=side_symbol.lineweights,
+                    anchor_symbol_linetypes=side_symbol.linetypes,
+                )
+            elif mounting_x > 1e-6 and side_view.anchor_symbols:
+                side_view = replace(side_view, anchor_symbols=tuple(
+                    line.transformed(tx=mounting_x) for line in side_view.anchor_symbols
+                ))
         if positions and symbol is not None:
             profile_colors = symbol.colors if len(symbol.colors) == len(symbol.polylines) else (5,) * len(symbol.polylines)
             profile_lineweights = symbol.lineweights if len(symbol.lineweights) == len(symbol.polylines) else (13,) * len(symbol.polylines)
@@ -692,13 +728,15 @@ class DrawingGenerator:
                 default=top,
             )
             chain_offset = max(35.0, cut_dim_top - top + 62) if cut_dim_top > top else 35.0
-            left, right = _anchor_chain_endpoints(anchor_outline, ordered[0], ordered[-1])
+            left, right = _anchor_chain_endpoints(
+                anchor_outline, (ordered[0][0], mounts[ordered[0][0]]), (ordered[-1][0], mounts[ordered[-1][0]]),
+            )
             if bolt is not None:
                 cut_dim_top = max(cut_dim_top, max(y + exposure for _, y in ordered))
                 chain_offset = max(chain_offset, cut_dim_top - top + 28)
             stations = ((x, y + (exposure if bolt is not None else 0)) for x, y in ordered)
             if bolt is None:
-                stations = ((x, _section_intersections(anchor_outline, x)[-1]) for x, _ in ordered)
+                stations = ((x, mounts[x]) for x, _ in ordered)
             chain = [left, *stations, right]
             for start, end in zip(chain, chain[1:]):
                 distance = end[0] - start[0]
@@ -708,20 +746,21 @@ class DrawingGenerator:
         if anchor.dimension_vertical and bolt is None:
             seen_offsets: set[float] = set()
             for x, y in positions:
-                offset = round(module.board_face_height_mm - y, 3)
-                if 0 < offset < module.board_face_height_mm and offset not in seen_offsets:
-                    board_dims.append(Dimension((x, y), (x, module.board_face_height_mm),
+                offset = round(mounts[x] - y, 3)
+                if 0 < offset < board_height and offset not in seen_offsets:
+                    board_dims.append(Dimension((x, y), (x, mounts[x]),
                                                 f"{offset:g}", "vertical", -50))
                     seen_offsets.add(offset)
         if anchor.anchor_type == AnchorType.DIAMOND and anchor.embedment_depth_mm and positions:
             embed_x = positions[0][0]
+            datum = mounts[embed_x]
             depth = anchor.embedment_depth_mm
-            if depth > module.board_face_height_mm:
+            if depth > board_height:
                 raise ValueError(f"{module.module_id}: 菱形锚固件嵌入深度不能大于夹板面厚度")
             board_dims.append(
                 Dimension(
-                    (embed_x, module.board_face_height_mm),
-                    (embed_x, module.board_face_height_mm - depth),
+                    (embed_x, datum),
+                    (embed_x, datum - depth),
                     f"{depth:g}",
                     "vertical",
                     80,

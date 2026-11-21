@@ -28,6 +28,7 @@ from refracdraft.drawing.layout import (
     detail_line_width_factor,
     detail_lines,
     detail_vertical_anchor,
+    view_label_position,
     view_placement,
 )
 from refracdraft.drawing.model import DrawingDocument, ViewDrawing, linetype_role
@@ -208,7 +209,6 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
         })
         if leader.align_right:
             text_entity.set_placement(end, align=TextEntityAlignment.RIGHT)
-    min_x, min_y, max_x, max_y = view.outline.bounds
     for cutout in view.cutouts:
         pts = [(ox + x, oy + y) for x, y in cutout.points]
         _add_polyline(msp, pts, cutout.closed, "OUTLINE")
@@ -238,10 +238,8 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
                          dxfattribs={"layer": "CENTER", "color": 1})
     label = view.note or module_id
     board_face = view.view_type == "board-face"
-    label_y = (min_y + max_y) / 2
-    if not board_face and (view.anchor_symbols or view.anchor_points):
-        label_y = (view.outline.points[0][1] + view.outline.points[1][1]) / 2.0 + 5.0 * denominator
-    label_point = (ox + (min_x + max_x) / 2, oy + label_y)
+    label_x, label_y = view_label_position(view, module_id, denominator)
+    label_point = (ox + label_x * denominator, oy + label_y * denominator)
     alignment = TextEntityAlignment.MIDDLE_CENTER if board_face else TextEntityAlignment.CENTER
     msp.add_text(
         label, dxfattribs={"height": VALUE_TEXT_HEIGHT * denominator / MODEL_SCALE * annotation_factor(denominator), "style": TEXT_STYLE, "layer": "TEXT"}

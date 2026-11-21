@@ -30,6 +30,7 @@ from refracdraft.drawing.layout import (
     SEPARATOR_TOP_MM,
     annotation_factor,
     leader_text_height,
+    view_label_position,
     detail_box,
     detail_lines,
     detail_vertical_anchor,
@@ -278,12 +279,9 @@ class DrawingPreview(QGraphicsView):
             else:
                 scene.addLine(cx - 1.5, cy, cx + 1.5, cy, QPen(QColor("#ff0000"), 0.25))
                 scene.addLine(cx, cy - 1.5, cx, cy + 1.5, QPen(QColor("#ff0000"), 0.25))
-        min_x, min_y, max_x, max_y = view.outline.bounds
         label = view.note or module_id
-        label_y = (min_y + max_y) * scale / 2
-        if view.view_type != "board-face" and (view.anchor_symbols or view.anchor_points):
-            label_y = (view.outline.points[0][1] + view.outline.points[1][1]) * scale / 2 + 5.0
-        center = ox + (min_x + max_x) * scale / 2
+        label_x, label_y = view_label_position(view, module_id, denominator)
+        center = ox + label_x
         item = self._add_text(scene, label, center, oy + label_y, 4 * text_factor, "#111111")
         item.setX(center - item.boundingRect().width() * item.scale() / 2)
         if view.view_type == "board-face":

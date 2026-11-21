@@ -122,6 +122,32 @@ def test_board_profile_rotation_mirror_and_multiple_cuts():
     ]
 
 
+@pytest.mark.parametrize(("d", "shoulder_x"), [(-40, 135), (0, 95)])
+def test_notch_signed_shoulder(d, shoulder_x):
+    profile = BoardFaceProfile.model_validate({
+        "features": [{"type": 2, "a": 72, "b": 95, "c": 75, "d": d}],
+    })
+    outline, dimensions = build_board_profile(300, 230, profile)
+    assert (shoulder_x, 230) in outline.points
+    assert (shoulder_x, 147) in outline.points
+    assert [dim.label for dim in dimensions] == (["72", "95", "75", "40"] if d else ["72", "95", "75"])
+    assert len(outline.points) == len(set(outline.points))
+
+
+def test_machining_dimension_chain_aligns_and_separates_overlapping_total():
+    drawing = ViewDrawing("board-face", "夹板面", rectangle(300, 220), (
+        Dimension((0, 0), (300, 0), "300", "horizontal", -70),
+        Dimension((0, 0), (95, 0), "95", "horizontal", -46, machining=True),
+        Dimension((95, 0), (300, 0), "205", "horizontal", -61, machining=True),
+        Dimension((0, 0), (0, 220), "220", "vertical", 40),
+        Dimension((0, 0), (0, 170), "170", "vertical", 30, machining=True),
+    ))
+    total, first, second, height, cut_height = place_machining_dimensions(drawing, 10).dimensions
+    assert first.line_position == second.line_position
+    assert total.line_position <= first.line_position - 48 + 1e-6
+    assert height.line_position <= cut_height.line_position - 48 + 1e-6
+
+
 def test_board_profile_rejects_overlapping_cuts():
     profile = BoardFaceProfile.model_validate({"features": [
         {"type": 1, "a": 85, "b": 35},

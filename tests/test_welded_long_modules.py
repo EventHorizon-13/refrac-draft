@@ -178,6 +178,21 @@ def test_welded_diamond_depth_and_remark_are_independent_of_anchor_length(tmp_pa
         assert detail_left > placed.content_x_mm + view_bounds(module_drawing.board_view)[2]
         assert detail_left < placed.content_x_mm + placement.side_x + view_bounds(side)[2]
 
+    step = BoardFaceProfile(features=(BoardFaceFeature(type=1, a=120, b=65, rotation_deg=180),))
+    for kind, expected_contact in (("M型", 235), ("菱形", 185), ("焊接M型", 285), ("焊接菱形", 285)):
+        body, plate, hardware = build_standard_row({
+            **DEFAULT_ROW, "length_mm": "300", "thickness_mm": "300",
+            "anchor_enabled": True, "anchor_type": kind, "anchor_position_mm": "180",
+            "bolt_exposure_mm": "50", "embedment_depth_mm": "50",
+        }, board_face_profile=step)
+        stepped = generator.build_module(Project(modules=[body], boards=[plate], anchors=[hardware]), body)
+        assert max(line.bounds[3] for line in stepped.board_view.anchor_symbols) == pytest.approx(expected_contact)
+        if "焊接" in kind:
+            assert stepped.board_view.leaders[0].tip == (180, 285)
+        if kind == "菱形":
+            assert any(dim.start == (180, 235) and dim.end == (180, 185) and dim.label == "50"
+                       for dim in stepped.board_view.dimensions)
+
     legacy = anchor.model_copy(update={"embedment_depth_mm": None})
     incomplete = project.model_copy(update={"anchors": [legacy]})
     with pytest.raises(ValueError, match="填写焊接菱形的嵌入深度"):

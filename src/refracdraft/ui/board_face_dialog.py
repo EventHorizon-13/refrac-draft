@@ -103,7 +103,7 @@ class CutControls:
                 rotation_deg=self.angle, mirror_x=self.mirror.isChecked(),
             )
         except ValueError:
-            raise ValueError("切口尺寸必须是有限的正数") from None
+            raise ValueError("a、b、c 须为有限正数，凹槽 d 可为负或 0") from None
 
     def set_angle(self, angle: int) -> None:
         self.angle = angle
@@ -184,6 +184,7 @@ class BoardFaceDialog(QDialog):
         for letter, field in inputs.items():
             field.setAccessibleName(f"尺寸 {letter}（mm）")
             field.setMinimumWidth(45)
+        inputs["d"].setToolTip("凹槽肩部的有向尺寸，允许负值和 0")
         depth = QLineEdit()
         depth.setPlaceholderText("贯通")
         depth.setAccessibleName("剪切深度（mm）")
@@ -283,7 +284,9 @@ class BoardFaceDialog(QDialog):
                 self.preview.outline = outline
                 if active is not None:
                     active_index = self.cuts.index(active)
-                    key_groups = [CUT_DIMENSIONS[feature.type - 1] for feature in features]
+                    key_groups = [CUT_DIMENSIONS[feature.type - 1].removesuffix("d")
+                                  if feature.d == 0 else CUT_DIMENSIONS[feature.type - 1]
+                                  for feature in features]
                     start = sum(map(len, key_groups[:active_index]))
                     letters = key_groups[active_index]
                     self.preview.dimensions = tuple(zip(letters, dimensions[start:start + len(letters)]))
