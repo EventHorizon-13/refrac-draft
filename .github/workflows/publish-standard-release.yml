@@ -35,7 +35,6 @@ jobs:
           BUILD_RUN_ID=$(gh run list \
             --repo "$GITHUB_REPOSITORY" \
             --workflow windows-standard.yml \
-            --branch feat/standard-edition \
             --commit "$SOURCE_SHA" \
             --status success \
             --limit 1 \
