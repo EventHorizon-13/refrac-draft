@@ -14,6 +14,7 @@ from refracdraft.drawing.layout import (
     FILENAME_LABEL_HEIGHT_MM,
     FILENAME_LABEL_POSITION,
     FILENAME_LABEL_WIDTH_MM,
+    PAGE_LABEL_GAP_MM,
     DIMENSION_ARROW_SIZE_MM,
     DIMENSION_TEXT_SIZE_MM,
     SEPARATOR_BOTTOM_MM,
@@ -268,14 +269,24 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
             title.add_auto_attribs({"图名": document.project_name, "图号": "", "批准": "", "审定": "",
                                     "项目经理": "", "校核": "", "设计": "", "制图": "",
                                     "订单编号": "", "项目单位": "", "图纸": "A4"})
+        x, y = FILENAME_LABEL_POSITION
+        filename_width = 0.0
         if document.filename_label:
-            x, y = FILENAME_LABEL_POSITION
             reserved_width = len(document.filename_label) * FILENAME_LABEL_HEIGHT_MM * 1.39
+            filename_width = min(FILENAME_LABEL_WIDTH_MM, reserved_width)
             msp.add_text(document.filename_label, dxfattribs={
                 "layer": "TEXT", "style": TEXT_STYLE, "height": FILENAME_LABEL_HEIGHT_MM * MODEL_SCALE,
                 "width": min(1.0, FILENAME_LABEL_WIDTH_MM / reserved_width),
                 "insert": (x * MODEL_SCALE, page_y + y * MODEL_SCALE),
             })
+        page_label_x = x + filename_width + PAGE_LABEL_GAP_MM if document.filename_label else x
+        msp.add_text(
+            f"第{page.page_number}页 共{len(document.pages)}页",
+            dxfattribs={
+                "layer": "TEXT", "style": TEXT_STYLE, "height": FILENAME_LABEL_HEIGHT_MM * MODEL_SCALE,
+                "insert": (page_label_x * MODEL_SCALE, page_y + y * MODEL_SCALE),
+            },
+        )
         for placed in page.modules[1:]:
             msp.add_line(
                 (placed.x_mm * MODEL_SCALE, page_y + SEPARATOR_BOTTOM_MM * MODEL_SCALE),
