@@ -6,7 +6,9 @@ from openpyxl import load_workbook
 
 from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, CutStart, Project
 from refracdraft.drawing.generator import DrawingGenerator
-from refracdraft.drawing.layout import detail_box, page_model_origins, view_bounds, view_placement
+from refracdraft.drawing.layout import (
+    _leader_text_bounds, detail_box, page_model_origins, place_cut_notes, view_bounds, view_placement,
+)
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.project import export_standard_excel
 from refracdraft.importers.excel import import_project_xlsx
@@ -75,6 +77,11 @@ def test_exposure_and_blind_cut_round_trip_and_depth_controls_projection(tmp_pat
         assert ((0, 65), (120, 65)) in [wall.points for wall in walls]
         note, = board_view.leaders
         assert note.machining and note.text == f"{side.value}切缺口"
+        arranged, = place_cut_notes(board_view, 10, body.module_id).leaders
+        left, low, right, high = _leader_text_bounds(arranged, 10)
+        if 0 < high and low < body.board_face_height_mm / 10:
+            assert not left < 0 < right
+            assert not left < body.board_face_width_mm / 10 < right
         assert not any("剪切深度" in detail or "切缺口" in detail for detail in drawn.details)
         depth_dim, = (dim for dim in view.dimensions if dim.label == str(depth))
         assert (depth_dim.start[1], depth_dim.end[1]) == (bottom, top)

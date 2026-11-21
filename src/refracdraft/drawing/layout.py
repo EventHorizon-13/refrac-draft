@@ -260,6 +260,13 @@ def place_cut_notes(view: ViewDrawing, denominator: int, module_id: str) -> View
             boxes.append((lane - ANNOTATION_CLEARANCE_MM, y - pad, lane + 0.5, y + pad))
     for axis, lane, lo, hi in dimension_lines:
         boxes.append((lane - 0.25, lo, lane + 0.25, hi) if axis == 0 else (lo, lane - 0.25, hi, lane + 0.25))
+    edges = []
+    for line in (view.outline, *view.internal_lines, *view.hidden_lines):
+        points = line.points
+        followers = points[1:] + points[:1] if line.closed else points[1:]
+        for (x1, y1), (x2, y2) in zip(points, followers):
+            edges.append((min(x1, x2) / denominator - 0.25, min(y1, y2) / denominator - 0.25,
+                          max(x1, x2) / denominator + 0.25, max(y1, y2) / denominator + 0.25))
 
     for note in (item for item in view.leaders if item.machining):
         x, y = (value / denominator for value in note.tip)
@@ -274,11 +281,12 @@ def place_cut_notes(view: ViewDrawing, denominator: int, module_id: str) -> View
             run = (min(x + 0.1 * dx, x + dx), min(y + 0.1 * dy, y + dy),
                    max(x + 0.1 * dx, x + dx), max(y + 0.1 * dy, y + dy))
             overflow = max(0.0, left - x1, x2 - right) + max(0.0, bottom - y1, y2 - top)
-            return (sum(_overlaps(label, box) for box in boxes),
+            return (sum(_overlaps(label, box) for box in (*boxes, *edges)),
                     sum(_overlaps(run, box) for box in boxes), overflow, abs(dx) + abs(dy))
 
         selected = min(
-            (candidate(dx, dy) for dx in (-10.0, -6.0, -3.0, 3.0, 6.0, 10.0)
+            (candidate(dx, dy) for dx in (left - x - 2.0, -10.0, -6.0, -3.0, -1.0,
+                                         1.0, 3.0, 6.0, 10.0, right - x + 2.0)
              for dy in (-18.0, -12.0, -8.0, -5.0, 5.0, 8.0, 12.0, 18.0)),
             key=cost,
         )
