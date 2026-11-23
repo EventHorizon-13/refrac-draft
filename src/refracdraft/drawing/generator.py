@@ -20,7 +20,7 @@ from refracdraft.domain.models import (
 )
 from refracdraft.drawing.board_profiles import board_cut_edges, build_board_profile, machining_dimensions, profiles_by_face
 from refracdraft.drawing.multiface import (
-    Projection, clip_layer_marks, is_through_cut, machined_module, mounting_sections, project_module,
+    Projection, clip_layer_marks, is_through_cut, machined_module, mounting_sections, plate_contours, project_module,
 )
 from refracdraft.drawing.model import Dimension, DrawingDocument, LeaderNote, ModuleDrawing, SheetPage, PlacedModule, ViewDrawing
 from refracdraft.drawing.layout import (
@@ -342,6 +342,9 @@ def _place_annotations(drawing: ModuleDrawing, denominator: int) -> ModuleDrawin
             place_machining_dimensions(drawing.front_view, denominator), denominator, drawing.module_id,
         ),
         board_view=place_cut_notes(place_bolt_note(board, denominator), denominator, drawing.module_id),
+        upper_board_view=place_cut_notes(
+            place_machining_dimensions(drawing.upper_board_view, denominator), denominator, drawing.module_id,
+        ) if drawing.upper_board_view is not None else None,
         side_view=place_cut_notes(
             place_machining_dimensions(drawing.side_view, denominator), denominator, drawing.module_id,
         )
@@ -387,8 +390,29 @@ def _cut_annotations(module, face: CutFace, profile: BoardFaceProfile | None, pr
 def _machined_view(view: ViewDrawing, projection: Projection, dimensions, notes) -> ViewDrawing:
     return replace(view, outline=projection.outline, internal_lines=projection.visible,
                    hidden_lines=projection.hidden, cutouts=(*view.cutouts, *projection.holes),
-                   layer_marks=clip_layer_marks(view.layer_marks, projection),
                    dimensions=(*view.dimensions, *dimensions), leaders=(*view.leaders, *notes))
+
+
+def _plate_view(
+    source: ViewDrawing, name: str, contours: tuple[Polyline, ...], *,
+    anchor_dimensions: tuple[Dimension, ...] = (), openings: tuple[Polyline, ...] = (),
+) -> ViewDrawing:
+    if not contours:
+        left, bottom, right, top = source.outline.bounds
+        empty = Polyline((((left + right) / 2, (bottom + top) / 2),), closed=False)
+        return ViewDrawing("board-face", name, empty, note=f"{name}无剩余板面")
+    left = min(path.bounds[0] for path in contours)
+    bottom = min(path.bounds[1] for path in contours)
+    right = max(path.bounds[2] for path in contours)
+    top = max(path.bounds[3] for path in contours)
+    overall = (
+        Dimension((left, bottom), (right, bottom), f"{right - left:g}", "horizontal", -68),
+        Dimension((left, bottom), (left, top), f"{top - bottom:g}", "vertical", 65),
+    )
+    dimensions = tuple(dim for path in contours for dim in machining_dimensions(path, overall))
+    return replace(source, label=name, note=name, outline=contours[0],
+                   cutouts=(*contours[1:], *openings), internal_lines=(), hidden_lines=(),
+                   dimensions=(*overall, *dict.fromkeys(dimensions), *anchor_dimensions))
 
 
 class DrawingGenerator:
@@ -492,7 +516,11 @@ class DrawingGenerator:
                 warnings.append(str(exc))
         front_marks = ()
         if not positions and self.reference_library:
-            front_marks = self.reference_library.stacked_front_lines(module.front_width_mm, module.front_height_mm)
+            ends = ((module.front_left_height_mm, module.front_right_height_mm)
+                    if module.geometry_type == GeometryType.FRONT_TAPER else ())
+            front_marks = self.reference_library.stacked_front_lines(
+                module.front_width_mm, module.front_height_mm, *ends,
+            )
         front_points = tuple((x * module.front_width_mm / module.board_face_width_mm,
                               module.front_height_mm / 2.0) for x, _y in positions) if positions else ()
         if front_symbols and (welded or anchor.anchor_type in INSERT_ANCHOR_TYPES):
@@ -579,6 +607,7 @@ class DrawingGenerator:
         cut_notes: list[LeaderNote] = []
         near_board_outline = None
         board_holes = ()
+        plate_profiles = None
         if solid is not None:
             result = {face: project_module(solid, module, face) for face in CutFace}
             front_dims, front_notes = _cut_annotations(module, CutFace.FRONT, faces.get(CutFace.FRONT), result[CutFace.FRONT])
@@ -594,6 +623,9 @@ class DrawingGenerator:
             hidden_cut_lines.extend(board_projection.hidden)
             profile_dimensions, notes = _cut_annotations(module, CutFace.BOARD, faces.get(CutFace.BOARD), board_projection)
             cut_notes.extend(notes)
+            if board.exists:
+                plate_profiles = (plate_contours(solid, module, upper=False),
+                                  plate_contours(solid, module, upper=True))
         elif isinstance(profile, BoardFaceProfile):
             width, height = module.board_face_width_mm, module.board_face_height_mm
             _, front_bottom, _, front_top = front.bounds
@@ -622,6 +654,11 @@ class DrawingGenerator:
                 # From the upper plate, blind openings leave the far plate's silhouette intact.
                 board_outline = through_outline or rectangle(width, height)
                 near_board_outline = outline_for(upper) if upper != through else board_outline
+                if board.exists:
+                    lower = tuple(feature for feature in profile.features
+                                  if feature.cut_depth_mm is None or feature.cut_start == CutStart.LOWER)
+                    lower_outline = outline_for(lower) if lower != through else board_outline
+                    plate_profiles = ((lower_outline,), (near_board_outline,))
                 for feature in profile.features:
                     if feature.cut_depth_mm is not None:
                         lines = cut_lines if feature.cut_start == CutStart.UPPER else hidden_cut_lines
@@ -857,10 +894,31 @@ class DrawingGenerator:
             anchor_symbol_linetypes=tuple(symbol_linetypes),
             leaders=leaders,
         )
+        upper_board_view = None
+        if board.exists:
+            same = (board_outline, *board_holes)
+            lower, upper = plate_profiles if plate_profiles is not None else (same, same)
+            if board.show_upper_board or lower != upper:
+                bare = ViewDrawing("board-face", "上夹板", board_outline, leaders=tuple(
+                    note for note in cut_notes if note.text.startswith(CutStart.UPPER.value)
+                ))
+                upper_board_view = _plate_view(bare, "上夹板", upper)
+                board_view = _plate_view(replace(board_view, leaders=tuple(
+                    note for note in leaders if not note.text.startswith(CutStart.UPPER.value)
+                )), "下夹板", lower, anchor_dimensions=tuple(board_dims[2 + len(profile_dimensions):]),
+                    openings=tuple(cutouts[len(board_holes):]))
+        front_view = replace(front_view, layer_marks=clip_layer_marks(
+            front_view.layer_marks, front_view.outline, front_view.cutouts,
+        ))
+        if side_view is not None:
+            side_view = replace(side_view, layer_marks=clip_layer_marks(
+                side_view.layer_marks, side_view.outline, side_view.cutouts,
+            ))
         return ModuleDrawing(
             module.module_id, module.name or module.structure_type.value,
             _details(module, board, anchor),
             front_view, side_view, board_view, tuple(warnings),
+            upper_board_view=upper_board_view,
         )
 
     def generate(

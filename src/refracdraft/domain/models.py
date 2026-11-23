@@ -248,6 +248,7 @@ class BoardParameters(BaseModel):
 
     module_id: str = Field(min_length=1)
     exists: bool = True
+    show_upper_board: bool = False
     material: str = "9厘夹板"
     thickness_mm: float | None = Field(default=None, gt=0)
     opening_mode: OpeningMode = OpeningMode.NONE

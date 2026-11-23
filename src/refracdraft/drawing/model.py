@@ -103,6 +103,7 @@ class ModuleDrawing:
     warnings: tuple[str, ...] = ()
     scale_denominator: int = 10
     use_left_footer_space: bool = False
+    upper_board_view: ViewDrawing | None = None
 
 
 @dataclass(frozen=True)

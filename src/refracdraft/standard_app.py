@@ -57,8 +57,9 @@ def _smoke_test_welded_output(window) -> None:
     if [page.scale_denominator for page in drawing.pages] != [10, 20]:
         raise ValueError("焊接长模块未使用独立的 1:20 图页")
     short_drawing = drawing.pages[0].modules[0].drawing
-    if not short_drawing.board_view.internal_lines or not any(
-        leader.machining and leader.text == "上夹板切缺口" for leader in short_drawing.board_view.leaders
+    upper_plate = short_drawing.upper_board_view
+    if upper_plate is None or (80, 60) not in upper_plate.outline.points or not any(
+        leader.machining and leader.text == "上夹板切缺口" for leader in upper_plate.leaders
     ):
         raise ValueError("上夹板缺口线或缺口引线缺失")
     if not short_drawing.side_view or len(short_drawing.side_view.anchor_symbols) <= 2:
@@ -225,7 +226,17 @@ def main() -> None:
             from refracdraft.drawing.generator import DrawingGenerator
             from refracdraft.reference.library import ReferenceLibrary
 
-            DrawingGenerator(ReferenceLibrary(window.reference_dxf)).generate(roundtrip)
+            generator = DrawingGenerator(ReferenceLibrary(window.reference_dxf))
+            generator.generate(roundtrip)
+            upper_check = table.item(row, COLUMN_INDEX["show_upper_board"])
+            upper_check.setCheckState(Qt.CheckState.Checked)
+            split = window._collect_project()
+            plates = generator.build_module(split, split.modules[0])
+            if not split.boards[0].show_upper_board or plates.upper_board_view is None:
+                raise ValueError("上夹板勾选未保存或未单独绘制上夹板")
+            window.undo()
+            if window._collect_project().boards[0].show_upper_board:
+                raise ValueError("撤销上夹板勾选后状态仍启用")
             trace.write_text("mapped drawing passed\n", encoding="utf-8")
 
             length_cell = table.item(row, COLUMN_INDEX["length_mm"])

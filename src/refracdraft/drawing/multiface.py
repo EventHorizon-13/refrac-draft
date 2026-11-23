@@ -122,7 +122,20 @@ def _contours(section: CrossSection) -> tuple[Polyline, ...]:
             continue
         first = min(range(len(points)), key=lambda index: (points[index][1], points[index][0]))
         contours.append(Polyline(points[first:] + points[:first]))
-    return tuple(sorted(contours, key=lambda line: -abs(_polygon_area(line.points))))
+    return tuple(sorted(contours, key=lambda line: (-abs(_polygon_area(line.points)), line.points)))
+
+
+def plate_contours(solid: Manifold, module: ModuleParameters, *, upper: bool) -> tuple[Polyline, ...]:
+    """Find material at the corresponding original plate surface, even on a taper."""
+    sx, sy, offset = _plate_plane(module, upper)
+    mesh = solid.to_mesh64()
+    polygons = []
+    for row in mesh.tri_verts:
+        vertices = [mesh.vert_properties[index][:3] for index in row]
+        if all(abs(z - sx * x - sy * y - offset) <= TOLERANCE for x, y, z in vertices):
+            points = tuple((x, y) for x, y, _ in vertices)
+            polygons.append(points if _polygon_area(points) > 0 else points[::-1])
+    return _contours(CrossSection(polygons, FillRule.Positive))
 
 
 def mounting_sections(solid: Manifold, altitude: float) -> tuple[tuple[Polyline, ...], ...]:
@@ -159,13 +172,15 @@ class Projection:
     hidden: tuple[Polyline, ...]
 
 
-def clip_layer_marks(marks: tuple[Polyline, ...], projection: Projection) -> tuple[Polyline, ...]:
+def clip_layer_marks(
+    marks: tuple[Polyline, ...], outline: Polyline, holes: tuple[Polyline, ...],
+) -> tuple[Polyline, ...]:
     """Keep layer marks on projected material, including surfaces exposed by blind cuts."""
     if not marks:
         return ()
     edges = tuple(
         (Vec2(a), Vec2(b))
-        for path in (projection.outline, *projection.holes)
+        for path in (outline, *holes)
         for a, b in zip(path.points, path.points[1:] + path.points[:1])
     )
     visible = []
@@ -174,10 +189,11 @@ def clip_layer_marks(marks: tuple[Polyline, ...], projection: Projection) -> tup
         stations = _segment_stations(start, end, edges)
         for lo, hi in zip(stations, stations[1:]):
             mid = tuple(start.lerp(end, (lo + hi) / 2))
-            if point_in_outline(projection.outline, mid) and not any(
-                point_in_outline(hole, mid) for hole in projection.holes
+            if point_in_outline(outline, mid) and not any(
+                point_in_outline(hole, mid) for hole in holes
             ):
-                visible.append(Polyline((tuple(start.lerp(end, lo)), tuple(start.lerp(end, hi))), closed=False))
+                visible.append(mark if lo == 0 and hi == 1 else
+                               Polyline((tuple(start.lerp(end, lo)), tuple(start.lerp(end, hi))), closed=False))
     return tuple(visible)
 
 

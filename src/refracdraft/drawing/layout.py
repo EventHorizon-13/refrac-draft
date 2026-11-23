@@ -60,6 +60,8 @@ class ViewPlacement:
     detail_y: float
     detail_on_side: bool
     detail_x: float | None = None
+    upper_board_x: float = 0.0
+    upper_board_y: float = 0.0
 
 
 def page_model_origins(document: DrawingDocument) -> tuple[float, ...]:
@@ -441,6 +443,22 @@ def _content_floor(drawing: ModuleDrawing) -> float:
     return TITLE_BLOCK_TOP_MM + DETAIL_TITLE_CLEARANCE_MM
 
 
+def _board_row(drawing: ModuleDrawing) -> tuple[float, float, tuple[float, float, float, float]]:
+    denominator = drawing.scale_denominator
+    left, bottom, right, top = lower = view_bounds(drawing.board_view, denominator)
+    if drawing.upper_board_view is None:
+        return 0.0, 0.0, lower
+    x1, y1, x2, y2 = view_bounds(drawing.upper_board_view, denominator)
+    front_left = view_bounds(drawing.front_view, denominator)[0]
+    margin = max(PANEL_INNER_MARGIN_MM, 0.5 - min(left, front_left))
+    x = right + VIEW_CLEARANCE_MM - x1
+    y = 0.0
+    if x + x2 + margin + PANEL_INNER_MARGIN_MM > PAGE_CONTENT_WIDTH_MM:
+        x = 0.0
+        y = top + VIEW_CLEARANCE_MM - y1
+    return x, y, (min(left, x + x1), min(bottom, y + y1), max(right, x + x2), max(top, y + y2))
+
+
 def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
     denominator = drawing.scale_denominator
     upper = [view_bounds(drawing.front_view, denominator)]
@@ -448,7 +466,7 @@ def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
         upper.append(view_bounds(drawing.side_view, drawing.scale_denominator))
     upper_bottom = min(box[1] for box in upper)
     upper_top = max(box[3] for box in upper)
-    _, board_bottom, _, board_top = view_bounds(drawing.board_view, drawing.scale_denominator)
+    upper_x, upper_y, (_, board_bottom, _, board_top) = _board_row(drawing)
     ceiling = PAGE_HEIGHT_MM - FRAME_INSET_MM - 2.0
     floor = _content_floor(drawing)
     available = ceiling - floor
@@ -459,7 +477,7 @@ def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
     detail_on_side = bool(detail_height and views_span + below_gap + below_height > available + 1e-6)
     outline_bottom = drawing.board_view.outline.bounds[1] / denominator
     side_x = side_view_offset(drawing)
-    if detail_on_side or (detail_height and drawing.side_view is not None):
+    if detail_on_side:
         # The side text starts at the outline bottom, above any lower dimensions.
         view_height = views_span + VIEW_CLEARANCE_MM
         side_height = outline_bottom - board_bottom + detail_height
@@ -472,9 +490,10 @@ def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
             below_side = top_y + upper[1][1] - DETAIL_VIEW_CLEARANCE_MM - detail_height
             right_of_board = _front_board_right(drawing) + SIDE_DETAIL_GAP_MM
             if below_side >= floor and right_of_board < _drawing_right(drawing) + SIDE_DETAIL_GAP_MM:
-                return ViewPlacement(top_y, board_y, side_x, min(detail_y, below_side), True, right_of_board)
-        if detail_on_side:
-            return ViewPlacement(top_y, board_y, side_x, detail_y, True, _drawing_right(drawing) + SIDE_DETAIL_GAP_MM)
+                return ViewPlacement(top_y, board_y, side_x, min(detail_y, below_side), True, right_of_board,
+                                     upper_x, board_y + upper_y)
+        return ViewPlacement(top_y, board_y, side_x, detail_y, True, _drawing_right(drawing) + SIDE_DETAIL_GAP_MM,
+                             upper_x, board_y + upper_y)
 
     view_height = views_span + below_gap
     spare = max(0.0, available - view_height - below_height)
@@ -484,7 +503,7 @@ def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
     detail_y = floor + margin + detail_height
     board_y = floor + margin + below_height + detail_gap_extra - board_bottom
     top_y = board_y + board_top + below_gap + view_gap_extra - upper_bottom
-    return ViewPlacement(top_y, board_y, side_x, detail_y, False)
+    return ViewPlacement(top_y, board_y, side_x, detail_y, False, upper_board_x=upper_x, upper_board_y=board_y + upper_y)
 
 
 def outline_width(view, denominator: int = 10) -> float:
@@ -535,7 +554,7 @@ def _preferred_detail_width(drawing: ModuleDrawing, measure: Callable[[str], flo
 
 def _front_board_right(drawing: ModuleDrawing) -> float:
     return max(view_bounds(drawing.front_view, drawing.scale_denominator)[2],
-               view_bounds(drawing.board_view, drawing.scale_denominator)[2])
+               _board_row(drawing)[2][2])
 
 
 def _drawing_right(drawing: ModuleDrawing) -> float:
@@ -560,11 +579,11 @@ def geometry_width(drawing: ModuleDrawing, measure: Callable[[str], float] | Non
     detail_x = view_placement(drawing).detail_x
     if detail_x is not None:
         return max(_drawing_right(drawing), detail_x + _side_detail_width(drawing, detail_x, measure))
-    return width
+    return max(width, _board_row(drawing)[2][2]) if drawing.upper_board_view is not None else width
 
 
 def _panel_inner_margin(drawing: ModuleDrawing) -> float:
-    left = min(view_bounds(drawing.front_view, drawing.scale_denominator)[0], view_bounds(drawing.board_view, drawing.scale_denominator)[0])
+    left = min(view_bounds(drawing.front_view, drawing.scale_denominator)[0], _board_row(drawing)[2][0])
     return max(PANEL_INNER_MARGIN_MM, 0.5 - left)
 
 
@@ -610,8 +629,10 @@ def module_required_width(
 
 def fits_sheet_height(drawing: ModuleDrawing) -> bool:
     placement = view_placement(drawing)
-    lower = placement.board_y + view_bounds(drawing.board_view, drawing.scale_denominator)[1]
-    return lower >= _content_floor(drawing) - 1e-6
+    lower = placement.board_y + _board_row(drawing)[2][1]
+    return (lower >= _content_floor(drawing) - 1e-6
+            and (not placement.detail_on_side
+                 or placement.detail_y + _detail_block_height(drawing) <= PAGE_HEIGHT_MM - FRAME_INSET_MM + 1e-6))
 
 
 def _center_details(drawing: ModuleDrawing) -> bool:
@@ -628,7 +649,7 @@ def detail_box(placed: PlacedModule) -> tuple[float, float]:
         return left, available
     right = placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM
     if _center_details(drawing):
-        center = placed.content_x_mm + max(top_row_width(drawing), outline_width(drawing.board_view, drawing.scale_denominator)) / 2
+        center = placed.content_x_mm + geometry_width(drawing) / 2
         ideal_left = center - details_width(drawing) / 2
         preferred_width = _preferred_detail_width(drawing, placed.measure_detail)
         left = max(placed.x_mm + PANEL_INNER_MARGIN_MM, min(ideal_left, right - preferred_width))

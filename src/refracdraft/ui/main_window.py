@@ -149,17 +149,18 @@ class DrawingPreview(QGraphicsView):
                     drawing.side_view,
                     (px + placement.side_x, placement.top_y),
                     drawing.module_id,
-                    annotation_factor,
-    leader_text_height,
+                    denominator,
                 )
             self._draw_view(
                 scene,
                 drawing.board_view,
                 (px, placement.board_y),
                 drawing.module_id,
-                annotation_factor,
-    leader_text_height,
+                denominator,
             )
+            if drawing.upper_board_view is not None:
+                upper = (px + placement.upper_board_x, placement.upper_board_y)
+                self._draw_view(scene, drawing.upper_board_view, upper, drawing.module_id, denominator)
             if drawing.details:
                 left, available_width = detail_box(placed)
                 anchor_y, align_bottom = detail_vertical_anchor(placed)

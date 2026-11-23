@@ -1079,6 +1079,8 @@ class StandardWindow(MainWindow):
                 )
                 item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if spec.key == "show_upper_board":
+                    item.setToolTip("勾选后单独绘制上夹板。上下夹板轮廓不同时自动分图。")
             else:
                 item.setText("" if value is None else str(value))
                 item.setFlags(
@@ -1318,6 +1320,7 @@ class StandardWindow(MainWindow):
                 for key in TAPER_SETTING_KEYS:
                     self._set_cell_enabled(row, key, taper)
                 self._set_cell_enabled(row, "board_material", board)
+                self._set_cell_enabled(row, "show_upper_board", board)
                 for key in ANCHOR_SETTING_KEYS:
                     enabled = anchor and not (key == "pin_diameter_mm" and is_diamond)
                     enabled = enabled and not (key == "embedment_depth_mm" and not is_diamond)

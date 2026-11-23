@@ -217,25 +217,35 @@ class ReferenceLibrary:
         return SymbolGeometry(tuple(line.transformed(tx=-cx, ty=-cy) for line in polylines),
                               tuple(colors), tuple(lineweights), tuple(linetypes))
 
-    def stacked_front_lines(self, width_mm: float, height_mm: float) -> tuple[Polyline, ...]:
-        """Extract the four internal layer marks from the source no-anchor top-view block.
+    def stacked_front_lines(
+        self, width_mm: float, height_mm: float,
+        left_height_mm: float | None = None, right_height_mm: float | None = None,
+    ) -> tuple[Polyline, ...]:
+        """Position the source DXF marks without changing their lengths.
 
         Source block `动态模块-无锚固件-上` inserts `*U824` at (300, 0), scale 1.8.
         The source block uses a 300 x 300 local view with its top edge at y=0.
         """
         source = self.doc.blocks["*U824"]
-        sx, sy = width_mm / 300.0, height_mm / 300.0
+        left_height = left_height_mm if left_height_mm is not None else height_mm
+        right_height = right_height_mm if right_height_mm is not None else height_mm
+        slope = (right_height - left_height) / width_mm
         result: list[Polyline] = []
         for entity in source:
             if entity.dxftype() != "LINE":
                 continue
             start = entity.dxf.start
             end = entity.dxf.end
-            x1 = (300.0 + float(start.x) * 1.8) * sx
-            x2 = (300.0 + float(end.x) * 1.8) * sx
-            y1 = (height_mm + float(start.y) * 1.8) * sy
-            y2 = (height_mm + float(end.y) * 1.8) * sy
-            result.append(Polyline(((x1, y1), (x2, y2)), closed=False))
+            length = 1.8 * hypot(end.x - start.x, end.y - start.y)
+            inset = -1.8 * max(start.x, end.x)
+            position = (300 + 1.8 * (start.y + end.y) / 2) / 300
+            # Interpolate between the centered taper's lower and upper edges.
+            inclination = (position - 0.5) * slope
+            run = length / hypot(1, inclination)
+            x = min(width_mm, max(run, width_mm - inset))
+            y = height_mm / 2 + (position - 0.5) * (left_height + slope * x)
+            points = ((x - run, y - inclination * run), (x, y))
+            result.append(Polyline(points if start.x < end.x else points[::-1], closed=False))
         return tuple(result)
 
     def side_expansion_lines(
@@ -245,32 +255,7 @@ class ReferenceLibrary:
         left_height_mm: float,
         right_height_mm: float,
     ) -> tuple[Polyline, ...]:
-        """Derive the four no-anchor expansion marks for a side taper view.
-
-        The front-view source marks start at the right edge and become shorter
-        from top to bottom. The side view follows the same proportions, with
-        each line angled parallel to the sloped top edge.
-        """
-        source_lines = (
-            (0.383, 0.880, 0.880),
-            (0.464, 0.773, 0.880),
-            (0.562, 0.670, 0.880),
-            (0.665, 0.555, 0.880),
-        )
-        overall = max(left_height_mm, right_height_mm)
-        left_bottom = (overall - left_height_mm) / 2.0
-        right_bottom = (overall - right_height_mm) / 2.0
-        top_left = left_bottom + left_height_mm
-        top_right = right_bottom + right_height_mm
-        slope = (top_right - top_left) / width_mm if width_mm else 0.0
-        result = []
-        for start_fraction, y_fraction, end_fraction in source_lines:
-            x1 = width_mm * start_fraction
-            x2 = width_mm * end_fraction
-            y1 = height_mm * y_fraction
-            y2 = y1 + slope * (x2 - x1)
-            result.append(Polyline(((x1, y1), (x2, y2)), closed=False))
-        return tuple(result)
+        return self.stacked_front_lines(width_mm, height_mm, left_height_mm, right_height_mm)
 
     @cached_property
     def welded_bolt_profile(self) -> tuple[Polyline, ...]:

@@ -7,7 +7,8 @@ from openpyxl import load_workbook
 from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, CutStart, Project
 from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.drawing.layout import (
-    _leader_text_bounds, detail_box, page_model_origins, place_cut_notes, view_bounds, view_placement,
+    DETAIL_VIEW_CLEARANCE_MM, _leader_text_bounds, detail_box, page_model_origins, place_cut_notes, view_bounds,
+    view_placement,
 )
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.project import export_standard_excel
@@ -71,10 +72,9 @@ def test_exposure_and_blind_cut_round_trip_and_depth_controls_projection(tmp_pat
         stop = top if side == CutStart.LOWER else bottom
         assert ((0, stop), (120, stop)) in projected
         assert ((120, 0), (120, 300)) not in projected
-        board_view = drawn.board_view
-        assert (0, 0) in board_view.outline.points
-        walls = board_view.internal_lines if side == CutStart.UPPER else board_view.hidden_lines
-        assert ((0, 65), (120, 65)) in [wall.points for wall in walls]
+        board_view = drawn.upper_board_view if side == CutStart.UPPER else drawn.board_view
+        assert (0, 0) not in board_view.outline.points
+        assert (0, 65) in board_view.outline.points and (120, 65) in board_view.outline.points
         note, = board_view.leaders
         assert note.machining and note.text == f"{side.value}切缺口"
         arranged, = place_cut_notes(board_view, 10, body.module_id).leaders
@@ -174,9 +174,9 @@ def test_welded_diamond_depth_and_remark_are_independent_of_anchor_length(tmp_pa
         assert axis.points == ((-50, 150), (depth, 150))
         placement = view_placement(module_drawing)
         detail_left, _ = detail_box(placed)
-        assert placement.detail_on_side
-        assert detail_left > placed.content_x_mm + view_bounds(module_drawing.board_view)[2]
-        assert detail_left < placed.content_x_mm + placement.side_x + view_bounds(side)[2]
+        assert not placement.detail_on_side
+        assert detail_left == pytest.approx(placed.content_x_mm)
+        assert placement.board_y + view_bounds(module_drawing.board_view)[1] - placement.detail_y >= DETAIL_VIEW_CLEARANCE_MM
 
     step = BoardFaceProfile(features=(BoardFaceFeature(type=1, a=120, b=65, rotation_deg=180),))
     for kind, expected_contact in (("M型", 235), ("菱形", 185), ("焊接M型", 285), ("焊接菱形", 285)):

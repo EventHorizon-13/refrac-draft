@@ -1,3 +1,4 @@
+from math import dist
 from pathlib import Path
 
 import ezdxf
@@ -5,6 +6,7 @@ import pytest
 
 from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, CutFace, CutStart, Project
 from refracdraft.drawing.generator import DrawingGenerator
+from refracdraft.drawing.layout import DETAIL_VIEW_CLEARANCE_MM, view_bounds, view_placement
 from refracdraft.drawing.model import LAYER_MARK_ACI
 from refracdraft.drawing.multiface import machined_module, project_module
 from refracdraft.exporters.dxf import export_dxf
@@ -14,8 +16,13 @@ from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.standard_sheet import DEFAULT_ROW, build_standard_row
 
 
+@pytest.fixture(scope="module")
+def reference_library():
+    return ReferenceLibrary(Path(__file__).resolve().parents[1] / "references" / "示例.dxf")
+
+
 def _project(*cuts, **settings):
-    profile = BoardFaceProfile(features=cuts)
+    profile = BoardFaceProfile(features=cuts) if cuts else None
     module, plate, hardware = build_standard_row({
         **DEFAULT_ROW, "length_mm": "300", "thickness_mm": "200",
         "expansion_length_mm": "180", **settings,
@@ -112,9 +119,8 @@ def test_back_cut_relocates_anchor_to_remaining_installation_surface():
         DrawingGenerator().build_module(project, project.modules[0])
 
 
-def test_no_anchor_layer_marks_survive_multiface_cuts_and_stop_at_the_chamfer(tmp_path):
-    library = ReferenceLibrary(Path(__file__).resolve().parents[1] / "references" / "示例.dxf")
-    generator = DrawingGenerator(library)
+def test_no_anchor_layer_marks_survive_multiface_cuts_and_stop_at_the_chamfer(tmp_path, reference_library):
+    generator = DrawingGenerator(reference_library)
     side = BoardFaceFeature(face=CutFace.SIDE, type=1, a=92, b=60, mirror_x=True)
     board = BoardFaceFeature(type=1, a=120, b=46)
     front = BoardFaceFeature(face=CutFace.FRONT, type=3, a=75, b=75)
@@ -122,7 +128,7 @@ def test_no_anchor_layer_marks_survive_multiface_cuts_and_stop_at_the_chamfer(tm
     project, _ = _project(front, side, board, **sizes)
     drawing = generator.generate(project)
     module = drawing.pages[0].modules[0].drawing
-    original = library.stacked_front_lines(300, 300)
+    original = reference_library.stacked_front_lines(300, 300)
     assert len(module.front_view.layer_marks) == len(original) == 4
     assert module.front_view.layer_marks == original
     assert not module.side_view.layer_marks
@@ -143,3 +149,98 @@ def test_no_anchor_layer_marks_survive_multiface_cuts_and_stop_at_the_chamfer(tm
         x, y = max(mark.points)
         assert x == pytest.approx(min(max(source.points)[0], 300 - (y - 100) / 2))
     assert view.layer_marks != original
+
+
+def test_layer_marks_follow_the_taper_and_keep_their_dxf_lengths(reference_library):
+    generator = DrawingGenerator(reference_library)
+    lengths = [dist(*mark.points) for mark in reference_library.stacked_front_lines(300, 300)]
+    for width in (160, 300, 900):
+        for taper in ("正敲", "侧敲"):
+            project, _ = _project(length_mm=str(width), thickness_mm=str(width), taper_enabled=True,
+                                  taper_type=taper, big_head_mm="300", small_head_mm="220")
+            drawing = generator.build_module(project, project.modules[0])
+            view = drawing.front_view if taper == "正敲" else drawing.side_view
+            assert len(view.layer_marks) == 4
+            assert [dist(*mark.points) for mark in view.layer_marks] == pytest.approx(lengths)
+            for mark in view.layer_marks:
+                (a, b), (c, d) = sorted(mark.points)
+                assert d < b
+                assert -40 / width < (d - b) / (c - a) < 0
+
+
+def test_multiface_automatically_draws_and_dimensions_each_plate(tmp_path):
+    front = BoardFaceFeature(face=CutFace.FRONT, type=3, a=75, b=75)
+    side = BoardFaceFeature(face=CutFace.SIDE, type=1, a=92, b=60, mirror_x=True)
+    board = BoardFaceFeature(type=1, a=120, b=46)
+    project, _ = _project(front, side, board, thickness_mm="230", expansion_length_mm="300")
+    document = DrawingGenerator().generate(project)
+    placed = document.pages[0].modules[0]
+    upper = placed.drawing.upper_board_view
+    lower = placed.drawing.board_view
+    assert (lower.note, upper.note) == ("下夹板", "上夹板")
+    assert lower.outline.bounds == (0, 92, 300, 230)
+    assert upper.outline.bounds == (75, 0, 300, 230)
+    assert (120, 46) in upper.outline.points
+    assert {dim.label for dim in lower.dimensions} == {"300", "138"}
+    assert {"225", "230", "45", "46"} <= {dim.label for dim in upper.dimensions}
+    placement = view_placement(placed.drawing)
+    assert not placement.detail_on_side
+    assert placement.detail_y + DETAIL_VIEW_CLEARANCE_MM <= min(
+        placement.board_y + view_bounds(lower)[1], placement.upper_board_y + view_bounds(upper)[1],
+    ) + 1e-6
+    model = ezdxf.readfile(export_dxf(document, tmp_path / "plates.dxf")).modelspace()
+    assert {"下夹板", "上夹板"} <= {item.dxf.text for item in model.query("TEXT")}
+
+
+@pytest.mark.parametrize("upper", [True, False])
+def test_board_blind_cut_only_changes_the_selected_plate(upper):
+    cut = BoardFaceFeature(type=1, a=50, b=40, cut_depth_mm=60,
+                           cut_start=CutStart.UPPER if upper else CutStart.LOWER)
+    project, _ = _project(cut)
+    drawing = DrawingGenerator().build_module(project, project.modules[0])
+    machined = drawing.upper_board_view if upper else drawing.board_view
+    opposite = drawing.board_view if upper else drawing.upper_board_view
+    assert (50, 40) in machined.outline.points
+    assert (0, 0) not in machined.outline.points
+    assert (0, 0) in opposite.outline.points
+    assert [note.text for note in machined.leaders] == [f"{cut.cut_start.value}切缺口"]
+    assert not opposite.leaders
+
+
+def test_upper_board_checkbox_round_trips_and_can_draw_matching_plates(tmp_path):
+    cut = BoardFaceFeature(type=1, a=50, b=40)
+    project, _ = _project(cut)
+    generator = DrawingGenerator()
+    assert generator.build_module(project, project.modules[0]).upper_board_view is None
+    forced, _ = _project(cut, show_upper_board=True)
+    path = tmp_path / "checkbox.xlsx"
+    export_standard_excel(forced, path)
+    workbook_project = import_project_xlsx(path)
+    assert workbook_project.boards[0].show_upper_board
+    restored = Project.model_validate_json(workbook_project.model_dump_json())
+    assert restored.boards[0].show_upper_board
+    drawing = generator.build_module(restored, restored.modules[0])
+    assert drawing.upper_board_view.outline == drawing.board_view.outline
+    absent, _ = _project(cut, board_exists=False, show_upper_board=True)
+    drawing = generator.build_module(absent, absent.modules[0])
+    assert drawing.upper_board_view is None
+    assert drawing.board_view.note == "无夹板"
+
+
+def test_side_taper_pair_uses_available_space_below_views():
+    rows = [build_standard_row({
+        **DEFAULT_ROW, "module_id": f"M{i + 5}", "length_mm": str(length), "thickness_mm": "230",
+        "taper_enabled": True, "taper_type": "侧敲", "big_head_mm": "300", "small_head_mm": str(small),
+        "anchor_enabled": True, "anchor_type": "菱形", "anchor_count": str(i + 2), "anchor_spacing_mm": "300",
+    }) for i, (length, small) in enumerate(((600, 230), (900, 250)))]
+    modules, boards, anchors = map(list, zip(*rows))
+    document = DrawingGenerator().generate(Project(modules=modules, boards=boards, anchors=anchors))
+    page, = document.pages
+    assert len(page.modules) == 2
+    for placed in page.modules:
+        placement = view_placement(placed.drawing)
+        assert placed.drawing.side_view is not None
+        assert not placement.detail_on_side
+        assert placement.detail_y + DETAIL_VIEW_CLEARANCE_MM <= (
+            placement.board_y + view_bounds(placed.drawing.board_view)[1]
+        ) + 1e-6

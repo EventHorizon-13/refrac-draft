@@ -348,6 +348,9 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
                 drawing.module_id,
                 denominator,
             )
+            if drawing.upper_board_view is not None:
+                upper = (px + placement.upper_board_x * denominator, page_y + placement.upper_board_y * denominator)
+                _add_view(msp, drawing.upper_board_view, upper, drawing.module_id, denominator)
             if drawing.details:
                 left, available_width = detail_box(placed)
                 anchor_y, align_bottom = detail_vertical_anchor(placed)
