@@ -882,7 +882,7 @@ class StandardWindow(MainWindow):
             preview_title, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
         )
 
-        page_controls = QFrame()
+        page_controls = self.page_controls = QFrame()
         page_controls.setObjectName("previewPageControls")
         page_row = QHBoxLayout(page_controls)
         page_row.setContentsMargins(9, 5, 9, 5)
@@ -895,6 +895,7 @@ class StandardWindow(MainWindow):
         canvas_layout.addWidget(
             page_controls, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight
         )
+        page_controls.hide()
 
         preview_splitter.addWidget(output_panel)
         preview_splitter.addWidget(preview_canvas)
@@ -1079,8 +1080,8 @@ class StandardWindow(MainWindow):
                 )
                 item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                if spec.key == "show_upper_board":
-                    item.setToolTip("勾选后单独绘制上夹板。上下夹板轮廓不同时自动分图。")
+                if spec.key in {"show_upper_board", "show_lower_board"}:
+                    item.setToolTip(f"勾选后新增{spec.label}详图，同时保留夹板面总图。")
             else:
                 item.setText("" if value is None else str(value))
                 item.setFlags(
@@ -1321,6 +1322,7 @@ class StandardWindow(MainWindow):
                     self._set_cell_enabled(row, key, taper)
                 self._set_cell_enabled(row, "board_material", board)
                 self._set_cell_enabled(row, "show_upper_board", board)
+                self._set_cell_enabled(row, "show_lower_board", board)
                 for key in ANCHOR_SETTING_KEYS:
                     enabled = anchor and not (key == "pin_diameter_mm" and is_diamond)
                     enabled = enabled and not (key == "embedment_depth_mm" and not is_diamond)
@@ -1537,6 +1539,7 @@ class StandardWindow(MainWindow):
         ensure_standard_project(self.project)
         self.drawing_document = None
         self._preview_pdf = None
+        self.page_controls.hide()
         self._clear_rows()
         for module in self.project.modules:
             self._add_module((
@@ -1556,6 +1559,7 @@ class StandardWindow(MainWindow):
         self._preview_pdf = None
         self.preview.scene().clear()
         self.page_spin.setMaximum(1)
+        self.page_controls.hide()
         self._clear_rows()
         self._add_module()
         self._reset_history()
@@ -1613,6 +1617,7 @@ class StandardWindow(MainWindow):
             with QSignalBlocker(self.page_spin):
                 self.page_spin.setMaximum(max(1, len(self.drawing_document.pages)))
                 self.page_spin.setValue(1)
+            self.page_controls.setVisible(len(self.drawing_document.pages) > 1)
             warnings = list(self.drawing_document.warnings)
             try:
                 with TemporaryDirectory(prefix="refracdraft-preview-") as directory:

@@ -25,18 +25,22 @@ from refracdraft.drawing.layout import (
     detail_box,
     page_model_origins,
     leader_text_height,
+    sheet_footer_text,
     detail_line_width_factor,
     detail_lines,
     detail_vertical_anchor,
     view_label_position,
     view_placement,
 )
-from refracdraft.drawing.model import LAYER_MARK_ACI, LAYER_MARK_LINEWEIGHT, DrawingDocument, ViewDrawing, linetype_role
+from refracdraft.drawing.model import (
+    LAYER_MARK_ACI, LAYER_MARK_LINEWEIGHT, LEADER_ACI, DrawingDocument, ViewDrawing, linetype_role,
+)
 
 
 LAYER_COLORS = {
     "OUTLINE": 7,
     "LAYER_MARKS": LAYER_MARK_ACI,
+    "LEADERS": LEADER_ACI,
     "DIMENSIONS": 4,
     "HIDDEN": 7,
     "ANCHORS": 5,
@@ -206,8 +210,8 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
         x, y = leader.tip
         for path in leader.paths_mm:
             vertices = [(ox + x + u * denominator, oy + y + v * denominator) for u, v in path]
-            msp.add_leader(vertices, dimstyle=f"_{denominator}", override={"dimclrd": 7},
-                           dxfattribs={"layer": "TEXT", "has_arrowhead": 0})
+            msp.add_leader(vertices, dimstyle=f"_{denominator}", override={"dimclrd": LEADER_ACI},
+                           dxfattribs={"layer": "LEADERS", "has_arrowhead": 0})
         end = (ox + x + leader.offset_mm[0] * denominator, oy + y + leader.offset_mm[1] * denominator)
         text_entity = msp.add_text(leader.text, dxfattribs={
             "height": leader_text_height(denominator) * denominator,
@@ -307,19 +311,15 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
             title.add_auto_attribs({"图名": document.project_name, "图号": "", "批准": "", "审定": "",
                                     "项目经理": "", "校核": "", "设计": "", "制图": "",
                                     "订单编号": "", "项目单位": "", "图纸": "A4"})
-        x, y = FILENAME_LABEL_POSITION
-        page_label = f"第{page.page_number}页 共{len(document.pages)}页"
-        # A single TEXT entity keeps the page counter immediately beside the filename
-        # in SHX and fallback PDF renderers; estimated glyph widths cannot do that reliably.
-        footer_label = (
-            f"{document.filename_label}  {page_label}" if document.filename_label else page_label
-        )
-        reserved_width = len(footer_label) * FILENAME_LABEL_HEIGHT_MM * 1.39
-        msp.add_text(footer_label, dxfattribs={
-            "layer": "TEXT", "style": TEXT_STYLE, "height": FILENAME_LABEL_HEIGHT_MM * denominator,
-            "width": min(1.0, FILENAME_LABEL_WIDTH_MM / reserved_width),
-            "insert": (x * denominator, page_y + y * denominator),
-        })
+        footer_label = sheet_footer_text(document, page.page_number)
+        if footer_label:
+            x, y = FILENAME_LABEL_POSITION
+            reserved_width = len(footer_label) * FILENAME_LABEL_HEIGHT_MM * 1.39
+            msp.add_text(footer_label, dxfattribs={
+                "layer": "TEXT", "style": TEXT_STYLE, "height": FILENAME_LABEL_HEIGHT_MM * denominator,
+                "width": min(1.0, FILENAME_LABEL_WIDTH_MM / reserved_width),
+                "insert": (x * denominator, page_y + y * denominator),
+            })
         for placed in page.modules[1:]:
             msp.add_line(
                 (placed.x_mm * denominator, page_y + SEPARATOR_BOTTOM_MM * denominator),
@@ -348,9 +348,9 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
                 drawing.module_id,
                 denominator,
             )
-            if drawing.upper_board_view is not None:
-                upper = (px + placement.upper_board_x * denominator, page_y + placement.upper_board_y * denominator)
-                _add_view(msp, drawing.upper_board_view, upper, drawing.module_id, denominator)
+            for view, (x, y) in zip(drawing.board_details, placement.board_detail_origins, strict=True):
+                origin = (px + x * denominator, page_y + (placement.board_y + y) * denominator)
+                _add_view(msp, view, origin, drawing.module_id, denominator)
             if drawing.details:
                 left, available_width = detail_box(placed)
                 anchor_y, align_bottom = detail_vertical_anchor(placed)

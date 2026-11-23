@@ -959,8 +959,11 @@ def test_board_face_has_status_label_when_no_anchors(tmp_path, board_exists, lab
     assert document.pages[0].modules[0].drawing.board_view.note == label
     output = export_dxf(document, tmp_path / "board-label.dxf")
     labels = list(ezdxf.readfile(output).modelspace().query("TEXT"))
-    assert [entity.dxf.text for entity in labels] == ["第1页 共1页", "M1", label]
+    assert [entity.dxf.text for entity in labels] == ["M1", label]
     assert labels[-1].get_align_enum().name == "MIDDLE_CENTER"
+    with_filename = export_dxf(replace(document, filename_label="模块加工图"), tmp_path / "board-filename.dxf")
+    labels = ezdxf.readfile(with_filename).modelspace().query("TEXT")
+    assert [entity.dxf.text for entity in labels] == ["模块加工图", "M1", label]
 
 
 def test_update_selects_the_latest_formal_release_with_a_standard_portable_zip(monkeypatch):

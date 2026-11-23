@@ -178,11 +178,14 @@ def build_standard_board(
     material: str = "9厘夹板",
     *,
     show_upper_board: bool | None = None,
+    show_lower_board: bool | None = None,
 ) -> BoardParameters:
     data = base.model_dump(mode="python") if base else {}
     data.update(module_id=module_id, exists=exists)
     if show_upper_board is not None:
         data["show_upper_board"] = show_upper_board
+    if show_lower_board is not None:
+        data["show_lower_board"] = show_lower_board
     if exists:
         board_material = material.strip() or "9厘夹板"
         data["material"] = board_material

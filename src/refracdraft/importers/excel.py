@@ -50,6 +50,7 @@ FIELD_ALIASES = {
         "module_id": {"模块编号", "编号", "型号", "模块型号"},
         "exists": {"是否有夹板", "有无夹板", "夹板是否存在"},
         "show_upper_board": {"上夹板", "单独绘制上夹板"},
+        "show_lower_board": {"下夹板", "单独绘制下夹板"},
         "material": {"夹板材质", "材质", "夹板"},
         "thickness_mm": {"夹板厚度", "厚度"},
         "opening_mode": {"开口模式", "快插开口", "开口类型"},
@@ -169,7 +170,7 @@ def _normalize_row(row: dict[str, Any], group: str) -> dict[str, Any]:
         field = key_clean if key_clean in aliases else reverse.get(key_clean)
         if not field:
             continue
-        if field in {"exists", "show_upper_board", "dimension_horizontal", "dimension_vertical"}:
+        if field in {"exists", "show_upper_board", "show_lower_board", "dimension_horizontal", "dimension_vertical"}:
             value = _bool(value)
         elif field in {"front_width_mm", "front_height_mm", "expansion_length_mm", "front_left_height_mm", "front_right_height_mm",
                        "side_length_mm", "side_left_height_mm", "side_right_height_mm", "board_face_width_mm",
@@ -223,7 +224,7 @@ def _import_standard_sheet(
 ) -> Project:
     columns = {label: index for index, label in enumerate(headers)}
     expected = {spec.label for spec in COLUMN_SPECS}
-    optional = {"螺栓外露长度", "上夹板"}
+    optional = {"螺栓外露长度", "上夹板", "下夹板"}
     if len(columns) != len(headers) or not (expected - optional <= columns.keys() <= expected):
         raise ValueError("「标准版」表头不完整或有重复列，请使用程序附带的示例")
     modules = []

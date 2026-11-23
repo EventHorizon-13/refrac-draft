@@ -42,6 +42,7 @@ def create_example(path: Path) -> None:
             "board_exists": "是",
             "board_material": "9厘",
             "show_upper_board": "否",
+            "show_lower_board": "否",
             "anchor_enabled": "是",
             "anchor_position_mm": 150,
             "anchor_spacing_mm": 300,

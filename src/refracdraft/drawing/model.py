@@ -9,6 +9,8 @@ from refracdraft.geometry.primitives import Polyline
 
 LAYER_MARK_ACI = 153
 LAYER_MARK_LINEWEIGHT = 18
+LEADER_ACI = 32
+INSERT_ANCHOR_ACI = 203
 
 
 def linetype_role(value: str | None) -> str:
@@ -104,6 +106,11 @@ class ModuleDrawing:
     scale_denominator: int = 10
     use_left_footer_space: bool = False
     upper_board_view: ViewDrawing | None = None
+    lower_board_view: ViewDrawing | None = None
+
+    @property
+    def board_details(self) -> tuple[ViewDrawing, ...]:
+        return tuple(view for view in (self.upper_board_view, self.lower_board_view) if view is not None)
 
 
 @dataclass(frozen=True)

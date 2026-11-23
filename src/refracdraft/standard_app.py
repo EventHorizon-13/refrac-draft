@@ -13,6 +13,7 @@ def _smoke_test_welded_output(window) -> None:
 
     from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, Project
     from refracdraft.drawing.generator import DrawingGenerator
+    from refracdraft.drawing.model import LEADER_ACI
     from refracdraft.exporters.dxf import export_dxf
     from refracdraft.exporters.pdf import export_pdf
     from refracdraft.reference.library import ReferenceLibrary
@@ -24,6 +25,7 @@ def _smoke_test_welded_output(window) -> None:
     }
     short = build_standard_row(
         {**common, "module_id": "W1", "length_mm": "600", "anchor_type": "焊接M型", "bolt_exposure_mm": "50",
+         "show_upper_board": True, "show_lower_board": True,
          "taper_enabled": True, "taper_type": "侧敲", "big_head_mm": "300", "small_head_mm": "220"},
         board_face_profile=BoardFaceProfile(features=[
             BoardFaceFeature(type=1, a=80, b=60, cut_depth_mm=75, cut_start="上夹板"),
@@ -59,9 +61,11 @@ def _smoke_test_welded_output(window) -> None:
     short_drawing = drawing.pages[0].modules[0].drawing
     upper_plate = short_drawing.upper_board_view
     if upper_plate is None or (80, 60) not in upper_plate.outline.points or not any(
-        leader.machining and leader.text == "上夹板切缺口" for leader in upper_plate.leaders
+        leader.machining and leader.text == "上夹板切缺口" for leader in short_drawing.board_view.leaders
     ):
         raise ValueError("上夹板缺口线或缺口引线缺失")
+    if short_drawing.lower_board_view is None or (0, 0) not in short_drawing.lower_board_view.outline.points:
+        raise ValueError("下夹板未单独保留完整轮廓")
     if not short_drawing.side_view or len(short_drawing.side_view.anchor_symbols) <= 2:
         raise ValueError("焊接 M 型侧视图缺少锚固件本体")
     long_board = drawing.pages[1].modules[0].drawing.board_view
@@ -73,6 +77,8 @@ def _smoke_test_welded_output(window) -> None:
     with TemporaryDirectory(prefix="refracdraft-welded-smoke-") as directory:
         dxf_path = export_dxf(drawing, Path(directory) / "mixed.dxf", reference)
         modelspace = ezdxf.readfile(dxf_path).modelspace()
+        if modelspace.doc.layers.get("LEADERS").color != LEADER_ACI:
+            raise ValueError("引线图层颜色未写入 DXF")
         dimensions = modelspace.query("DIMENSION")
         if not any(dim.dxf.dimstyle == "_20" and dim.get_measurement() == 4700 for dim in dimensions):
             raise ValueError("可编辑 DXF 中缺少 _20 样式或 4700 mm 实际尺寸")
@@ -155,6 +161,8 @@ def main() -> None:
             window.generate()
             if window._preview_pdf is None:
                 raise ValueError("标准版未生成与导出同源的 PDF 预览")
+            if not window.page_controls.isHidden():
+                raise ValueError("单页预览仍显示分页控件")
             window.resize(1500, 900)
             window.show()
             app.processEvents()
@@ -234,6 +242,13 @@ def main() -> None:
             plates = generator.build_module(split, split.modules[0])
             if not split.boards[0].show_upper_board or plates.upper_board_view is None:
                 raise ValueError("上夹板勾选未保存或未单独绘制上夹板")
+            if plates.lower_board_view is not None or plates.board_view.label != "夹板面":
+                raise ValueError("上夹板勾选影响了下夹板或夹板面总图")
+            table.item(row, COLUMN_INDEX["show_lower_board"]).setCheckState(Qt.CheckState.Checked)
+            both = window._collect_project()
+            if not both.boards[0].show_lower_board or generator.build_module(both, both.modules[0]).lower_board_view is None:
+                raise ValueError("下夹板未单独出图")
+            window.undo()
             window.undo()
             if window._collect_project().boards[0].show_upper_board:
                 raise ValueError("撤销上夹板勾选后状态仍启用")
@@ -266,6 +281,10 @@ def main() -> None:
                     cut.dimensions["a"].setText("0")
                     if not dialog.confirm.isEnabled() or dialog.profile.features[0].a != 0:
                         raise ValueError("斜切台阶未从弹窗读取 a=0")
+                    point, scale = dialog.preview._transform()
+                    zero, *remaining = dialog.preview.dimension_layout(point, scale)
+                    if zero[0] != "a" or zero[1] != zero[2] or [entry[0] for entry in remaining] != ["b", "c"]:
+                        raise ValueError("斜切台阶预览没有标出 a=0 所在的角点")
                     cut.kind.setCurrentIndex(2)
                     cut.dimensions["a"].setText("80")
                     cut.dimensions["b"].setText("60")
@@ -285,6 +304,12 @@ def main() -> None:
                     cut.mirror.click()
                     if not dialog.confirm.isEnabled() or dialog.preview.outline == initial_outline:
                         raise ValueError("异形夹板面示意图未随切口参数改变")
+                    point, scale = dialog.preview._transform()
+                    labels = list(dialog.preview.dimension_layout(point, scale))
+                    if [entry[0] for entry in labels] != list("abcd") or any(
+                        entry[-1].intersects(other[-1]) for i, entry in enumerate(labels) for other in labels[i + 1:]
+                    ):
+                        raise ValueError("异形窗口的 a、b、c、d 缺失或互相重叠")
                     for tab, start in ((1, "背面"), (2, "右端")):
                         dialog.faces.setCurrentIndex(tab)
                         dialog._add_cut()

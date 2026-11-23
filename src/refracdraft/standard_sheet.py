@@ -94,6 +94,7 @@ COLUMN_SPECS = (
     ColumnSpec("board_exists", "夹板", "check", width=50, group="board"),
     ColumnSpec("board_material", "夹板型号", "combo", BOARD_TYPES, 64, "board"),
     ColumnSpec("show_upper_board", "上夹板", "check", width=62, group="board"),
+    ColumnSpec("show_lower_board", "下夹板", "check", width=62, group="board"),
     ColumnSpec("anchor_enabled", "锚固件", "check", width=56, group="anchor"),
     ColumnSpec("anchor_position_mm", "位置", "number", (), 54, "anchor"),
     ColumnSpec("anchor_spacing_mm", "间距", "number", (), 54, "anchor"),
@@ -131,6 +132,7 @@ DEFAULT_ROW = {
     "board_exists": True,
     "board_material": "9厘",
     "show_upper_board": False,
+    "show_lower_board": False,
     "anchor_enabled": False,
     "anchor_position_mm": "150",
     "anchor_spacing_mm": "300",
@@ -355,6 +357,7 @@ def row_values_from_models(
         "board_exists": module_values.board_exists,
         "board_material": _without_suffix(module_values.board_material, "夹板"),
         "show_upper_board": board_model.show_upper_board,
+        "show_lower_board": board_model.show_lower_board,
         "anchor_enabled": anchor_values.enabled,
         "anchor_position_mm": f"{anchor_values.position_mm:g}",
         "anchor_spacing_mm": f"{anchor_values.spacing_mm:g}",
@@ -444,7 +447,8 @@ def build_standard_row(
         module.module_id,
         module_values.board_exists,
         module_values.board_material,
-        show_upper_board=bool(values.get("show_upper_board", base_board and base_board.show_upper_board)),
+        show_upper_board=bool(values["show_upper_board"]) if "show_upper_board" in values else None,
+        show_lower_board=bool(values["show_lower_board"]) if "show_lower_board" in values else None,
     )
     anchor = build_standard_anchor(
         base_anchor,

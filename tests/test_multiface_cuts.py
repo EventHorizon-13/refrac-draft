@@ -7,7 +7,7 @@ import pytest
 from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, CutFace, CutStart, Project
 from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.drawing.layout import DETAIL_VIEW_CLEARANCE_MM, view_bounds, view_placement
-from refracdraft.drawing.model import LAYER_MARK_ACI
+from refracdraft.drawing.model import INSERT_ANCHOR_ACI, LAYER_MARK_ACI, LEADER_ACI
 from refracdraft.drawing.multiface import machined_module, project_module
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.project import export_standard_excel
@@ -131,7 +131,7 @@ def test_no_anchor_layer_marks_survive_multiface_cuts_and_stop_at_the_chamfer(tm
     original = reference_library.stacked_front_lines(300, 300)
     assert len(module.front_view.layer_marks) == len(original) == 4
     assert module.front_view.layer_marks == original
-    assert not module.side_view.layer_marks
+    assert len(module.side_view.layer_marks) == 4
     assert any(line.points[0][0] == line.points[-1][0] for line in module.front_view.internal_lines)
 
     path = export_dxf(drawing, tmp_path / "layer-marks.dxf")
@@ -139,7 +139,7 @@ def test_no_anchor_layer_marks_survive_multiface_cuts_and_stop_at_the_chamfer(tm
     assert doc.layers.get("LAYER_MARKS").color == LAYER_MARK_ACI
     assert doc.layers.get("OUTLINE").color == 7
     marks = [entity for entity in doc.modelspace().query("LWPOLYLINE") if entity.dxf.layer == "LAYER_MARKS"]
-    assert len(marks) == 4
+    assert len(marks) == 8
 
     chamfer = front.model_copy(update={"a": 100, "b": 200, "mirror_x": True})
     clipped, _ = _project(chamfer, side, board, **sizes)
@@ -168,15 +168,21 @@ def test_layer_marks_follow_the_taper_and_keep_their_dxf_lengths(reference_libra
                 assert -40 / width < (d - b) / (c - a) < 0
 
 
-def test_multiface_automatically_draws_and_dimensions_each_plate(tmp_path):
+def test_multiface_preserves_the_board_view_and_can_add_both_plate_details(tmp_path):
     front = BoardFaceFeature(face=CutFace.FRONT, type=3, a=75, b=75)
     side = BoardFaceFeature(face=CutFace.SIDE, type=1, a=92, b=60, mirror_x=True)
     board = BoardFaceFeature(type=1, a=120, b=46)
-    project, _ = _project(front, side, board, thickness_mm="230", expansion_length_mm="300")
-    document = DrawingGenerator().generate(project)
+    sizes = {"thickness_mm": "230", "expansion_length_mm": "300"}
+    baseline, _ = _project(front, side, board, **sizes)
+    project, _ = _project(front, side, board, show_upper_board=True, show_lower_board=True, **sizes)
+    generator = DrawingGenerator()
+    original = generator.generate(baseline).pages[0].modules[0].drawing
+    assert original.board_details == ()
+    document = generator.generate(project)
     placed = document.pages[0].modules[0]
     upper = placed.drawing.upper_board_view
-    lower = placed.drawing.board_view
+    lower = placed.drawing.lower_board_view
+    assert placed.drawing.board_view == original.board_view
     assert (lower.note, upper.note) == ("下夹板", "上夹板")
     assert lower.outline.bounds == (0, 92, 300, 230)
     assert upper.outline.bounds == (75, 0, 300, 230)
@@ -185,9 +191,8 @@ def test_multiface_automatically_draws_and_dimensions_each_plate(tmp_path):
     assert {"225", "230", "45", "46"} <= {dim.label for dim in upper.dimensions}
     placement = view_placement(placed.drawing)
     assert not placement.detail_on_side
-    assert placement.detail_y + DETAIL_VIEW_CLEARANCE_MM <= min(
-        placement.board_y + view_bounds(lower)[1], placement.upper_board_y + view_bounds(upper)[1],
-    ) + 1e-6
+    for view, (_, y) in zip(placed.drawing.board_details, placement.board_detail_origins, strict=True):
+        assert placement.detail_y + DETAIL_VIEW_CLEARANCE_MM <= placement.board_y + y + view_bounds(view)[1] + 1e-6
     model = ezdxf.readfile(export_dxf(document, tmp_path / "plates.dxf")).modelspace()
     assert {"下夹板", "上夹板"} <= {item.dxf.text for item in model.query("TEXT")}
 
@@ -196,35 +201,72 @@ def test_multiface_automatically_draws_and_dimensions_each_plate(tmp_path):
 def test_board_blind_cut_only_changes_the_selected_plate(upper):
     cut = BoardFaceFeature(type=1, a=50, b=40, cut_depth_mm=60,
                            cut_start=CutStart.UPPER if upper else CutStart.LOWER)
-    project, _ = _project(cut)
+    project, _ = _project(cut, show_upper_board=True, show_lower_board=True)
     drawing = DrawingGenerator().build_module(project, project.modules[0])
-    machined = drawing.upper_board_view if upper else drawing.board_view
-    opposite = drawing.board_view if upper else drawing.upper_board_view
+    machined = drawing.upper_board_view if upper else drawing.lower_board_view
+    opposite = drawing.lower_board_view if upper else drawing.upper_board_view
     assert (50, 40) in machined.outline.points
     assert (0, 0) not in machined.outline.points
     assert (0, 0) in opposite.outline.points
-    assert [note.text for note in machined.leaders] == [f"{cut.cut_start.value}切缺口"]
-    assert not opposite.leaders
+    assert [note.text for note in drawing.board_view.leaders] == [f"{cut.cut_start.value}切缺口"]
+    assert not machined.leaders and not opposite.leaders
 
 
-def test_upper_board_checkbox_round_trips_and_can_draw_matching_plates(tmp_path):
+@pytest.mark.parametrize(("upper", "lower"), [(False, False), (True, False), (False, True), (True, True)])
+def test_board_checkboxes_round_trip_and_draw_only_selected_details(tmp_path, upper, lower):
     cut = BoardFaceFeature(type=1, a=50, b=40)
     project, _ = _project(cut)
     generator = DrawingGenerator()
     assert generator.build_module(project, project.modules[0]).upper_board_view is None
-    forced, _ = _project(cut, show_upper_board=True)
+    forced, _ = _project(cut, show_upper_board=upper, show_lower_board=lower)
     path = tmp_path / "checkbox.xlsx"
     export_standard_excel(forced, path)
     workbook_project = import_project_xlsx(path)
-    assert workbook_project.boards[0].show_upper_board
+    assert (workbook_project.boards[0].show_upper_board, workbook_project.boards[0].show_lower_board) == (upper, lower)
     restored = Project.model_validate_json(workbook_project.model_dump_json())
-    assert restored.boards[0].show_upper_board
+    assert (restored.boards[0].show_upper_board, restored.boards[0].show_lower_board) == (upper, lower)
     drawing = generator.build_module(restored, restored.modules[0])
-    assert drawing.upper_board_view.outline == drawing.board_view.outline
-    absent, _ = _project(cut, board_exists=False, show_upper_board=True)
+    assert (drawing.upper_board_view is not None, drawing.lower_board_view is not None) == (upper, lower)
+    assert all(view.outline == drawing.board_view.outline for view in drawing.board_details)
+    absent, _ = _project(cut, board_exists=False, show_upper_board=upper, show_lower_board=lower)
     drawing = generator.build_module(absent, absent.modules[0])
-    assert drawing.upper_board_view is None
+    assert not drawing.board_details
     assert drawing.board_view.note == "无夹板"
+
+
+def test_zero_leg_slanted_step_and_front_chamfer_keep_stock_and_plate_datums_distinct(tmp_path):
+    chamfer = BoardFaceFeature(face=CutFace.FRONT, type=3, a=150, b=150, rotation_deg=180)
+    slanted = BoardFaceFeature(type=4, a=0, b=400, c=120, cut_depth_mm=200)
+    project, profile = _project(chamfer, slanted, length_mm="600", thickness_mm="230",
+                                expansion_length_mm="300", show_upper_board=True, show_lower_board=True)
+    assert machined_module(project.modules[0], profile).volume() == pytest.approx(29050000)
+    document = DrawingGenerator().generate(project)
+    drawing = document.pages[0].modules[0].drawing
+    assert drawing.board_view.outline.bounds == (0, 0, 600, 230)
+    assert {"400", "120"} <= {dim.label for dim in drawing.board_view.dimensions}
+    assert drawing.upper_board_view.outline.bounds == (0, 0, 600, 230)
+    lower = drawing.lower_board_view
+    assert set(lower.outline.points) == {(0, 0), (200, 110), (450, 110), (450, 230), (0, 230)}
+    length, = (dim for dim in lower.dimensions if dim.label == "450" and dim.orientation == "horizontal")
+    assert (length.start, length.end) == ((0, 0), (450, 110))
+    assert all(dim.label != "0" for view in drawing.board_details for dim in view.dimensions)
+    model = ezdxf.readfile(export_dxf(document, tmp_path / "chamfer-step.dxf")).modelspace()
+    assert {leader.dxf.layer for leader in model.query("LEADER")} == {"LEADERS"}
+    assert model.doc.layers.get("LEADERS").color == LEADER_ACI
+
+
+@pytest.mark.parametrize("anchor_type", ["快插", "旁插"])
+def test_insert_anchor_symbols_share_the_distinct_color_across_views(anchor_type, reference_library, tmp_path):
+    project, _ = _project(taper_enabled=True, taper_type="侧敲", big_head_mm="300", small_head_mm="220",
+                          anchor_enabled=True, anchor_type=anchor_type)
+    document = DrawingGenerator(reference_library).generate(project)
+    drawing = document.pages[0].modules[0].drawing
+    for view in (drawing.front_view, drawing.side_view, drawing.board_view):
+        assert len(view.anchor_symbols) == len(view.anchor_symbol_colors) > 0
+        assert set(view.anchor_symbol_colors) == {INSERT_ANCHOR_ACI}
+        assert not view.layer_marks
+    model = ezdxf.readfile(export_dxf(document, tmp_path / "insert.dxf")).modelspace()
+    assert {item.dxf.color for item in model.query('LWPOLYLINE[layer=="ANCHORS"]')} == {INSERT_ANCHOR_ACI}
 
 
 def test_side_taper_pair_uses_available_space_below_views():

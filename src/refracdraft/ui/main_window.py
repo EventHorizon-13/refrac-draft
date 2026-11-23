@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from refracdraft.domain.models import Project
 from refracdraft.drawing.generator import DrawingGenerator
-from refracdraft.drawing.model import LAYER_MARK_ACI, LAYER_MARK_LINEWEIGHT, linetype_role
+from refracdraft.drawing.model import INSERT_ANCHOR_ACI, LAYER_MARK_ACI, LAYER_MARK_LINEWEIGHT, LEADER_ACI, linetype_role
 from refracdraft.drawing.layout import (
     DETAIL_LINE_HEIGHT_MM,
     DETAIL_TEXT_SIZE_MM,
@@ -35,6 +35,7 @@ from refracdraft.drawing.layout import (
     detail_box,
     detail_lines,
     detail_vertical_anchor,
+    sheet_footer_text,
     view_placement,
 )
 from refracdraft.exporters.dxf import export_dxf
@@ -50,7 +51,8 @@ MODULE_COLUMNS = [
     "side_right_height_mm", "board_face_width_mm", "board_face_height_mm", "board_face_template_id",
     "material", "density_kg_m3", "production_quantity", "source_note",
 ]
-BOARD_COLUMNS = ["module_id", "exists", "material", "thickness_mm", "opening_mode", "custom_opening", "source_note"]
+BOARD_COLUMNS = ["module_id", "exists", "material", "thickness_mm", "opening_mode", "custom_opening", "source_note",
+                 "show_upper_board", "show_lower_board"]
 ANCHOR_COLUMNS = [
     "module_id", "exists", "anchor_type", "material", "thread_spec", "diameter_mm", "length_mm",
     "embedment_depth_mm", "bolt_exposure_mm", "count", "layout_mode", "positions", "edge_offset_mm", "spacing_mm", "hose_spec",
@@ -59,7 +61,8 @@ ANCHOR_COLUMNS = [
 MODULE_LABELS = ["模块编号", "模块名称", "结构类型", "几何类型", "正面宽度(mm)", "正面高度(mm)", "膨胀长度(mm)",
                  "正面左高(mm)", "正面右高(mm)", "侧面长度(mm)", "侧面左高(mm)", "侧面右高(mm)",
                  "夹板面宽(mm)", "夹板面高(mm)", "夹板面类型", "模块材质", "容重(kg/m³)", "生产数量", "备注"]
-BOARD_LABELS = ["模块编号", "有无夹板", "夹板材质", "夹板厚度(mm)", "开口模式", "自定义开口坐标(JSON)", "备注"]
+BOARD_LABELS = ["模块编号", "有无夹板", "夹板材质", "夹板厚度(mm)", "开口模式", "自定义开口坐标(JSON)", "备注",
+                "上夹板", "下夹板"]
 ANCHOR_LABELS = ["模块编号", "有无锚固件", "锚固件类型", "锚固件材质", "螺纹规格", "直径(mm)",
                  "长度(mm)", "嵌入深度(mm)", "螺栓外露长度(mm)", "数量", "布置方式", "坐标(JSON)", "端部留边(mm)", "间距(mm)", "胶管规格",
                  "标注水平定位尺寸", "标注垂直定位尺寸", "备注"]
@@ -132,9 +135,10 @@ class DrawingPreview(QGraphicsView):
                 QPen(QColor("#222222"), 0.2),
             )
         scene.addRect(168.5, 172, 121.5, 31, QPen(QColor("#111111"), 0.2), QBrush(Qt.BrushStyle.NoBrush))
-        if document.filename_label:
+        footer = sheet_footer_text(document, page.page_number)
+        if footer:
             x, y = FILENAME_LABEL_POSITION
-            item = self._add_text(scene, document.filename_label, x, y, FILENAME_LABEL_HEIGHT_MM, "#111111")
+            item = self._add_text(scene, footer, x, y, FILENAME_LABEL_HEIGHT_MM, "#111111")
             width = item.boundingRect().width() * item.scale()
             if width > FILENAME_LABEL_WIDTH_MM:
                 item.setTransform(QTransform.fromScale(FILENAME_LABEL_WIDTH_MM / width, 1.0))
@@ -158,9 +162,8 @@ class DrawingPreview(QGraphicsView):
                 drawing.module_id,
                 denominator,
             )
-            if drawing.upper_board_view is not None:
-                upper = (px + placement.upper_board_x, placement.upper_board_y)
-                self._draw_view(scene, drawing.upper_board_view, upper, drawing.module_id, denominator)
+            for view, (x, y) in zip(drawing.board_details, placement.board_detail_origins, strict=True):
+                self._draw_view(scene, view, (px + x, placement.board_y + y), drawing.module_id, denominator)
             if drawing.details:
                 left, available_width = detail_box(placed)
                 anchor_y, align_bottom = detail_vertical_anchor(placed)
@@ -235,7 +238,7 @@ class DrawingPreview(QGraphicsView):
         for leader in view.leaders:
             x, y = leader.tip
             start_x, start_y = ox + x * scale, oy + y * scale
-            pen = QPen(QColor("#111111"), 0.15)
+            pen = QPen(QColor(*aci2rgb(LEADER_ACI)), 0.15)
             for path in leader.paths_mm:
                 points = [(start_x + u, start_y + v) for u, v in path]
                 for (x1, y1), (x2, y2) in zip(points, points[1:]):
@@ -264,7 +267,8 @@ class DrawingPreview(QGraphicsView):
             scene.addLine(ox + x1 * scale, 210 - oy - y1 * scale,
                           ox + x2 * scale, 210 - oy - y2 * scale, hidden_pen)
         aci_colors = {1: "#ff0000", 2: "#ffff00", 3: "#00ff00", 4: "#00ffff", 5: "#0000ff",
-                      6: "#ff00ff", 7: "#111111", 8: "#808080", 9: "#c0c0c0"}
+                      6: "#ff00ff", 7: "#111111", 8: "#808080", 9: "#c0c0c0",
+                      INSERT_ANCHOR_ACI: QColor(*aci2rgb(INSERT_ANCHOR_ACI)).name()}
         for symbol_index, symbol in enumerate(view.anchor_symbols):
             p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in symbol.flattened_points()]
             aci = view.anchor_symbol_colors[symbol_index] if symbol_index < len(view.anchor_symbol_colors) else 5
@@ -381,7 +385,9 @@ class MainWindow(QMainWindow):
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        page_row = QHBoxLayout()
+        self.page_controls = QWidget()
+        page_row = QHBoxLayout(self.page_controls)
+        page_row.setContentsMargins(0, 0, 0, 0)
         page_row.addWidget(QLabel("预览页"))
         self.page_spin = PageSpinBox()
         self.page_spin.setMinimum(1)
@@ -389,7 +395,8 @@ class MainWindow(QMainWindow):
         self.page_spin.valueChanged.connect(self._show_selected_page)
         page_row.addWidget(self.page_spin)
         page_row.addStretch(1)
-        right_layout.addLayout(page_row)
+        right_layout.addWidget(self.page_controls)
+        self.page_controls.hide()
         self.preview = DrawingPreview()
         right_layout.addWidget(self.preview)
 
@@ -459,6 +466,7 @@ class MainWindow(QMainWindow):
         self._add_empty_rows()
         self.drawing_document = None
         self.preview.scene().clear()
+        self.page_controls.hide()
 
     def open_json(self):
         path, _ = QFileDialog.getOpenFileName(self, "打开项目", "", "RefracDraft 项目 (*.json)")
@@ -538,6 +546,7 @@ class MainWindow(QMainWindow):
             self.drawing_document = DrawingGenerator(library).generate(self.project)
             self.page_spin.setMaximum(max(1, len(self.drawing_document.pages)))
             self.page_spin.setValue(1)
+            self.page_controls.setVisible(len(self.drawing_document.pages) > 1)
             self.preview.show_page(self.drawing_document, 0)
             warnings = "\n".join(self.drawing_document.warnings)
             self.statusBar().showMessage("图纸已生成" + (f"；警告：{warnings}" if warnings else ""))

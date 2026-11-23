@@ -63,7 +63,9 @@ def test_exposure_and_blind_cut_round_trip_and_depth_controls_projection(tmp_pat
 
     for side, depth in ((CutStart.LOWER, 80), (CutStart.UPPER, 120)):
         cut_profile = BoardFaceProfile(features=(cut.model_copy(update={"cut_depth_mm": depth, "cut_start": side}),))
-        body, board, _ = build_standard_row(DEFAULT_ROW, board_face_profile=cut_profile)
+        body, board, _ = build_standard_row(
+            dict(DEFAULT_ROW, show_upper_board=True, show_lower_board=True), board_face_profile=cut_profile,
+        )
         drawn = DrawingGenerator().build_module(Project(modules=[body], boards=[board]), body)
         view = drawn.front_view
         projected = {line.points for line in view.internal_lines + view.hidden_lines}
@@ -72,9 +74,13 @@ def test_exposure_and_blind_cut_round_trip_and_depth_controls_projection(tmp_pat
         stop = top if side == CutStart.LOWER else bottom
         assert ((0, stop), (120, stop)) in projected
         assert ((120, 0), (120, 300)) not in projected
-        board_view = drawn.upper_board_view if side == CutStart.UPPER else drawn.board_view
-        assert (0, 0) not in board_view.outline.points
-        assert (0, 65) in board_view.outline.points and (120, 65) in board_view.outline.points
+        board_view = drawn.board_view
+        assert (0, 0) in board_view.outline.points
+        walls = board_view.internal_lines if side == CutStart.UPPER else board_view.hidden_lines
+        assert ((0, 65), (120, 65)) in [wall.points for wall in walls]
+        plate = drawn.upper_board_view if side == CutStart.UPPER else drawn.lower_board_view
+        assert (0, 0) not in plate.outline.points
+        assert (0, 65) in plate.outline.points and (120, 65) in plate.outline.points
         note, = board_view.leaders
         assert note.machining and note.text == f"{side.value}切缺口"
         arranged, = place_cut_notes(board_view, 10, body.module_id).leaders

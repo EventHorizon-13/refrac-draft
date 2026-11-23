@@ -5,14 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt
-from PySide6.QtGui import QPainter, QPen, QPolygonF
+from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QScrollArea, QTabBar, QVBoxLayout, QWidget,
 )
 
 from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, CutFace, ModuleParameters
-from refracdraft.drawing.board_profiles import build_board_profile, chamfer_legs, profiles_by_face
+from refracdraft.drawing.board_profiles import board_cut_edges, build_board_profile, chamfer_legs, profiles_by_face
 from refracdraft.drawing.multiface import machined_module
 from refracdraft.drawing.model import Dimension
 from refracdraft.geometry.primitives import Polyline, rectangle
@@ -20,6 +20,16 @@ from refracdraft.geometry.primitives import Polyline, rectangle
 
 CUT_NAMES = ("类型 1 · 台阶", "类型 2 · 凹槽", "类型 3 · 斜切角", "类型 4 · 斜切台阶")
 CUT_DIMENSIONS = ("ab", "abcd", "ab", "abc")
+DIMENSION_COLORS = {
+    "a": ("#17669f", "#83c5ff"),
+    "b": ("#925713", "#ffc37e"),
+    "c": ("#1a7650", "#7fdfaf"),
+    "d": ("#8346a1", "#e4a9ff"),
+}
+
+
+def _dimension_color(letter: str, palette) -> QColor:
+    return QColor(DIMENSION_COLORS[letter][int(palette.base().color().lightness() < 128)])
 
 
 class OutlinePreview(QWidget):
@@ -41,11 +51,7 @@ class OutlinePreview(QWidget):
         lane = min(start.x(), end.x()) + offset
         return QPointF(lane, start.y()), QPointF(lane, end.y())
 
-    def paintEvent(self, event) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        palette = self.palette()
-        painter.fillRect(self.rect(), palette.base())
+    def _transform(self):
         scale = min((self.width() - 120) / self.frame_width, (self.height() - 90) / self.frame_height)
         left = (self.width() - self.frame_width * scale) / 2
         bottom = (self.height() + self.frame_height * scale) / 2
@@ -53,6 +59,44 @@ class OutlinePreview(QWidget):
         def point(x: float, y: float) -> QPointF:
             return QPointF(left + x * scale, bottom - y * scale)
 
+        return point, scale
+
+    def dimension_layout(self, point, scale):
+        size = max(16.0, self.fontMetrics().height() + 2.0)
+        gap = size + 6.0
+        viewport = QRectF(self.rect()).adjusted(2, 2, -2, -2)
+        occupied = []
+        lanes = {"horizontal": [], "vertical": []}
+        for letter, dim in self.dimensions:
+            start, end = point(*dim.start), point(*dim.end)
+            first, last = self.dimension_endpoints(dim, start, end, scale)
+            horizontal = dim.orientation == "horizontal"
+            normal = QPointF(0, 1) if horizontal else QPointF(1, 0)
+            lane = first.y() if horizontal else first.x()
+            direction = -1 if dim.offset >= 0 else 1
+            label_width = max(size, self.fontMetrics().horizontalAdvance(f"{letter}=0") + 4) if start == end else size
+            normal_size = size if horizontal else label_width
+            center = (first + last) / 2 + normal * direction * (normal_size / 2 + 3)
+            offsets = [0.0]
+            for step in range(1, 1 + int((self.height() if horizontal else self.width()) / gap)):
+                offsets.extend((step * gap * direction, -step * gap * direction))
+            for offset in offsets:
+                shift = normal * offset
+                label = QRectF(center.x() - label_width / 2, center.y() - size / 2, label_width, size).translated(shift)
+                if (not viewport.contains(label) or any(label.intersects(other) for other in occupied)
+                    or any(abs(lane + offset - other) < gap for other in lanes[dim.orientation])):
+                    continue
+                occupied.append(label.adjusted(-2, -2, 2, 2))
+                lanes[dim.orientation].append(lane + offset)
+                yield letter, start, end, first + shift, last + shift, label
+                break
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        palette = self.palette()
+        painter.fillRect(self.rect(), palette.base())
+        point, scale = self._transform()
         painter.setPen(QPen(palette.mid().color(), 1, Qt.PenStyle.DashLine))
         painter.drawRect(QRectF(point(0, self.frame_height), point(self.frame_width, 0)))
         if self.outline is None:
@@ -62,22 +106,20 @@ class OutlinePreview(QWidget):
         painter.setBrush(fill)
         painter.setPen(QPen(palette.text().color(), 2))
         painter.drawPolygon(QPolygonF([point(x, y) for x, y in self.outline.points]))
-        painter.setPen(QPen(palette.text().color(), 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        for letter, dim in self.dimensions:
-            start, end = point(*dim.start), point(*dim.end)
-            first, last = self.dimension_endpoints(dim, start, end, scale)
-            if dim.orientation == "horizontal":
-                text_shift = QPointF(0, -10)
-            else:
-                text_shift = QPointF(-12 if dim.offset > 0 else 12, 0)
+        dimensions = tuple(self.dimension_layout(point, scale))
+        for letter, start, end, first, last, _ in dimensions:
+            painter.setPen(QPen(_dimension_color(letter, palette), 1))
             painter.drawLine(start, first)
             painter.drawLine(end, last)
             painter.drawLine(first, last)
-            center = (first + last) / 2 + text_shift
-            label_rect = QRectF(center.x() - 8, center.y() - 8, 16, 16)
+            tick = QPointF(0, 3) if first.y() == last.y() else QPointF(3, 0)
+            painter.drawLine(first - tick, first + tick)
+            painter.drawLine(last - tick, last + tick)
+        for letter, start, end, _, _, label_rect in dimensions:
+            painter.setPen(_dimension_color(letter, palette))
             painter.fillRect(label_rect, palette.base())
-            painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, letter)
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, f"{letter}=0" if start == end else letter)
 
 
 @dataclass
@@ -154,7 +196,10 @@ class BoardFaceDialog(QDialog):
         self.grid = QGridLayout(grid_widget)
         self.grid.setAlignment(Qt.AlignmentFlag.AlignTop)
         for column, label in enumerate(("轮廓类型", "a", "b", "c", "d", "剪切深度", "起切面", "旋转", "镜像", "")):
-            self.grid.addWidget(QLabel(label), 0, column)
+            header = QLabel(label)
+            if label in DIMENSION_COLORS:
+                header.setStyleSheet(f"color: {_dimension_color(label, self.palette()).name()}; font-weight: 600;")
+            self.grid.addWidget(header, 0, column)
         for column in range(1, 5):
             self.grid.setColumnStretch(column, 1)
         scroll.setWidget(grid_widget)
@@ -349,6 +394,14 @@ class BoardFaceDialog(QDialog):
                     start = sum(map(len, key_groups[:active_index]))
                     letters = key_groups[active_index]
                     self.preview.dimensions = tuple(zip(letters, dimensions[start:start + len(letters)]))
+                    feature = profile.features[active_index]
+                    if feature.type == 4 and feature.a == 0:
+                        corner = next(point for edge in board_cut_edges(face_width, face_height, feature)
+                                      for point in edge if point[0] in (0, face_width) and point[1] in (0, face_height))
+                        horizontal = feature.rotation_deg % 180 == 0
+                        side = (corner[1] == face_height) if horizontal else (corner[0] == 0)
+                        marker = Dimension(corner, corner, "0", "horizontal" if horizontal else "vertical", 26 if side else -26)
+                        self.preview.dimensions = (("a", marker), *self.preview.dimensions)
         except ValueError as exc:
             self.status.setText(str(exc))
             self.confirm.setEnabled(False)
