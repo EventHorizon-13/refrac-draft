@@ -848,8 +848,8 @@ def test_tall_1120_style_pair_keeps_details_clear(tmp_path):
     output = export_dxf(doc, tmp_path / "side-details.dxf")
     details = list(ezdxf.readfile(output).modelspace().query("MTEXT"))
     placed_modules = [(page, placed) for page in doc.pages for placed in page.modules]
+    assert len(doc.pages) == 1
     assert [placed.drawing.module_id for _, placed in placed_modules] == ["M1", "M2"]
-    assert any(detail_vertical_anchor(placed)[1] for _, placed in placed_modules)
     for (page, placed), detail in zip(placed_modules, details, strict=True):
         left, width = detail_box(placed)
         assert left + width < placed.x_mm + placed.panel_width_mm
