@@ -62,6 +62,7 @@ DIMENSION_OVERRIDE = {
     "dimjust": 0,
     "dimtih": 0,
     "dimtoh": 0,
+    "dimtix": 1,
 }
 DIMENSION_FALLBACK = {
     "dimscale": 20.0,

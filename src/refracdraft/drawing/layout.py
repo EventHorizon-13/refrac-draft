@@ -186,7 +186,7 @@ def place_machining_dimensions(view: ViewDrawing, denominator: int) -> ViewDrawi
 
 
 def _space_dimension_lanes(view: ViewDrawing, denominator: int, anchor_bounds) -> ViewDrawing:
-    """Use common lanes for adjoining sizes and separate overlapping spans."""
+    """Align compatible spans and place wider overlapping measurements farther out."""
     bounds = view.outline.bounds
     scale = annotation_factor(denominator) * denominator
     clearance = DIMENSION_LANE_GAP_MM * scale
@@ -198,7 +198,9 @@ def _space_dimension_lanes(view: ViewDrawing, denominator: int, anchor_bounds) -
             if dim.orientation == orientation:
                 lo, hi = sorted((dim.start[axis], dim.end[axis]))
                 label_low, label_high = _dimension_label_span(lo, hi, dim.label, scale)
-                extents[index] = (lo, hi, min(lo, label_low), max(hi, label_high))
+                arrow_extension = 2 * DIMENSION_ARROW_SIZE_MM * denominator
+                extra = arrow_extension if hi - lo < arrow_extension else 0.0
+                extents[index] = (lo, hi, min(lo - extra, label_low), max(hi + extra, label_high))
 
         for sign, boundary in ((-1, bounds[cross]), (1, bounds[cross + 2])):
             distance = {i: sign * (dimensions[i].line_position - boundary) for i in extents}
@@ -224,25 +226,37 @@ def _space_dimension_lanes(view: ViewDrawing, denominator: int, anchor_bounds) -
                 else:
                     chain.append(i)
 
-            placed = {}
-            for chain in chains:
-                conflicts = [lane for j, lane in (inside | placed).items()
-                             if any(overlaps(i, j) for i in chain)]
-                text_faces_outline = (axis == 0 and sign < 0) or (axis == 1 and sign > 0)
-                edge_gap = DIMENSION_TEXT_EDGE_GAP_MM if text_faces_outline else DIMENSION_EDGE_GAP_MM
+            def chain_size(chain: list[int]) -> tuple[float, int, float]:
+                first = min(extents[i][0] for i in chain)
+                last = max(extents[i][1] for i in chain)
+                return round(last - first, 6), -len(chain), first
+
+            rows: list[list[int]] = []
+            for chain in sorted(chains, key=chain_size):
+                outer_row = max((row for row, items in enumerate(rows)
+                                 if any(overlaps(i, j) for i in chain for j in items)), default=-1) + 1
+                if outer_row == len(rows):
+                    rows.append([])
+                rows[outer_row].extend(chain)
+
+            text_faces_outline = (axis == 0 and sign < 0) or (axis == 1 and sign > 0)
+            edge_gap = DIMENSION_TEXT_EDGE_GAP_MM if text_faces_outline else DIMENSION_EDGE_GAP_MM
+            previous = (edge_gap - DIMENSION_LANE_GAP_MM) * scale
+            for row in rows:
+                conflicts = [lane for j, lane in inside.items() if any(overlaps(i, j) for i in row)]
                 overhang = max(0.0, max((
                     sign * (box[cross + (2 if sign > 0 else 0)] - boundary)
                     for box in anchor_bounds
-                    if any(extents[i][2] < box[axis + 2] and extents[i][3] > box[axis] for i in chain)
+                    if any(extents[i][2] < box[axis + 2] and extents[i][3] > box[axis] for i in row)
                 ), default=0.0))
-                lane = overhang + edge_gap * scale
+                lane = max(overhang + edge_gap * scale, previous + clearance)
                 while any(abs(lane - other) < clearance - 1e-6 for other in conflicts):
                     lane = max(other + clearance for other in conflicts if abs(lane - other) < clearance - 1e-6)
-                for i in chain:
+                for i in row:
                     dim = dimensions[i]
-                    placed[i] = lane
                     shift = boundary + sign * lane - dim.line_position
                     dimensions[i] = replace(dim, offset=dim.offset + shift * (1 if axis == 0 else -1))
+                previous = lane
     return replace(view, dimensions=tuple(dimensions))
 
 
@@ -261,9 +275,7 @@ def _dimension_plot_lines(dim: Dimension, denominator: int):
 
 
 def _dimension_label_span(low: float, high: float, label: str, scale: float) -> tuple[float, float]:
-    pad = max(1.6, len(label) * 1.05 + 0.35) * scale
-    if high - low < 2 * (pad + DIMENSION_ARROW_SIZE_MM * scale):
-        return low - 2 * pad, high + 2 * pad
+    pad = max(1.6, len(label) + 0.25) * scale
     center = (low + high) / 2
     return center - pad, center + pad
 
@@ -436,6 +448,9 @@ def place_cut_notes(view: ViewDrawing, denominator: int, module_id: str) -> View
 def side_view_offset(drawing: ModuleDrawing) -> float:
     if drawing.side_view is None:
         return 0.0
+    column = _paired_column_x(drawing)
+    if column is not None:
+        return column
     denominator = drawing.scale_denominator
     return max(
         drawing.front_view.outline.bounds[2] / denominator + SIDE_VIEW_GAP_MM,
@@ -449,12 +464,35 @@ def _content_floor(drawing: ModuleDrawing) -> float:
     return TITLE_BLOCK_TOP_MM + DETAIL_TITLE_CLEARANCE_MM
 
 
+def _paired_column_x(drawing: ModuleDrawing) -> float | None:
+    """Fit four annotated views in two aligned columns when A4 width allows it."""
+    details = drawing.board_details
+    if drawing.side_view is None and len(details) == 2:
+        top_right, bottom_right = details
+    elif drawing.side_view is not None and len(details) == 1:
+        top_right, bottom_right = drawing.side_view, details[0]
+    else:
+        return None
+    denominator = drawing.scale_denominator
+    front, other, board, plate = (view_bounds(view, denominator)
+                                  for view in (drawing.front_view, top_right, drawing.board_view, bottom_right))
+    column = max(front[2] - other[0], board[2] - plate[0]) + VIEW_CLEARANCE_MM
+    margin = max(PANEL_INNER_MARGIN_MM, 0.5 - min(front[0], board[0]))
+    if column + max(other[2], plate[2]) + margin + PANEL_INNER_MARGIN_MM > PAGE_CONTENT_WIDTH_MM:
+        return None
+    return column
+
+
 def _board_rows(drawing: ModuleDrawing) -> tuple[tuple[tuple[float, float], ...], tuple[float, float, float, float]]:
     denominator = drawing.scale_denominator
     left, bottom, right, top = bounds = view_bounds(drawing.board_view, denominator)
     details = drawing.board_details
     if not details:
         return (), bounds
+    column = _paired_column_x(drawing)
+    if column is not None:
+        x1, y1, x2, y2 = view_bounds(details[-1], denominator)
+        return ((column, 0.0),), (min(left, column + x1), min(bottom, y1), max(right, column + x2), max(top, y2))
     front_left = view_bounds(drawing.front_view, denominator)[0]
     origins = []
     row_right = right
@@ -476,8 +514,11 @@ def _board_rows(drawing: ModuleDrawing) -> tuple[tuple[tuple[float, float], ...]
 def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
     denominator = drawing.scale_denominator
     upper = [view_bounds(drawing.front_view, denominator)]
+    paired_upper = _paired_column_x(drawing) if drawing.side_view is None else None
     if drawing.side_view is not None:
-        upper.append(view_bounds(drawing.side_view, drawing.scale_denominator))
+        upper.append(view_bounds(drawing.side_view, denominator))
+    elif paired_upper is not None:
+        upper.append(view_bounds(drawing.board_details[0], denominator))
     upper_bottom = min(box[1] for box in upper)
     upper_top = max(box[3] for box in upper)
     board_details, (_, board_bottom, _, board_top) = _board_rows(drawing)
@@ -500,6 +541,8 @@ def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
         board_y = min(floor + (available - occupied) / 2, ceiling - view_height) - board_bottom
         detail_y = max(floor, board_y + outline_bottom)
         top_y = board_y + board_top + VIEW_CLEARANCE_MM + view_gap_extra - upper_bottom
+        if paired_upper is not None:
+            board_details = ((paired_upper, top_y - board_y), *board_details)
         if drawing.side_view is not None:
             below_side = top_y + upper[1][1] - DETAIL_VIEW_CLEARANCE_MM - detail_height
             right_of_board = _front_board_right(drawing) + SIDE_DETAIL_GAP_MM
@@ -517,6 +560,8 @@ def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
     detail_y = floor + margin + detail_height
     board_y = floor + margin + below_height + detail_gap_extra - board_bottom
     top_y = board_y + board_top + below_gap + view_gap_extra - upper_bottom
+    if paired_upper is not None:
+        board_details = ((paired_upper, top_y - board_y), *board_details)
     return ViewPlacement(top_y, board_y, side_x, detail_y, False, board_detail_origins=board_details)
 
 
@@ -567,8 +612,12 @@ def _preferred_detail_width(drawing: ModuleDrawing, measure: Callable[[str], flo
 
 
 def _front_board_right(drawing: ModuleDrawing) -> float:
-    return max(view_bounds(drawing.front_view, drawing.scale_denominator)[2],
-               _board_rows(drawing)[1][2])
+    denominator = drawing.scale_denominator
+    right = max(view_bounds(drawing.front_view, denominator)[2], _board_rows(drawing)[1][2])
+    paired_upper = _paired_column_x(drawing) if drawing.side_view is None else None
+    if paired_upper is not None:
+        right = max(right, paired_upper + view_bounds(drawing.board_details[0], denominator)[2])
+    return right
 
 
 def _drawing_right(drawing: ModuleDrawing) -> float:
@@ -593,7 +642,7 @@ def geometry_width(drawing: ModuleDrawing, measure: Callable[[str], float] | Non
     detail_x = view_placement(drawing).detail_x
     if detail_x is not None:
         return max(_drawing_right(drawing), detail_x + _side_detail_width(drawing, detail_x, measure))
-    return max(width, _board_rows(drawing)[1][2]) if drawing.board_details else width
+    return max(width, _drawing_right(drawing)) if drawing.board_details else width
 
 
 def _panel_inner_margin(drawing: ModuleDrawing) -> float:

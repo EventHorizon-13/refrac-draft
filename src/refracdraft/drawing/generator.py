@@ -7,6 +7,7 @@ from ezdxf.math import Vec2
 from refracdraft.domain.models import (
     AnchorParameters,
     AnchorType,
+    BoardFaceFeature,
     BoardFaceProfile,
     CutFace,
     CutStart,
@@ -344,9 +345,11 @@ def _place_annotations(drawing: ModuleDrawing, denominator: int) -> ModuleDrawin
             place_machining_dimensions(drawing.front_view, denominator), denominator, drawing.module_id,
         ),
         board_view=place_cut_notes(place_bolt_note(board, denominator), denominator, drawing.module_id),
-        upper_board_view=place_machining_dimensions(drawing.upper_board_view, denominator)
+        upper_board_view=place_cut_notes(place_machining_dimensions(drawing.upper_board_view, denominator),
+                                        denominator, drawing.module_id)
         if drawing.upper_board_view is not None else None,
-        lower_board_view=place_machining_dimensions(drawing.lower_board_view, denominator)
+        lower_board_view=place_cut_notes(place_machining_dimensions(drawing.lower_board_view, denominator),
+                                        denominator, drawing.module_id)
         if drawing.lower_board_view is not None else None,
         side_view=place_cut_notes(
             place_machining_dimensions(drawing.side_view, denominator), denominator, drawing.module_id,
@@ -355,16 +358,26 @@ def _place_annotations(drawing: ModuleDrawing, denominator: int) -> ModuleDrawin
     )
 
 
-def _cut_annotations(module, face: CutFace, profile: BoardFaceProfile | None, projection: Projection):
+def _cut_annotations(module, face: CutFace, profile: BoardFaceProfile | None, projection: Projection, *,
+                     omitted_starts: tuple[CutStart, ...] = ()):
     if profile is None:
         return (), ()
     width, height, _ = module.cut_face_dimensions(face)
     retained, dimensions = build_board_profile(width, height, profile)
     dimensions += machining_dimensions(retained, dimensions)
+    cuts = tuple(cut for cut in profile.features if cut.cut_start not in omitted_starts)
+    return dimensions, _blind_cut_notes(module, face, cuts, projection)
+
+
+def _blind_cut_notes(module, face: CutFace, cuts: tuple[BoardFaceFeature, ...], projection: Projection, *,
+                     depth_only: bool = False) -> tuple[LeaderNote, ...]:
+    width, height, _ = module.cut_face_dimensions(face)
     notes = []
     edges = [(Vec2(a), Vec2(b)) for path in (projection.outline, *projection.holes, *projection.visible, *projection.hidden)
              for a, b in zip(path.points, path.points[1:] + path.points[:1] if path.closed else path.points[1:])]
-    for cut in profile.features:
+    if not edges:
+        return ()
+    for cut in cuts:
         if is_through_cut(module, cut):
             continue
         matches = []
@@ -386,8 +399,15 @@ def _cut_annotations(module, face: CutFace, profile: BoardFaceProfile | None, pr
             a, b = max(cut_edges, key=lambda edge: (Vec2(edge[1]) - Vec2(edge[0])).magnitude)
             target = Vec2(a).lerp(Vec2(b))
             tip = min((p.lerp(q) for p, q in edges), key=lambda point: (point - target).magnitude)
-        notes.append(LeaderNote(tuple(tip), f"{cut.cut_start.value}起切 深{cut.cut_depth_mm:g}", (4, 6), machining=True))
-    return dimensions, tuple(notes)
+        caption = f"剪切深{cut.cut_depth_mm:g}" if depth_only else f"{cut.cut_start.value}起切 深{cut.cut_depth_mm:g}"
+        notes.append(LeaderNote(tuple(tip), caption, (4, 6), machining=True))
+    return tuple(notes)
+
+
+def _annotate_plate_depths(view: ViewDrawing, module, profile: BoardFaceProfile, start: CutStart) -> ViewDrawing:
+    cuts = tuple(cut for cut in profile.features if cut.cut_start == start)
+    projection = Projection(view.outline, view.cutouts, (), ())
+    return replace(view, leaders=_blind_cut_notes(module, CutFace.BOARD, cuts, projection, depth_only=True))
 
 
 def _machined_view(view: ViewDrawing, projection: Projection, dimensions, notes) -> ViewDrawing:
@@ -433,6 +453,8 @@ class DrawingGenerator:
         board = project.board_for(module.module_id)
         draw_upper = board.exists and board.show_upper_board
         draw_lower = board.exists and board.show_lower_board
+        detailed_starts = tuple(start for start, enabled in ((CutStart.UPPER, draw_upper), (CutStart.LOWER, draw_lower))
+                                if enabled)
         anchor = project.anchor_for(module.module_id)
         warnings: list[str] = []
         for note in (module.source_note, board.source_note, anchor.source_note):
@@ -633,7 +655,9 @@ class DrawingGenerator:
             board_holes = board_projection.holes
             cut_lines.extend(board_projection.visible)
             hidden_cut_lines.extend(board_projection.hidden)
-            profile_dimensions, notes = _cut_annotations(module, CutFace.BOARD, faces.get(CutFace.BOARD), board_projection)
+            profile_dimensions, notes = _cut_annotations(
+                module, CutFace.BOARD, faces.get(CutFace.BOARD), board_projection, omitted_starts=detailed_starts,
+            )
             cut_notes.extend(notes)
             if draw_upper:
                 upper_profile = plate_contours(solid, module, upper=True)
@@ -679,7 +703,7 @@ class DrawingGenerator:
                         lines = cut_lines if feature.cut_start == CutStart.UPPER else hidden_cut_lines
                         edges = board_cut_edges(width, height, feature)
                         lines.extend(Polyline(edge, closed=False) for edge in edges)
-                        if board.exists and edges:
+                        if board.exists and edges and feature.cut_start not in detailed_starts:
                             start, end = max(edges, key=lambda edge: sum(
                                 (a - b) ** 2 for a, b in zip(*edge)
                             ))
@@ -917,6 +941,12 @@ class DrawingGenerator:
             "下夹板", lower_profile if lower_profile is not None else nominal_plate, board_outline,
             openings=tuple(cutouts[len(board_holes):]),
         ) if draw_lower else None
+        board_profile = faces.get(CutFace.BOARD)
+        if solid is not None and board_profile is not None:
+            if upper_board_view is not None:
+                upper_board_view = _annotate_plate_depths(upper_board_view, module, board_profile, CutStart.UPPER)
+            if lower_board_view is not None:
+                lower_board_view = _annotate_plate_depths(lower_board_view, module, board_profile, CutStart.LOWER)
         return ModuleDrawing(
             module.module_id, module.name or module.structure_type.value,
             _details(module, board, anchor),

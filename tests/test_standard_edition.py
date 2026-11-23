@@ -756,7 +756,7 @@ def test_legacy_excel_resolves_associations_and_keeps_custom_values(tmp_path):
     assert anchor_length_options("菱形") == ("230", "200", "180", "150", "120")
 
 
-def test_measured_side_details_pack_the_450mm_pair_without_compressing_text(tmp_path):
+def test_measured_details_pack_the_450mm_pair_without_compressing_text(tmp_path):
     rows = [build_standard_row(
         dict(DEFAULT_ROW, module_id=f"M{index}", length_mm=str(length), thickness_mm="450",
              expansion_length_mm=str(height), anchor_enabled=True, anchor_count=str(index),
@@ -774,7 +774,12 @@ def test_measured_side_details_pack_the_450mm_pair_without_compressing_text(tmp_
     )
     page, = drawing.pages
     assert [placed.drawing.module_id for placed in page.modules] == ["M1", "M2"]
-    assert all(detail_vertical_anchor(placed)[1] for placed in page.modules)
+    assert any(not detail_vertical_anchor(placed)[1] for placed in page.modules)
+    for placed in page.modules:
+        module = placed.drawing
+        layout = view_placement(module)
+        if not layout.detail_on_side:
+            assert layout.board_y + view_bounds(module.board_view)[1] - layout.detail_y >= DETAIL_VIEW_CLEARANCE_MM - 1e-6
     drawing = replace(drawing, pages=(page, replace(page, page_number=2)), filename_label="加工图_1120")
     path = export_dxf(drawing, tmp_path / "packed.dxf")
     msp = ezdxf.readfile(path).modelspace()

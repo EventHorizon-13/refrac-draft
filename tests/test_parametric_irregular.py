@@ -179,17 +179,19 @@ def test_slanted_step_allows_zero_a_without_zero_length_dimension(rotation):
 
 
 def test_machining_dimension_chain_aligns_and_separates_overlapping_total():
-    drawing = ViewDrawing("board-face", "夹板面", rectangle(300, 220), (
-        Dimension((0, 0), (300, 0), "300", "horizontal", -70),
+    drawing = ViewDrawing("board-face", "夹板面", rectangle(300, 230), (
+        Dimension((0, 0), (300, 0), "300", "horizontal", -25),
         Dimension((0, 0), (95, 0), "95", "horizontal", -46, machining=True),
         Dimension((95, 0), (300, 0), "205", "horizontal", -61, machining=True),
-        Dimension((0, 0), (0, 220), "220", "vertical", 40),
-        Dimension((0, 0), (0, 170), "170", "vertical", 30, machining=True),
+        Dimension((0, 0), (0, 230), "230", "vertical", 18),
+        Dimension((0, 0), (0, 46), "46", "vertical", 35, machining=True),
+        Dimension((0, 46), (0, 230), "184", "vertical", 68, machining=True),
     ))
-    total, first, second, height, cut_height = place_machining_dimensions(drawing, 10).dimensions
+    total, first, second, height, cut_height, remaining = place_machining_dimensions(drawing, 10).dimensions
     assert first.line_position == second.line_position
     assert first.line_position == pytest.approx(-DIMENSION_TEXT_EDGE_GAP_MM * 10)
     assert cut_height.line_position == pytest.approx(-DIMENSION_EDGE_GAP_MM * 10)
+    assert remaining.line_position == cut_height.line_position
     assert total.line_position == pytest.approx(first.line_position - DIMENSION_LANE_GAP_MM * 10)
     assert height.line_position == pytest.approx(cut_height.line_position - DIMENSION_LANE_GAP_MM * 10)
 

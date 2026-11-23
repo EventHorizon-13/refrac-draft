@@ -60,10 +60,10 @@ def _smoke_test_welded_output(window) -> None:
         raise ValueError("焊接长模块未使用独立的 1:20 图页")
     short_drawing = drawing.pages[0].modules[0].drawing
     upper_plate = short_drawing.upper_board_view
-    if upper_plate is None or (80, 60) not in upper_plate.outline.points or not any(
-        leader.machining and leader.text == "上夹板切缺口" for leader in short_drawing.board_view.leaders
-    ):
-        raise ValueError("上夹板缺口线或缺口引线缺失")
+    if upper_plate is None or (80, 60) not in upper_plate.outline.points:
+        raise ValueError("上板图缺少实际缺口轮廓")
+    if any(leader.machining for leader in short_drawing.board_view.leaders):
+        raise ValueError("出上板图后夹板面仍有重复缺口引线")
     if short_drawing.lower_board_view is None or (0, 0) not in short_drawing.lower_board_view.outline.points:
         raise ValueError("下夹板未单独保留完整轮廓")
     if not short_drawing.side_view or len(short_drawing.side_view.anchor_symbols) <= 2:
@@ -204,6 +204,8 @@ def main() -> None:
             if table.item(row, COLUMN_INDEX["anchor_enabled"]).text():
                 raise ValueError("锚固件复选框仍显示是/否文字")
             headers = [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())]
+            if not {"夹板", "上板图", "下板图"} <= set(headers):
+                raise ValueError("参数表未区分夹板与上下板图")
             if any("(" in label or "mm" in label.lower() for label in headers):
                 raise ValueError("参数表头仍包含单位")
             if COLUMN_INDEX["density_kg_m3"] > COLUMN_INDEX["production_quantity"]:
@@ -232,6 +234,7 @@ def main() -> None:
                 raise ValueError("锚固件明细参数映射错误")
             trace.write_text("row mapping passed\n", encoding="utf-8")
             from refracdraft.drawing.generator import DrawingGenerator
+            from refracdraft.drawing.layout import view_placement
             from refracdraft.reference.library import ReferenceLibrary
 
             generator = DrawingGenerator(ReferenceLibrary(window.reference_dxf))
@@ -246,8 +249,13 @@ def main() -> None:
                 raise ValueError("上夹板勾选影响了下夹板或夹板面总图")
             table.item(row, COLUMN_INDEX["show_lower_board"]).setCheckState(Qt.CheckState.Checked)
             both = window._collect_project()
-            if not both.boards[0].show_lower_board or generator.build_module(both, both.modules[0]).lower_board_view is None:
+            plates = generator.build_module(both, both.modules[0])
+            if not both.boards[0].show_lower_board or plates.lower_board_view is None:
                 raise ValueError("下夹板未单独出图")
+            placement = view_placement(plates)
+            (upper_x, upper_y), (lower_x, lower_y) = placement.board_detail_origins
+            if upper_x != lower_x or upper_y != placement.top_y - placement.board_y or lower_y != 0:
+                raise ValueError("四视图没有按两行两列布置")
             window.undo()
             window.undo()
             if window._collect_project().boards[0].show_upper_board:

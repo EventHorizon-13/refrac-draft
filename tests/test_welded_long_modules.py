@@ -81,9 +81,12 @@ def test_exposure_and_blind_cut_round_trip_and_depth_controls_projection(tmp_pat
         plate = drawn.upper_board_view if side == CutStart.UPPER else drawn.lower_board_view
         assert (0, 0) not in plate.outline.points
         assert (0, 65) in plate.outline.points and (120, 65) in plate.outline.points
-        note, = board_view.leaders
+        assert not board_view.leaders
+        default_board = board.model_copy(update={"show_upper_board": False, "show_lower_board": False})
+        callout_view = DrawingGenerator().build_module(Project(modules=[body], boards=[default_board]), body).board_view
+        note, = callout_view.leaders
         assert note.machining and note.text == f"{side.value}切缺口"
-        arranged, = place_cut_notes(board_view, 10, body.module_id).leaders
+        arranged, = place_cut_notes(callout_view, 10, body.module_id).leaders
         left, low, right, high = _leader_text_bounds(arranged, 10)
         if 0 < high and low < body.board_face_height_mm / 10:
             assert not left < 0 < right

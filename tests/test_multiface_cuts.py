@@ -3,10 +3,11 @@ from pathlib import Path
 
 import ezdxf
 import pytest
+from openpyxl import load_workbook
 
 from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, CutFace, CutStart, Project
 from refracdraft.drawing.generator import DrawingGenerator
-from refracdraft.drawing.layout import DETAIL_VIEW_CLEARANCE_MM, view_bounds, view_placement
+from refracdraft.drawing.layout import DETAIL_VIEW_CLEARANCE_MM, VIEW_CLEARANCE_MM, view_bounds, view_placement
 from refracdraft.drawing.model import INSERT_ANCHOR_ACI, LAYER_MARK_ACI, LEADER_ACI
 from refracdraft.drawing.multiface import machined_module, project_module
 from refracdraft.exporters.dxf import export_dxf
@@ -208,8 +209,47 @@ def test_board_blind_cut_only_changes_the_selected_plate(upper):
     assert (50, 40) in machined.outline.points
     assert (0, 0) not in machined.outline.points
     assert (0, 0) in opposite.outline.points
-    assert [note.text for note in drawing.board_view.leaders] == [f"{cut.cut_start.value}切缺口"]
+    assert not drawing.board_view.leaders
     assert not machined.leaders and not opposite.leaders
+    assert any(dim.label == "60" for dim in drawing.front_view.dimensions)
+
+
+def test_only_the_corresponding_plate_detail_suppresses_a_board_callout():
+    upper = BoardFaceFeature(type=1, a=50, b=40, cut_depth_mm=60, cut_start=CutStart.UPPER)
+    lower = BoardFaceFeature(type=1, a=55, b=30, cut_depth_mm=80, rotation_deg=180)
+    project, _ = _project(upper, lower, show_upper_board=True)
+    drawing = DrawingGenerator().build_module(project, project.modules[0])
+    assert [note.text for note in drawing.board_view.leaders] == ["下夹板切缺口"]
+
+
+@pytest.mark.parametrize("has_side", [False, True])
+def test_four_views_fit_a_clear_two_by_two_grid(has_side):
+    cut = BoardFaceFeature(type=1, a=120, b=46, cut_depth_mm=200)
+    features = [cut]
+    if has_side:
+        features.append(BoardFaceFeature(face=CutFace.FRONT, type=3, a=60, b=40))
+    project, _ = _project(*features, thickness_mm="230", expansion_length_mm="300",
+                          show_upper_board=not has_side, show_lower_board=True)
+    placed = DrawingGenerator().generate(project).pages[0].modules[0]
+    drawing = placed.drawing
+    layout = view_placement(drawing)
+    right_x, bottom_offset = layout.board_detail_origins[-1]
+    assert bottom_offset == 0
+    if has_side:
+        top_right = drawing.side_view
+        assert layout.side_x == pytest.approx(right_x)
+    else:
+        top_right = drawing.upper_board_view
+        assert layout.board_detail_origins[0] == pytest.approx((right_x, layout.top_y - layout.board_y))
+    top = (drawing.front_view, top_right)
+    bottom = (drawing.board_view, drawing.lower_board_view)
+    for left, right in (top, bottom):
+        assert right_x + view_bounds(right)[0] - view_bounds(left)[2] >= VIEW_CLEARANCE_MM - 1e-6
+    gap = layout.top_y + min(view_bounds(view)[1] for view in top) - (
+        layout.board_y + max(view_bounds(view)[3] for view in bottom)
+    )
+    assert gap >= VIEW_CLEARANCE_MM - 1e-6
+    assert not layout.detail_on_side
 
 
 @pytest.mark.parametrize(("upper", "lower"), [(False, False), (True, False), (False, True), (True, True)])
@@ -223,6 +263,12 @@ def test_board_checkboxes_round_trip_and_draw_only_selected_details(tmp_path, up
     export_standard_excel(forced, path)
     workbook_project = import_project_xlsx(path)
     assert (workbook_project.boards[0].show_upper_board, workbook_project.boards[0].show_lower_board) == (upper, lower)
+    if upper and lower:
+        workbook = load_workbook(path)
+        for cell in workbook["标准版"][1]:
+            cell.value = {"上板图": "上夹板", "下板图": "下夹板"}.get(cell.value, cell.value)
+        workbook.save(path)
+        assert import_project_xlsx(path).boards == workbook_project.boards
     restored = Project.model_validate_json(workbook_project.model_dump_json())
     assert (restored.boards[0].show_upper_board, restored.boards[0].show_lower_board) == (upper, lower)
     drawing = generator.build_module(restored, restored.modules[0])
@@ -250,6 +296,8 @@ def test_zero_leg_slanted_step_and_front_chamfer_keep_stock_and_plate_datums_dis
     length, = (dim for dim in lower.dimensions if dim.label == "450" and dim.orientation == "horizontal")
     assert (length.start, length.end) == ((0, 0), (450, 110))
     assert all(dim.label != "0" for view in drawing.board_details for dim in view.dimensions)
+    assert not drawing.board_view.leaders
+    assert [note.text for note in lower.leaders] == ["剪切深200"]
     model = ezdxf.readfile(export_dxf(document, tmp_path / "chamfer-step.dxf")).modelspace()
     assert {leader.dxf.layer for leader in model.query("LEADER")} == {"LEADERS"}
     assert model.doc.layers.get("LEADERS").color == LEADER_ACI

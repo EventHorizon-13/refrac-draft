@@ -1081,7 +1081,7 @@ class StandardWindow(MainWindow):
                 item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 if spec.key in {"show_upper_board", "show_lower_board"}:
-                    item.setToolTip(f"勾选后新增{spec.label}详图，同时保留夹板面总图。")
+                    item.setToolTip(f"勾选后绘制{spec.label}，同时保留夹板面总图。")
             else:
                 item.setText("" if value is None else str(value))
                 item.setFlags(

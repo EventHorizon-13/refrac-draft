@@ -49,8 +49,8 @@ FIELD_ALIASES = {
     "boards": {
         "module_id": {"模块编号", "编号", "型号", "模块型号"},
         "exists": {"是否有夹板", "有无夹板", "夹板是否存在"},
-        "show_upper_board": {"上夹板", "单独绘制上夹板"},
-        "show_lower_board": {"下夹板", "单独绘制下夹板"},
+        "show_upper_board": {"上板图", "上夹板", "单独绘制上夹板"},
+        "show_lower_board": {"下板图", "下夹板", "单独绘制下夹板"},
         "material": {"夹板材质", "材质", "夹板"},
         "thickness_mm": {"夹板厚度", "厚度"},
         "opening_mode": {"开口模式", "快插开口", "开口类型"},
@@ -222,9 +222,10 @@ def _import_standard_sheet(
     fallbacks: dict[str, dict[str, str | bool]] | None, legacy_notes: bool,
     legacy_taper_labels: bool = False,
 ) -> Project:
-    columns = {label: index for index, label in enumerate(headers)}
+    aliases = {"上夹板": "上板图", "下夹板": "下板图"}
+    columns = {aliases.get(label, label): index for index, label in enumerate(headers)}
     expected = {spec.label for spec in COLUMN_SPECS}
-    optional = {"螺栓外露长度", "上夹板", "下夹板"}
+    optional = {"螺栓外露长度", "上板图", "下板图"}
     if len(columns) != len(headers) or not (expected - optional <= columns.keys() <= expected):
         raise ValueError("「标准版」表头不完整或有重复列，请使用程序附带的示例")
     modules = []
