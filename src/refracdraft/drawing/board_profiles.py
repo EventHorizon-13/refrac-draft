@@ -10,8 +10,16 @@ from refracdraft.geometry.primitives import Polyline
 
 
 Point = tuple[float, float]
-Measure = tuple[Point, Point, float]
+Measure = tuple[Point, Point, float] | tuple[Point, Point, float, bool]
 EPSILON = 1e-8
+
+
+def chamfer_legs(width: float, height: float, feature: BoardFaceFeature) -> tuple[float, float]:
+    if feature.b is None:
+        if feature.a >= width:
+            raise ValueError("旧版斜切要求 a < 长度")
+        return width - feature.a, height
+    return feature.a, feature.b
 
 
 def machining_dimensions(
@@ -41,9 +49,9 @@ def machining_dimensions(
                 return abs(lane - dim.line_position) < 44 and a < high - EPSILON and b > low + EPSILON
 
             if axis == 0:
-                lane = next((candidate for candidate in lanes
-                             if not any(overlaps(dim, candidate) for dim in matches)), lanes[-1])
-                direction = 1
+                below = start[1] + end[1] <= bottom + top
+                lane = lanes[0] if below else lanes[1]
+                direction = -1 if below else 1
             else:
                 on_left = (start[0] + end[0]) <= left + right
                 lane = lanes[0] if on_left else lanes[1]
@@ -83,10 +91,15 @@ def _cut_path(
             ((upper, a + c), (b, a + c), shoulder_offset),
         )
     if feature.type == 3:
-        if a >= width:
-            raise ValueError("类型 3 要求 a < 长度")
-        return ((width - a, height), (0, 0)), (
-            ((width - a, height), (width, height), 26),
+        run, rise = chamfer_legs(width, height, feature)
+        if run > width or rise > height:
+            raise ValueError("斜切角要求 a ≤ 长度、b ≤ 厚度")
+        high, low = (run, height), (0, height - rise)
+        if b is None:
+            return (high, low), ((high, (width, height), 26),)
+        return (high, low), (
+            (low, high, 26, True),
+            (low, high, 26, False),
         )
     assert b is not None and c is not None
     if a + b >= width or c >= height:
@@ -113,15 +126,20 @@ def _oriented_cut(
     path = tuple(map(transform, reversed(cut) if feature.mirror_x else cut))
     path = tuple(point for index, point in enumerate(path) if index == 0 or point != path[index - 1])
     dimensions = []
-    for start, end, inset in measures:
-        horizontal = start[1] == end[1]
-        displaced = (start[0], start[1] + inset) if horizontal else (start[0] - inset, start[1])
+    for start, end, inset, *axis in measures:
+        horizontal = axis[0] if axis else start[1] == end[1]
+        displaced = (
+            (start[0], max(start[1], end[1]) + inset) if horizontal
+            else (min(start[0], end[0]) - inset, start[1])
+        )
         first, last, offset = transform(start), transform(end), transform(displaced)
-        horizontal = first[1] == last[1]
+        if angle in (90, 270):
+            horizontal = not horizontal
         distance = abs(first[0] - last[0]) if horizontal else abs(first[1] - last[1])
         if distance <= EPSILON:
             continue
-        signed_offset = offset[1] - first[1] if horizontal else first[0] - offset[0]
+        signed_offset = (offset[1] - max(first[1], last[1]) if horizontal
+                         else min(first[0], last[0]) - offset[0])
         dimensions.append(Dimension(
             first, last, f"{distance:g}", "horizontal" if horizontal else "vertical", signed_offset, machining=True,
         ))
@@ -199,10 +217,11 @@ def build_board_profile(
         if start < position - EPSILON or end > perimeter + EPSILON:
             raise ValueError("夹板面的混合切口占用了同一段边缘")
         points.extend(point for s, point in corners if position + EPSILON < s < start - EPSILON)
-        points.extend(path[1:] if points and points[-1] == path[0] else path)
+        touching = points and all(abs(a - b) <= EPSILON for a, b in zip(points[-1], path[0]))
+        points.extend(path[1:] if touching else path)
         position = end
     points.extend(point for s, point in corners if position + EPSILON < s < perimeter - EPSILON)
-    if len(points) > 1 and points[-1] == points[0]:
+    if len(points) > 1 and all(abs(a - b) <= EPSILON for a, b in zip(points[-1], points[0])):
         points.pop()
     area2 = sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(points, points[1:] + points[:1]))
     if len(points) < 3 or area2 <= EPSILON:

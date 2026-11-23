@@ -53,6 +53,10 @@ DIMENSION_OVERRIDE = {
     "dimclrd": 4,
     "dimclre": 4,
     "dimclrt": 3,
+    "dimtad": 1,
+    "dimjust": 0,
+    "dimtih": 0,
+    "dimtoh": 0,
 }
 DIMENSION_FALLBACK = {
     "dimscale": 20.0,
@@ -159,6 +163,9 @@ def _ensure_anchor_linetypes(doc) -> None:
 
 def _add_dimension(msp, x1, y1, x2, y2, label, horizontal=True, offset=6.0,
                    denominator=10, short_witness_mm=None):
+    # The endpoint direction determines which side ezdxf places the text on.
+    if (x1 > x2 if horizontal else y1 > y2):
+        x1, y1, x2, y2 = x2, y2, x1, y1
     if horizontal:
         base = ((x1 + x2) / 2.0, max(y1, y2) + offset)
         angle = 0

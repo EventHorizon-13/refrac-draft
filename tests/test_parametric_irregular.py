@@ -1,12 +1,13 @@
 import pytest
 
 from refracdraft.domain.models import (
-    AnchorParameters, BoardFaceProfile, BoardParameters, GeometryType, ModuleParameters,
+    AnchorParameters, BoardFaceFeature, BoardFaceProfile, BoardParameters, GeometryType, ModuleParameters,
     OutlineKind, OutlineSpec, Project,
 )
 from refracdraft.drawing.board_profiles import build_board_profile
 from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.drawing.layout import (
+    DIMENSION_EDGE_GAP_MM, DIMENSION_LANE_GAP_MM, DIMENSION_TEXT_EDGE_GAP_MM,
     FRAME_INSET_MM, PAGE_HEIGHT_MM, VIEW_CLEARANCE_MM, place_machining_dimensions, view_bounds, view_placement,
 )
 from refracdraft.drawing.model import Dimension, ViewDrawing
@@ -134,6 +135,49 @@ def test_notch_signed_shoulder(d, shoulder_x):
     assert len(outline.points) == len(set(outline.points))
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_two_chamfers_meet_and_dimension_each_side(reverse):
+    cuts = [
+        BoardFaceFeature(type=3, a=100, b=100, mirror_x=True),
+        BoardFaceFeature(type=3, a=75, b=200, rotation_deg=180),
+    ]
+    profile = BoardFaceProfile(features=cuts[::-1] if reverse else cuts)
+    module = ModuleParameters(
+        module_id="I1", front_width_mm=350, front_height_mm=300,
+        board_face_width_mm=350, board_face_height_mm=300, board_face_outline=profile,
+    )
+    board = DrawingGenerator().generate(Project(modules=[module])).pages[0].modules[0].drawing.board_view
+    assert len(board.outline.points) == 5
+    assert set(board.outline.points) == {(0, 0), (275, 0), (350, 200), (250, 300), (0, 300)}
+    dimensions = {(row.orientation, row.label, row.line_position) for row in board.dimensions}
+    assert {("horizontal", label, 326.0) for label in ("250", "100")} <= dimensions
+    assert {("horizontal", label, -46.0) for label in ("275", "75")} <= dimensions
+    assert {("vertical", label, 396.0) for label in ("100", "200")} <= dimensions
+    assert ("horizontal", "350", -100.0) in dimensions
+
+
+def test_chamfer_rejects_legs_outside_frame_and_preserves_legacy_outline():
+    legacy = BoardFaceProfile(features=[BoardFaceFeature(type=3, a=250)])
+    explicit = BoardFaceProfile(features=[BoardFaceFeature(type=3, a=50, b=230)])
+    assert build_board_profile(300, 230, legacy)[0] == build_board_profile(300, 230, explicit)[0]
+    outside = BoardFaceProfile(features=[BoardFaceFeature(type=3, a=50, b=231)])
+    with pytest.raises(ValueError, match="斜切角要求"):
+        build_board_profile(300, 230, outside)
+
+
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+def test_slanted_step_allows_zero_a_without_zero_length_dimension(rotation):
+    feature = BoardFaceFeature(type=4, a=0, b=75, c=95, rotation_deg=rotation)
+    profile = BoardFaceProfile(features=[feature])
+    outline, dimensions = build_board_profile(350, 300, profile)
+    assert outline.bounds == (0, 0, 350, 300)
+    assert len(outline.points) == 5
+    assert {dim.label for dim in dimensions} == {"75", "95"}
+    assert BoardFaceProfile.model_validate_json(profile.model_dump_json()).features[0].a == 0
+    with pytest.raises(ValueError, match="仅斜切台阶"):
+        BoardFaceFeature(type=1, a=0, b=75)
+
+
 def test_machining_dimension_chain_aligns_and_separates_overlapping_total():
     drawing = ViewDrawing("board-face", "夹板面", rectangle(300, 220), (
         Dimension((0, 0), (300, 0), "300", "horizontal", -70),
@@ -144,8 +188,10 @@ def test_machining_dimension_chain_aligns_and_separates_overlapping_total():
     ))
     total, first, second, height, cut_height = place_machining_dimensions(drawing, 10).dimensions
     assert first.line_position == second.line_position
-    assert total.line_position <= first.line_position - 85 + 1e-6
-    assert height.line_position <= cut_height.line_position - 85 + 1e-6
+    assert first.line_position == pytest.approx(-DIMENSION_TEXT_EDGE_GAP_MM * 10)
+    assert cut_height.line_position == pytest.approx(-DIMENSION_EDGE_GAP_MM * 10)
+    assert total.line_position == pytest.approx(first.line_position - DIMENSION_LANE_GAP_MM * 10)
+    assert height.line_position == pytest.approx(cut_height.line_position - DIMENSION_LANE_GAP_MM * 10)
 
 
 def test_keep_existing_anchor_chain_on_one_row_when_cut_dimension_blocks_one_end():
@@ -158,7 +204,7 @@ def test_keep_existing_anchor_chain_on_one_row_when_cut_dimension_blocks_one_end
     drawing = ViewDrawing("board-face", "夹板面", rectangle(600, 220), dims)
     cut, *chain = place_machining_dimensions(drawing, 10).dimensions
     assert len({dim.line_position for dim in chain}) == 1
-    assert chain[0].line_position >= cut.line_position + 85 - 1e-6
+    assert chain[0].line_position >= cut.line_position + DIMENSION_LANE_GAP_MM * 10 - 1e-6
 
 
 def test_board_profile_rejects_overlapping_cuts():

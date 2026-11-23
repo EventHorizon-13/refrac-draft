@@ -12,13 +12,13 @@ from PySide6.QtWidgets import (
 )
 
 from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, CutStart
-from refracdraft.drawing.board_profiles import build_board_profile
+from refracdraft.drawing.board_profiles import build_board_profile, chamfer_legs
 from refracdraft.drawing.model import Dimension
 from refracdraft.geometry.primitives import Polyline, rectangle
 
 
-CUT_NAMES = ("类型 1 · 台阶", "类型 2 · 凹槽", "类型 3 · 斜边", "类型 4 · 斜切台阶")
-CUT_DIMENSIONS = ("ab", "abcd", "a", "abc")
+CUT_NAMES = ("类型 1 · 台阶", "类型 2 · 凹槽", "类型 3 · 斜切角", "类型 4 · 斜切台阶")
+CUT_DIMENSIONS = ("ab", "abcd", "ab", "abc")
 
 
 class OutlinePreview(QWidget):
@@ -103,7 +103,7 @@ class CutControls:
                 rotation_deg=self.angle, mirror_x=self.mirror.isChecked(),
             )
         except ValueError:
-            raise ValueError("a、b、c 须为有限正数，凹槽 d 可为负或 0") from None
+            raise ValueError("a、b、c 须为有限正数，斜切台阶 a 可为 0，凹槽 d 可为负或 0") from None
 
     def set_angle(self, angle: int) -> None:
         self.angle = angle
@@ -236,9 +236,17 @@ class BoardFaceDialog(QDialog):
         defaults = (
             (width * .4, height * .2),
             (height * .3, width * .3, height * .3, width * .15),
-            (width * .8,),
+            (width * .25, height * .25),
             (width * .33, width * .28, height * .63),
         )[kind]
+        if feature is not None and feature.type == 3 and feature.b is None:
+            try:
+                run, rise = chamfer_legs(width, height, feature)
+            except ValueError:
+                # A resized legacy profile may need its dimensions edited.
+                pass
+            else:
+                feature = feature.model_copy(update={"a": run, "b": rise})
         for index, (letter, field) in enumerate(cut.dimensions.items()):
             if feature is not None:
                 value = getattr(feature, letter)
@@ -284,9 +292,10 @@ class BoardFaceDialog(QDialog):
                 self.preview.outline = outline
                 if active is not None:
                     active_index = self.cuts.index(active)
-                    key_groups = [CUT_DIMENSIONS[feature.type - 1].removesuffix("d")
-                                  if feature.d == 0 else CUT_DIMENSIONS[feature.type - 1]
-                                  for feature in features]
+                    key_groups = [
+                        "".join(letter for letter in CUT_DIMENSIONS[feature.type - 1] if getattr(feature, letter) != 0)
+                        for feature in features
+                    ]
                     start = sum(map(len, key_groups[:active_index]))
                     letters = key_groups[active_index]
                     self.preview.dimensions = tuple(zip(letters, dimensions[start:start + len(letters)]))

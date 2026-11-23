@@ -19,10 +19,8 @@ from refracdraft.domain.models import (
 from refracdraft.drawing.board_profiles import board_cut_edges, build_board_profile, machining_dimensions
 from refracdraft.drawing.model import Dimension, DrawingDocument, LeaderNote, ModuleDrawing, SheetPage, PlacedModule, ViewDrawing
 from refracdraft.drawing.layout import (
-    ANNOTATION_CLEARANCE_MM,
     TITLE_BLOCK_LEFT_MM,
     PAGE_CONTENT_WIDTH_MM,
-    annotation_factor,
     PAGE_LEFT_MM,
     PANEL_GAP_MM,
     fits_sheet_height,
@@ -330,30 +328,16 @@ def _feature_dimensions(spec, width: float) -> tuple[Dimension, Dimension]:
     )
 
 
-def _space_long_dimensions(view: ViewDrawing, denominator: int) -> ViewDrawing:
-    """Keep nearby exterior dimension rows legible at the smaller plot scale."""
-    dimensions = list(view.dimensions)
-    _, bottom, _, top = view.outline.bounds
-    clearance = ANNOTATION_CLEARANCE_MM * annotation_factor(denominator) * denominator
-    for boundary, direction in ((bottom, -1), (top, 1)):
-        rows = sorted(
-            ((direction * dim.line_position, i) for i, dim in enumerate(dimensions)
-             if dim.orientation == "horizontal" and direction * (dim.line_position - boundary) > 0),
-        )
-        placed = []
-        # The text is above its dimension line, so lower rows need their own
-        # clearance from the material boundary as well as from each other.
-        nearest = -bottom + clearance if direction < 0 else top
-        for position, i in rows:
-            dim = dimensions[i]
-            low, high = sorted((dim.start[0], dim.end[0]))
-            lane = max(position, nearest, max(
-                (previous + clearance for a, b, previous in placed if max(a, low) < min(b, high)),
-                default=position,
-            ))
-            placed.append((low, high, lane))
-            dimensions[i] = replace(dim, offset=dim.offset + direction * (lane - position))
-    return replace(view, dimensions=tuple(dimensions))
+def _place_annotations(drawing: ModuleDrawing, denominator: int) -> ModuleDrawing:
+    board = place_machining_dimensions(drawing.board_view, denominator)
+    return replace(
+        drawing,
+        scale_denominator=denominator,
+        front_view=place_machining_dimensions(drawing.front_view, denominator),
+        board_view=place_cut_notes(place_bolt_note(board, denominator), denominator, drawing.module_id),
+        side_view=place_machining_dimensions(drawing.side_view, denominator)
+        if drawing.side_view is not None else None,
+    )
 
 
 class DrawingGenerator:
@@ -798,26 +782,10 @@ class DrawingGenerator:
         drawings = []
         for count, module in enumerate(project.modules, start=1):
             original = self.build_module(project, module)
-            drawing = replace(
-                original,
-                front_view=place_machining_dimensions(original.front_view, 10),
-                board_view=place_cut_notes(
-                    place_bolt_note(place_machining_dimensions(original.board_view, 10), 10), 10, module.module_id,
-                ),
-            )
+            drawing = _place_annotations(original, 10)
             width = module_required_width(drawing, measure_detail)
             if width > PAGE_CONTENT_WIDTH_MM + 1e-6 or not fits_sheet_height(drawing):
-                drawing = replace(
-                    original, scale_denominator=20,
-                    front_view=place_machining_dimensions(_space_long_dimensions(original.front_view, 20), 20),
-                    board_view=place_cut_notes(
-                        place_bolt_note(
-                            place_machining_dimensions(_space_long_dimensions(original.board_view, 20), 20), 20,
-                        ), 20, module.module_id,
-                    ),
-                    side_view=(_space_long_dimensions(original.side_view, 20)
-                               if original.side_view is not None else None),
-                )
+                drawing = _place_annotations(original, 20)
                 width = module_required_width(drawing, measure_detail)
                 if width > PAGE_CONTENT_WIDTH_MM + 1e-6 or not fits_sheet_height(drawing):
                     raise ValueError(f"{module.module_id}: 模块视图及标注超出 A4 1:20 的可用范围")

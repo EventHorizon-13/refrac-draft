@@ -82,7 +82,7 @@ class BoardFaceFeature(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     type: Literal[1, 2, 3, 4]
-    a: float = Field(gt=0, allow_inf_nan=False)
+    a: float = Field(ge=0, allow_inf_nan=False)
     b: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     c: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     d: float | None = Field(default=None, allow_inf_nan=False)
@@ -93,7 +93,10 @@ class BoardFaceFeature(BaseModel):
 
     @model_validator(mode="after")
     def validate_dimensions(self) -> "BoardFaceFeature":
-        required = {1: "ab", 2: "abcd", 3: "a", 4: "abc"}[self.type]
+        if self.a == 0 and self.type != 4:
+            raise ValueError("仅斜切台阶允许 a = 0")
+        # Existing type-3 records contain only a and keep their full-height cut.
+        required = {1: "ab", 2: "abcd", 3: "a" if self.b is None else "ab", 4: "abc"}[self.type]
         supplied = "".join(key for key in "abcd" if getattr(self, key) is not None)
         if supplied != required:
             raise ValueError(f"夹板面类型 {self.type} 需要尺寸 {', '.join(required)}")

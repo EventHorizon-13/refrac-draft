@@ -9,8 +9,8 @@ from refracdraft.geometry.primitives import point_in_outline
 
 
 VIEW_SCALE = 0.0992
-SIDE_VIEW_GAP_MM = 14.0
-VIEW_CLEARANCE_MM = 10.0
+SIDE_VIEW_GAP_MM = 10.0
+VIEW_CLEARANCE_MM = 7.0
 MIN_VERTICAL_VIEW_CLEARANCE_MM = 4.0
 COMPACT_DETAIL_WIDTH_FACTOR = 0.88
 PAGE_WIDTH_MM = 297.0
@@ -47,7 +47,9 @@ DETAIL_TITLE_CLEARANCE_MM = 4.0
 DETAIL_VIEW_CLEARANCE_MM = 2.0
 DETAIL_WIDTH_CLEARANCE_MM = 2.0
 ANNOTATION_CLEARANCE_MM = DIMENSION_TEXT_SIZE_MM + 1.6
-DIMENSION_LANE_GAP_MM = 8.5
+DIMENSION_LANE_GAP_MM = 5.4
+DIMENSION_EDGE_GAP_MM = 2.6
+DIMENSION_TEXT_EDGE_GAP_MM = 4.6
 
 
 @dataclass(frozen=True)
@@ -123,13 +125,11 @@ def view_bounds(view: ViewDrawing, denominator: int = 10) -> tuple[float, float,
 
 def place_machining_dimensions(view: ViewDrawing, denominator: int) -> ViewDrawing:
     """Keep machining dimensions and their witnesses away from the anchors."""
-    if not any(dim.machining for dim in view.dimensions):
-        return view
     boxes = [line.bounds for line in view.anchor_symbols]
     boxes.extend((x - 1.5 * denominator, y - 1.5 * denominator,
                   x + 1.5 * denominator, y + 1.5 * denominator) for x, y in view.anchor_points)
-    if not boxes:
-        return _space_cut_dimension_lanes(view, denominator)
+    if not boxes or not any(dim.machining for dim in view.dimensions):
+        return _space_dimension_lanes(view, denominator, boxes)
 
     clearance = ANNOTATION_CLEARANCE_MM * annotation_factor(denominator) * denominator
     dimensions = list(view.dimensions)
@@ -173,14 +173,13 @@ def place_machining_dimensions(view: ViewDrawing, denominator: int) -> ViewDrawi
             offset=dim.offset + (lane - position) * (1 if axis == 0 else -1),
             short_witness_mm=None if witnesses_clear(lane) else 1.6,
         )
-    return _space_cut_dimension_lanes(replace(view, dimensions=tuple(dimensions)), denominator)
+    return _space_dimension_lanes(replace(view, dimensions=tuple(dimensions)), denominator, boxes)
 
 
-def _space_cut_dimension_lanes(view: ViewDrawing, denominator: int) -> ViewDrawing:
+def _space_dimension_lanes(view: ViewDrawing, denominator: int, anchor_bounds) -> ViewDrawing:
     """Use common lanes for adjoining sizes and separate overlapping spans."""
     bounds = view.outline.bounds
     scale = annotation_factor(denominator) * denominator
-    # CAD can fit the text on either side of its line, especially in a chain.
     clearance = DIMENSION_LANE_GAP_MM * scale
     dimensions = list(view.dimensions)
     for axis, orientation in ((0, "horizontal"), (1, "vertical")):
@@ -220,16 +219,14 @@ def _space_cut_dimension_lanes(view: ViewDrawing, denominator: int) -> ViewDrawi
             for chain in chains:
                 conflicts = [lane for j, lane in (inside | placed).items()
                              if any(overlaps(i, j) for i in chain)]
-                clear_of_outline = 4.0 if (axis == 0 and sign < 0) or (axis == 1 and sign > 0) else 1.0
-                preferred = max(distance[chain[0]], clear_of_outline * scale)
-                adjoining = [
-                    lane for j, lane in placed.items()
-                    if any(adjoins(i, j) for i in chain)
-                    and abs(lane - preferred) <= clearance
-                    and lane >= clear_of_outline * scale
-                    and all(abs(lane - other) >= clearance - 1e-6 for other in conflicts)
-                ]
-                lane = min(adjoining, key=lambda value: abs(value - preferred)) if adjoining else preferred
+                text_faces_outline = (axis == 0 and sign < 0) or (axis == 1 and sign > 0)
+                edge_gap = DIMENSION_TEXT_EDGE_GAP_MM if text_faces_outline else DIMENSION_EDGE_GAP_MM
+                overhang = max(0.0, max((
+                    sign * (box[cross + (2 if sign > 0 else 0)] - boundary)
+                    for box in anchor_bounds
+                    if any(extents[i][2] < box[axis + 2] and extents[i][3] > box[axis] for i in chain)
+                ), default=0.0))
+                lane = overhang + edge_gap * scale
                 while any(abs(lane - other) < clearance - 1e-6 for other in conflicts):
                     lane = max(other + clearance for other in conflicts if abs(lane - other) < clearance - 1e-6)
                 for i in chain:
@@ -272,9 +269,9 @@ def _dimension_text_boxes(view: ViewDrawing, denominator: int):
         lane = dim.line_position / denominator
         height = ANNOTATION_CLEARANCE_MM * factor
         if horizontal:
-            yield (low, lane - height, high, lane + height)
+            yield (low, lane - 0.5, high, lane + height)
         else:
-            yield (lane - height, low, lane + height, high)
+            yield (lane - height, low, lane + 0.5, high)
 
 
 def _dimension_stroke_boxes(view: ViewDrawing, denominator: int):
@@ -464,7 +461,7 @@ def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
         # The side text starts at the outline bottom, above any lower dimensions.
         view_height = views_span + VIEW_CLEARANCE_MM
         side_height = outline_bottom - board_bottom + detail_height
-        view_gap_extra = min(6.0, max(0.0, available - max(view_height, side_height)) / 3)
+        view_gap_extra = min(3.0, max(0.0, available - max(view_height, side_height)) / 3)
         occupied = max(view_height + view_gap_extra, side_height)
         board_y = min(floor + (available - occupied) / 2, ceiling - view_height) - board_bottom
         detail_y = max(floor, board_y + outline_bottom)
@@ -479,7 +476,7 @@ def view_placement(drawing: ModuleDrawing) -> ViewPlacement:
 
     view_height = views_span + below_gap
     spare = max(0.0, available - view_height - below_height)
-    view_gap_extra = min(6.0, spare / (4 if detail_height else 3))
+    view_gap_extra = min(3.0, spare / (4 if detail_height else 3))
     detail_gap_extra = min(4.0, spare / 4) if detail_height else 0.0
     margin = (available - view_height - below_height - view_gap_extra - detail_gap_extra) / 2
     detail_y = floor + margin + detail_height
@@ -525,8 +522,8 @@ def _detail_block_height(drawing: ModuleDrawing) -> float:
 
 
 def _detail_row_width(line: str) -> float:
-    # Budget for the wider Song-style fallback as well as the SHX plot fonts.
-    return _text_width(line, 0.82, 1.39)
+    # Use the same fallback estimate for packing and for rendering.
+    return _text_width(line, 0.82, 1.39) * 1.07
 
 
 def _preferred_detail_width(drawing: ModuleDrawing, measure: Callable[[str], float] | None) -> float:
@@ -651,7 +648,5 @@ def detail_lines(placed: PlacedModule) -> tuple[str, ...]:
 def detail_line_width_factor(line: str, available: float, measure: Callable[[str], float] | None = None,
                              text_scale: float = 1.0) -> float:
     usable = max(1.0, available - DETAIL_WIDTH_CLEARANCE_MM)
-    # The default width is a layout estimate, so keep a small margin for the
-    # actual glyph advances of the fallback font used when plotting the DXF.
-    width = (measure(line) if measure else _detail_row_width(line) * 1.07) * text_scale
-    return usable / width if width > usable else 1.0
+    width = (measure or _detail_row_width)(line) * text_scale
+    return usable / width if width > usable + 1e-6 else 1.0

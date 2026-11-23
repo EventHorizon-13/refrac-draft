@@ -251,6 +251,15 @@ def main() -> None:
                         raise ValueError("异形模块按钮未打开编辑窗口")
                     cut = dialog.cuts[0]
                     initial_outline = dialog.preview.outline
+                    cut.kind.setCurrentIndex(3)
+                    cut.dimensions["a"].setText("0")
+                    if not dialog.confirm.isEnabled() or dialog.profile.features[0].a != 0:
+                        raise ValueError("斜切台阶未从弹窗读取 a=0")
+                    cut.kind.setCurrentIndex(2)
+                    cut.dimensions["a"].setText("80")
+                    cut.dimensions["b"].setText("60")
+                    if not dialog.confirm.isEnabled() or dialog.profile.features[0].b != 60:
+                        raise ValueError("斜切角未从弹窗读取 a、b")
                     cut.kind.setCurrentIndex(1)
                     cut.dimensions["a"].setText("80")
                     cut.dimensions["d"].setText("-20")

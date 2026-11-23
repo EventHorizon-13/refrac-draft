@@ -833,7 +833,7 @@ def test_standard_automatic_anchor_lengths_use_installation_height(anchor_type, 
     assert anchor.length_mm == pytest.approx(expected)
 
 
-def test_tall_1120_style_pair_bottom_aligns_details_beside_the_views(tmp_path):
+def test_tall_1120_style_pair_packs_and_keeps_details_clear(tmp_path):
     profile = BoardFaceProfile.model_validate({"features": [
         {"type": 2, "a": 69, "b": 90, "c": 69, "d": 50, "rotation_deg": 270, "mirror_x": True},
     ]})
@@ -847,19 +847,23 @@ def test_tall_1120_style_pair_bottom_aligns_details_beside_the_views(tmp_path):
     doc = DrawingGenerator().generate(Project(modules=modules, boards=boards, anchors=anchors))
     output = export_dxf(doc, tmp_path / "side-details.dxf")
     details = list(ezdxf.readfile(output).modelspace().query("MTEXT"))
-    assert len(details) == len(doc.pages) == 2
-    for page, detail in zip(doc.pages, details, strict=True):
-        placed, = page.modules
+    page, = doc.pages
+    assert [placed.drawing.module_id for placed in page.modules] == ["M1", "M2"]
+    assert any(detail_vertical_anchor(placed)[1] for placed in page.modules)
+    for placed, detail in zip(page.modules, details, strict=True):
         left, width = detail_box(placed)
-        geometry_right = max(view_bounds(view)[2] for view in (placed.drawing.front_view, placed.drawing.board_view))
-        assert left == pytest.approx(placed.content_x_mm + geometry_right + SIDE_DETAIL_GAP_MM)
         assert left + width < placed.x_mm + placed.panel_width_mm
         anchor_y, align_bottom = detail_vertical_anchor(placed)
-        board_bottom = view_placement(placed.drawing).board_y + placed.drawing.board_view.outline.bounds[1] / 10
-        assert align_bottom
-        assert anchor_y == pytest.approx(board_bottom)
-        assert detail.dxf.attachment_point == 7
-        assert detail.dxf.insert.y == pytest.approx((board_bottom - (page.page_number - 1) * 230) * 10)
+        layout = view_placement(placed.drawing)
+        if align_bottom:
+            geometry_right = max(view_bounds(view)[2] for view in (placed.drawing.front_view, placed.drawing.board_view))
+            assert left == pytest.approx(placed.content_x_mm + geometry_right + SIDE_DETAIL_GAP_MM)
+            assert anchor_y == pytest.approx(layout.board_y + placed.drawing.board_view.outline.bounds[1] / 10)
+        else:
+            measured_bottom = layout.board_y + view_bounds(placed.drawing.board_view)[1]
+            assert measured_bottom - anchor_y >= DETAIL_VIEW_CLEARANCE_MM - 1e-6
+        assert detail.dxf.attachment_point == (7 if align_bottom else 1)
+        assert detail.dxf.insert.y == pytest.approx(anchor_y * 10)
         assert detail.dxf.width == 0
         assert detail.plain_text(split=True) == list(placed.drawing.details)
 
