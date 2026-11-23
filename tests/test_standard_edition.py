@@ -833,7 +833,7 @@ def test_standard_automatic_anchor_lengths_use_installation_height(anchor_type, 
     assert anchor.length_mm == pytest.approx(expected)
 
 
-def test_tall_1120_style_pair_packs_and_keeps_details_clear(tmp_path):
+def test_tall_1120_style_pair_keeps_details_clear(tmp_path):
     profile = BoardFaceProfile.model_validate({"features": [
         {"type": 2, "a": 69, "b": 90, "c": 69, "d": 50, "rotation_deg": 270, "mirror_x": True},
     ]})
@@ -847,10 +847,10 @@ def test_tall_1120_style_pair_packs_and_keeps_details_clear(tmp_path):
     doc = DrawingGenerator().generate(Project(modules=modules, boards=boards, anchors=anchors))
     output = export_dxf(doc, tmp_path / "side-details.dxf")
     details = list(ezdxf.readfile(output).modelspace().query("MTEXT"))
-    page, = doc.pages
-    assert [placed.drawing.module_id for placed in page.modules] == ["M1", "M2"]
-    assert any(detail_vertical_anchor(placed)[1] for placed in page.modules)
-    for placed, detail in zip(page.modules, details, strict=True):
+    placed_modules = [(page, placed) for page in doc.pages for placed in page.modules]
+    assert [placed.drawing.module_id for _, placed in placed_modules] == ["M1", "M2"]
+    assert any(detail_vertical_anchor(placed)[1] for _, placed in placed_modules)
+    for (page, placed), detail in zip(placed_modules, details, strict=True):
         left, width = detail_box(placed)
         assert left + width < placed.x_mm + placed.panel_width_mm
         anchor_y, align_bottom = detail_vertical_anchor(placed)
@@ -863,7 +863,7 @@ def test_tall_1120_style_pair_packs_and_keeps_details_clear(tmp_path):
             measured_bottom = layout.board_y + view_bounds(placed.drawing.board_view)[1]
             assert measured_bottom - anchor_y >= DETAIL_VIEW_CLEARANCE_MM - 1e-6
         assert detail.dxf.attachment_point == (7 if align_bottom else 1)
-        assert detail.dxf.insert.y == pytest.approx(anchor_y * 10)
+        assert detail.dxf.insert.y == pytest.approx((anchor_y - (page.page_number - 1) * 230) * 10)
         assert detail.dxf.width == 0
         assert detail.plain_text(split=True) == list(placed.drawing.details)
 

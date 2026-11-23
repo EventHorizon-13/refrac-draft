@@ -150,7 +150,7 @@ def test_two_chamfers_meet_and_dimension_each_side(reverse):
     assert len(board.outline.points) == 5
     assert set(board.outline.points) == {(0, 0), (275, 0), (350, 200), (250, 300), (0, 300)}
     dimensions = {(row.orientation, row.label, row.line_position) for row in board.dimensions}
-    assert {("horizontal", label, 326.0) for label in ("250", "100")} <= dimensions
+    assert {("horizontal", label, 300 + DIMENSION_EDGE_GAP_MM * 10) for label in ("250", "100")} <= dimensions
     assert {("horizontal", label, -46.0) for label in ("275", "75")} <= dimensions
     assert {("vertical", label, 396.0) for label in ("100", "200")} <= dimensions
     assert ("horizontal", "350", -100.0) in dimensions

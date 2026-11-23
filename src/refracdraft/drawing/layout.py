@@ -18,11 +18,11 @@ PAGE_HEIGHT_MM = 210.0
 PAGE_STRIDE_MM = 230.0
 PAGE_LEFT_MM = 7.0
 PAGE_CONTENT_WIDTH_MM = 283.0
-PANEL_INNER_MARGIN_MM = 8.0
+PANEL_INNER_MARGIN_MM = 6.5
 PANEL_GAP_MM = 6.0
-SIDE_DETAIL_GAP_MM = 4.0
-SIDE_DETAIL_RIGHT_MARGIN_MM = 1.0
-SIDE_PANEL_GAP_MM = 2.0
+SIDE_DETAIL_GAP_MM = 1.6
+SIDE_DETAIL_RIGHT_MARGIN_MM = 0.8
+SIDE_PANEL_GAP_MM = 1.5
 PANEL_MIN_WIDTH_MM = 58.0
 CENTERED_MODULE_MAX_LENGTH_MM = 350.0
 
@@ -48,7 +48,7 @@ DETAIL_VIEW_CLEARANCE_MM = 2.0
 DETAIL_WIDTH_CLEARANCE_MM = 2.0
 ANNOTATION_CLEARANCE_MM = DIMENSION_TEXT_SIZE_MM + 1.6
 DIMENSION_LANE_GAP_MM = 5.4
-DIMENSION_EDGE_GAP_MM = 2.6
+DIMENSION_EDGE_GAP_MM = 1.6
 DIMENSION_TEXT_EDGE_GAP_MM = 4.6
 
 
@@ -338,11 +338,12 @@ def view_label_position(view: ViewDrawing, module_id: str, denominator: int) -> 
     board = view.view_type == "board-face"
     if not board and (view.anchor_symbols or view.anchor_points):
         y = (view.outline.points[0][1] + view.outline.points[1][1]) / (2 * denominator) + 5.0
-    if view.note:
+    if view.note == "无夹板":
         return x, y
 
     font_height = 4.0 * annotation_factor(denominator)
-    half_width = max(2.5, 0.43 * font_height * len(module_id))
+    label = view.note or module_id
+    half_width = max(2.5, sum(0.86 if char.isascii() else 1.39 for char in label) * font_height / 2)
     boxes = [*(_dimension_text_boxes(view, denominator)),
              *(_leader_text_bounds(note, denominator) for note in view.leaders)]
     for line in (*view.anchor_symbols, *view.cutouts):
@@ -523,7 +524,7 @@ def _detail_block_height(drawing: ModuleDrawing) -> float:
 
 def _detail_row_width(line: str) -> float:
     # Use the same fallback estimate for packing and for rendering.
-    return _text_width(line, 0.82, 1.39) * 1.07
+    return _text_width(line, 0.82, 1.39) * 1.06
 
 
 def _preferred_detail_width(drawing: ModuleDrawing, measure: Callable[[str], float] | None) -> float:
