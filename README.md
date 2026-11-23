@@ -70,6 +70,7 @@ For explicit anchor positions, use JSON in the `锚固件坐标` cell, e.g.:
 - 侧敲: normal front + side trapezoid + board-face views.
 - 正敲: front trapezoid + board-face views.
 - Every module gets a board-face view. If there is no physical board, put `无夹板` at the center of that view.
+- Front or side cuts enable all three views. The views use the same remaining geometry after the cuts are combined.
 - Board outline follows the module's board-face geometry. Board material/thickness/presence/opening remain independent board parameters.
 - Quick-insert uses a front-profile block from the source DXF and a B10-PDF-derived board-face opening candidate (outer contour + four slots, about 22.578×16.933 mm). The opening is automatically drawn but explicitly flagged as unconfirmed because the PDF does not label its machining meaning.
 - Anchor positions can be explicit, evenly distributed, or fixed-spacing. Explicit segmented dimensions in the examples must be preserved.

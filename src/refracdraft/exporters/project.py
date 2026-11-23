@@ -49,7 +49,8 @@ def export_standard_excel(project: Project, path: Path) -> None:
                 profile_sheet.freeze_panes = "B2"
             for cut in profile.features:
                 profile_sheet.append((module.module_id, cut.type, cut.a, cut.b, cut.c, cut.d,
-                                      cut.rotation_deg, cut.mirror_x, cut.cut_depth_mm, cut.cut_start.value))
+                                      cut.rotation_deg, cut.mirror_x, cut.cut_depth_mm, cut.cut_start.value,
+                                      cut.face.value))
                 profile_sheet.cell(profile_sheet.max_row, 1).data_type = "s"
     ws.auto_filter.ref = ws.dimensions
     for cells, spec in zip(ws.columns, COLUMN_SPECS):

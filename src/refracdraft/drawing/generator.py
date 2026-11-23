@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from ezdxf.math import Vec2
 
 from refracdraft.domain.models import (
     AnchorParameters,
     AnchorType,
     BoardFaceProfile,
+    CutFace,
     CutStart,
     GeometryType,
     LayoutMode,
@@ -16,7 +18,8 @@ from refracdraft.domain.models import (
     WELDED_ANCHOR_TYPES,
     format_bolt_remark,
 )
-from refracdraft.drawing.board_profiles import board_cut_edges, build_board_profile, machining_dimensions
+from refracdraft.drawing.board_profiles import board_cut_edges, build_board_profile, machining_dimensions, profiles_by_face
+from refracdraft.drawing.multiface import Projection, is_through_cut, machined_module, mounting_sections, project_module
 from refracdraft.drawing.model import Dimension, DrawingDocument, LeaderNote, ModuleDrawing, SheetPage, PlacedModule, ViewDrawing
 from refracdraft.drawing.layout import (
     TITLE_BLOCK_LEFT_MM,
@@ -333,11 +336,56 @@ def _place_annotations(drawing: ModuleDrawing, denominator: int) -> ModuleDrawin
     return replace(
         drawing,
         scale_denominator=denominator,
-        front_view=place_machining_dimensions(drawing.front_view, denominator),
+        front_view=place_cut_notes(
+            place_machining_dimensions(drawing.front_view, denominator), denominator, drawing.module_id,
+        ),
         board_view=place_cut_notes(place_bolt_note(board, denominator), denominator, drawing.module_id),
-        side_view=place_machining_dimensions(drawing.side_view, denominator)
+        side_view=place_cut_notes(
+            place_machining_dimensions(drawing.side_view, denominator), denominator, drawing.module_id,
+        )
         if drawing.side_view is not None else None,
     )
+
+
+def _cut_annotations(module, face: CutFace, profile: BoardFaceProfile | None, projection: Projection):
+    if profile is None:
+        return (), ()
+    width, height, _ = module.cut_face_dimensions(face)
+    retained, dimensions = build_board_profile(width, height, profile)
+    dimensions += machining_dimensions(retained, dimensions)
+    notes = []
+    edges = [(Vec2(a), Vec2(b)) for path in (projection.outline, *projection.holes, *projection.visible, *projection.hidden)
+             for a, b in zip(path.points, path.points[1:] + path.points[:1] if path.closed else path.points[1:])]
+    for cut in profile.features:
+        if is_through_cut(module, cut):
+            continue
+        matches = []
+        cut_edges = board_cut_edges(width, height, cut)
+        for a, b in cut_edges:
+            origin = Vec2(a)
+            length = (Vec2(b) - origin).magnitude
+            direction = (Vec2(b) - origin).normalize()
+            for p, q in edges:
+                if abs(direction.det(p - origin)) > 1e-5 or abs(direction.det(q - origin)) > 1e-5:
+                    continue
+                lo, hi = sorted(((p - origin).dot(direction), (q - origin).dot(direction)))
+                lo, hi = max(0, lo), min(length, hi)
+                if hi > lo + 1e-5:
+                    matches.append((hi - lo, origin + direction * (lo + hi) / 2))
+        if matches:
+            tip = max(matches, key=lambda item: item[0])[1]
+        else:
+            a, b = max(cut_edges, key=lambda edge: (Vec2(edge[1]) - Vec2(edge[0])).magnitude)
+            target = Vec2(a).lerp(Vec2(b))
+            tip = min((p.lerp(q) for p, q in edges), key=lambda point: (point - target).magnitude)
+        notes.append(LeaderNote(tuple(tip), f"{cut.cut_start.value}起切 深{cut.cut_depth_mm:g}", (4, 6), machining=True))
+    return dimensions, tuple(notes)
+
+
+def _machined_view(view: ViewDrawing, projection: Projection, dimensions, notes) -> ViewDrawing:
+    return replace(view, outline=projection.outline, internal_lines=projection.visible,
+                   hidden_lines=projection.hidden, cutouts=(*view.cutouts, *projection.holes),
+                   dimensions=(*view.dimensions, *dimensions), leaders=(*view.leaders, *notes))
 
 
 class DrawingGenerator:
@@ -351,6 +399,14 @@ class DrawingGenerator:
         for note in (module.source_note, board.source_note, anchor.source_note):
             if note:
                 warnings.append(note)
+        profile = module.board_face_outline
+        faces = profiles_by_face(profile) if isinstance(profile, BoardFaceProfile) else {}
+        solid = None
+        if any(face != CutFace.BOARD for face in faces):
+            try:
+                solid = machined_module(module, profile)
+            except ValueError as exc:
+                raise ValueError(f"{module.module_id}: {exc}") from exc
 
         welded = anchor.exists and anchor.count and anchor.anchor_type in WELDED_ANCHOR_TYPES
         front_anchor_type = {
@@ -418,16 +474,17 @@ class DrawingGenerator:
                     raise ValueError(f"{module.module_id}: 锚固件正面投影位于模块轮廓之外")
         if positions and self.reference_library:
             try:
-                profile = self.reference_library.front_anchor_symbol(front_anchor_type.value)
-                profile_colors = profile.colors if len(profile.colors) == len(profile.polylines) else (7,) * len(profile.polylines)
-                profile_lineweights = profile.lineweights if len(profile.lineweights) == len(profile.polylines) else (25,) * len(profile.polylines)
-                profile_linetypes = profile.linetypes if len(profile.linetypes) == len(profile.polylines) else ("CONTINUOUS",) * len(profile.polylines)
+                front_profile = self.reference_library.front_anchor_symbol(front_anchor_type.value)
+                count = len(front_profile.polylines)
+                profile_colors = front_profile.colors if len(front_profile.colors) == count else (7,) * count
+                profile_lineweights = front_profile.lineweights if len(front_profile.lineweights) == count else (25,) * count
+                profile_linetypes = front_profile.linetypes if len(front_profile.linetypes) == count else ("CONTINUOUS",) * count
                 for x, _y in positions:
                     fx = x * module.front_width_mm / module.board_face_width_mm
-                    front_symbols.extend(_translate_symbol(profile.polylines, fx, module.front_height_mm / 2.0))
+                    front_symbols.extend(_translate_symbol(front_profile.polylines, fx, module.front_height_mm / 2.0))
                     front_symbol_colors.extend(profile_colors)
                     front_symbol_lineweights.extend(profile_lineweights)
-                    front_symbol_linetypes.extend(("CONTINUOUS",) * len(profile.polylines) if welded else profile_linetypes)
+                    front_symbol_linetypes.extend(("CONTINUOUS",) * count if welded else profile_linetypes)
             except KeyError as exc:
                 warnings.append(str(exc))
         if not positions and self.reference_library:
@@ -449,9 +506,12 @@ class DrawingGenerator:
 
         side_view = None
         side = module_side_outline(module)
+        if side is None and solid is not None:
+            side = rectangle(module.board_face_height_mm, module.maximum_view_height_mm)
         if side is not None:
-            side_left_h = module.side_left_height_mm or 0
-            side_right_h = module.side_right_height_mm or 0
+            side_length = module.side_length_mm or module.board_face_height_mm
+            side_left_h = module.side_left_height_mm or module.maximum_view_height_mm
+            side_right_h = module.side_right_height_mm or module.maximum_view_height_mm
             side_overall_h = max(side_left_h, side_right_h)
             side_left_bottom = (side_overall_h - side_left_h) / 2.0
             side_right_bottom = (side_overall_h - side_right_h) / 2.0
@@ -459,12 +519,12 @@ class DrawingGenerator:
             side_top_right = side_right_bottom + side_right_h
             side_dims = (
                 Dimension((0, side_top_left),
-                          (module.side_length_mm or 0, side_top_right),
-                          f"{module.side_length_mm:g}", "horizontal", 32),
+                          (side_length, side_top_right),
+                          f"{side_length:g}", "horizontal", 32),
                 Dimension((0, side_left_bottom), (0, side_top_left),
                           f"{side_left_h:g}", "vertical", 40),
-                Dimension((module.side_length_mm or 0, side_right_bottom),
-                          (module.side_length_mm or 0, side_top_right),
+                Dimension((side_length, side_right_bottom),
+                          (side_length, side_top_right),
                           f"{side_right_h:g}", "vertical", -55),
             )
             side_symbols: list[Polyline] = []
@@ -498,7 +558,7 @@ class DrawingGenerator:
                     warnings.append(str(exc))
             elif not positions and self.reference_library:
                 side_internal = self.reference_library.side_expansion_lines(
-                    module.side_length_mm or module.board_face_width_mm,
+                    side_length,
                     side_overall_h,
                     side_left_h,
                     side_right_h,
@@ -515,9 +575,24 @@ class DrawingGenerator:
         cut_lines: list[Polyline] = []
         hidden_cut_lines: list[Polyline] = []
         cut_notes: list[LeaderNote] = []
-        profile = module.board_face_outline
         near_board_outline = None
-        if isinstance(profile, BoardFaceProfile):
+        board_holes = ()
+        if solid is not None:
+            result = {face: project_module(solid, module, face) for face in CutFace}
+            front_dims, front_notes = _cut_annotations(module, CutFace.FRONT, faces.get(CutFace.FRONT), result[CutFace.FRONT])
+            side_dims, side_notes = _cut_annotations(module, CutFace.SIDE, faces.get(CutFace.SIDE), result[CutFace.SIDE])
+            front_view = _machined_view(front_view, result[CutFace.FRONT], front_dims, front_notes)
+            if side_left_h == side_right_h:
+                side_view = replace(side_view, dimensions=side_view.dimensions[:2])
+            side_view = _machined_view(side_view, result[CutFace.SIDE], side_dims, side_notes)
+            board_projection = result[CutFace.BOARD]
+            board_outline = board_projection.outline
+            board_holes = board_projection.holes
+            cut_lines.extend(board_projection.visible)
+            hidden_cut_lines.extend(board_projection.hidden)
+            profile_dimensions, notes = _cut_annotations(module, CutFace.BOARD, faces.get(CutFace.BOARD), board_projection)
+            cut_notes.extend(notes)
+        elif isinstance(profile, BoardFaceProfile):
             width, height = module.board_face_width_mm, module.board_face_height_mm
             _, front_bottom, _, front_top = front.bounds
             max_depth = front_top - front_bottom
@@ -616,12 +691,21 @@ class DrawingGenerator:
         symbol_right = max((box[2] for box in symbol_bounds), default=0.0)
         symbol_top = max((box[3] for box in symbol_bounds), default=0.0)
         min_x, _, max_x, _ = anchor_outline.bounds
+        sections = mounting_sections(solid, module.front_height_mm / 2) if solid is not None and positions else ()
         mounts = {}
         seated = []
         for x, y in positions:
             if not min_x <= x <= max_x:
                 raise ValueError(f"{module.module_id}: 锚固件坐标 ({x:g}, {y:g}) 位于夹板面轮廓之外")
-            mounting_y = _anchor_mount_height(anchor_outline, x, symbol_left, symbol_right)
+            seat_outline = anchor_outline
+            seat_holes = ()
+            if solid is not None:
+                candidates = [(path, holes) for path, *holes in sections
+                              if path.bounds[0] <= x <= path.bounds[2] and _section_intersections(path, x)]
+                if not candidates:
+                    raise ValueError(f"{module.module_id}: 多面剪切已移除锚固件横向位置 {x:g} 的安装材料")
+                seat_outline, seat_holes = max(candidates, key=lambda item: _section_intersections(item[0], x)[-1])
+            mounting_y = _anchor_mount_height(seat_outline, x, symbol_left, symbol_right)
             mounts[x] = mounting_y
             if bolt is not None:
                 y = mounting_y
@@ -630,7 +714,9 @@ class DrawingGenerator:
             elif mounting_y < board_height - 1e-6:
                 nominal_offset = BOARD_ANCHOR_TOP_OFFSET_MM.get(anchor.anchor_type, 35.4391501542)
                 y = min(y, mounting_y - max(symbol_top, nominal_offset))
-            if not point_in_outline(anchor_outline, (x, y)) or (embedded and not point_in_outline(anchor_outline, (x, y - embedded))):
+            checks = {(x, y), (x, y - embedded), (x, y - embedded / 2)}
+            if any(not point_in_outline(seat_outline, point)
+                   or any(point_in_outline(hole, point) for hole in seat_holes) for point in checks):
                 raise ValueError(f"{module.module_id}: 锚固件坐标 ({x:g}, {y:g}) 位于夹板面轮廓之外")
             seated.append((x, y))
         positions = seated
@@ -638,6 +724,9 @@ class DrawingGenerator:
         if side_view is not None and positions:
             left, bottom, right, top = side_view.outline.bounds
             mounting_x = (1 - mounts[min(mounts)] / board_height) * (right - left)
+            if solid is not None:
+                left, bottom, top = 0.0, 0.0, module.maximum_view_height_mm
+                mounting_x = board_height - mounts[min(mounts)]
             if bolt is not None:
                 side_symbol = welded_side_symbol(
                     self.reference_library, anchor, left + mounting_x, (bottom + top) / 2, exposure, embedded,
@@ -646,7 +735,7 @@ class DrawingGenerator:
                 tip = left + mounting_x - exposure
                 side_dimensions = side_view.dimensions
                 if tip <= left_size.line_position + 10:
-                    side_dimensions = (side_dimensions[0], replace(left_size, offset=left - tip + 18), side_dimensions[2])
+                    side_dimensions = (side_dimensions[0], replace(left_size, offset=left - tip + 18), *side_dimensions[2:])
                 side_view = replace(
                     side_view, dimensions=side_dimensions, anchor_symbols=side_symbol.polylines,
                     anchor_symbol_colors=side_symbol.colors,
@@ -668,7 +757,7 @@ class DrawingGenerator:
                 symbol_linetypes.extend(profile_linetypes)
         elif positions and anchor.anchor_type not in (AnchorType.NONE, AnchorType.CUSTOM):
             warnings.append(f"锚固件类型 {anchor.anchor_type.value} 的参考符号尚未加载")
-        cutouts: list[Polyline] = []
+        cutouts: list[Polyline] = list(board_holes)
         if board.exists and board.opening_mode == OpeningMode.CUSTOM and board.custom_opening:
             opening = Polyline(tuple((p.x, p.y) for p in board.custom_opening), closed=True)
             opening_positions = positions or [(module.board_face_width_mm / 2.0, module.board_face_height_mm / 2.0)]

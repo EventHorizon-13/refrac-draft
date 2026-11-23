@@ -17,7 +17,7 @@ from refracdraft.domain.models import (
     Project,
     StructureType,
 )
-from refracdraft.drawing.board_profiles import build_board_profile
+from refracdraft.drawing.board_profiles import build_board_profile, profiles_by_face
 
 
 @dataclass(frozen=True)
@@ -99,11 +99,6 @@ def build_standard_module(
     length = _positive(values.length_mm, "长度", module_id)
     expansion = _positive(values.expansion_length_mm, "膨胀长度", module_id)
     thickness = _positive(values.thickness_mm, "厚度", module_id)
-    if values.board_face_profile is not None:
-        try:
-            build_board_profile(length, thickness, values.board_face_profile)
-        except ValueError as exc:
-            raise ValueError(f"{module_id}: {exc}") from exc
     data = base.model_dump(mode="python") if base else {}
     data.update(
         module_id=module_id,
@@ -165,7 +160,15 @@ def build_standard_module(
             )
         else:
             raise ValueError(f"{module_id}: 大小头类型必须是正敲或侧敲")
-    return ModuleParameters.model_validate(data)
+    module = ModuleParameters.model_validate(data)
+    if values.board_face_profile is not None:
+        for face, profile in profiles_by_face(values.board_face_profile).items():
+            width, height, _ = module.cut_face_dimensions(face)
+            try:
+                build_board_profile(width, height, profile)
+            except ValueError as exc:
+                raise ValueError(f"{module_id} {face}: {exc}") from exc
+    return module
 
 
 def build_standard_board(
@@ -337,6 +340,6 @@ def ensure_standard_project(project: Project) -> None:
             or module.board_face_template_id != "rectangular"
         ):
             raise ValueError(
-                f"{module.module_id}: 标准版仅支持「异形模块」中的夹板面异形预设"
+                f"{module.module_id}: 标准版仅支持「异形模块」中的切口预设"
             )
 

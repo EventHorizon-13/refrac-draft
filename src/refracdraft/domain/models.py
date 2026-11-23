@@ -75,10 +75,28 @@ class OutlineSpec(BaseModel):
 class CutStart(StrEnum):
     LOWER = "下夹板"
     UPPER = "上夹板"
+    FRONT = "正面"
+    BACK = "背面"
+    LEFT = "左端"
+    RIGHT = "右端"
+
+
+class CutFace(StrEnum):
+    BOARD = "夹板面"
+    FRONT = "正面"
+    SIDE = "侧面"
+
+    @property
+    def starts(self) -> tuple[CutStart, CutStart]:
+        return {
+            CutFace.BOARD: (CutStart.LOWER, CutStart.UPPER),
+            CutFace.FRONT: (CutStart.FRONT, CutStart.BACK),
+            CutFace.SIDE: (CutStart.LEFT, CutStart.RIGHT),
+        }[self]
 
 
 class BoardFaceFeature(BaseModel):
-    """One perimeter cut from the illustrated board-face templates, in mm."""
+    """One preset perimeter cut in the selected view's local coordinates."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     type: Literal[1, 2, 3, 4]
@@ -86,10 +104,20 @@ class BoardFaceFeature(BaseModel):
     b: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     c: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     d: float | None = Field(default=None, allow_inf_nan=False)
+    face: CutFace = CutFace.BOARD
     cut_depth_mm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     cut_start: CutStart = CutStart.LOWER
     rotation_deg: Literal[0, 90, 180, 270] = 0
     mirror_x: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_cut_start(cls, data):
+        if isinstance(data, dict) and "cut_start" not in data:
+            face = data.get("face", CutFace.BOARD)
+            if face in tuple(CutFace):
+                return {**data, "cut_start": CutFace(face).starts[0]}
+        return data
 
     @model_validator(mode="after")
     def validate_dimensions(self) -> "BoardFaceFeature":
@@ -100,6 +128,9 @@ class BoardFaceFeature(BaseModel):
         supplied = "".join(key for key in "abcd" if getattr(self, key) is not None)
         if supplied != required:
             raise ValueError(f"夹板面类型 {self.type} 需要尺寸 {', '.join(required)}")
+        if self.cut_start not in self.face.starts:
+            valid = "、".join(side.value for side in self.face.starts)
+            raise ValueError(f"{self.face.value}起切面须为{valid}")
         return self
 
 
@@ -173,6 +204,20 @@ class ModuleParameters(BaseModel):
             self.side_left_height_mm, self.side_right_height_mm,
         ) if value is not None)
 
+    @property
+    def maximum_view_height_mm(self) -> float:
+        return max(value for value in (
+            self.front_height_mm, self.front_left_height_mm, self.front_right_height_mm,
+            self.side_left_height_mm, self.side_right_height_mm,
+        ) if value is not None)
+
+    def cut_face_dimensions(self, face: CutFace) -> tuple[float, float, float]:
+        if face == CutFace.FRONT:
+            return self.front_width_mm, self.maximum_view_height_mm, self.board_face_height_mm
+        if face == CutFace.SIDE:
+            return self.side_length_mm or self.board_face_height_mm, self.maximum_view_height_mm, self.board_face_width_mm
+        return self.board_face_width_mm, self.board_face_height_mm, self.minimum_expansion_mm
+
     @model_validator(mode="after")
     def validate_geometry(self) -> "ModuleParameters":
         if self.expansion_length_mm is None:
@@ -190,8 +235,9 @@ class ModuleParameters(BaseModel):
                 raise ValueError("侧敲模块必须输入侧面长度和侧面两端高度")
         if isinstance(self.board_face_outline, BoardFaceProfile):
             for index, feature in enumerate(self.board_face_outline.features, 1):
-                if feature.cut_depth_mm is not None and feature.cut_depth_mm > self.minimum_expansion_mm:
-                    raise ValueError(f"{self.module_id}: 切口 {index} 的剪切深度不能超过 {self.minimum_expansion_mm:g} mm")
+                _, _, max_depth = self.cut_face_dimensions(feature.face)
+                if feature.cut_depth_mm is not None and feature.cut_depth_mm > max_depth:
+                    raise ValueError(f"{self.module_id}: {feature.face}切口 {index} 的剪切深度不能超过 {max_depth:g} mm")
         return self
 
 

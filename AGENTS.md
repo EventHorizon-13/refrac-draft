@@ -13,6 +13,7 @@ Before coding, read `PROMPT.md`, `README.md`, and `docs/REFERENCE_ANALYSIS.md`.
 - **侧敲** means the trapezoid is on the side face: front view + side trapezoid view + board-face view (3 views).
 - **正敲** means the trapezoid is on the front face: front trapezoid + board-face view (2 views).
 - Normal modules use front + board-face views (2 views).
+- Modules with parametric front or side cuts use all three views. Compute the remaining solid after combining the cuts, then project that same geometry into each view.
 - Quick-insert anchor types determine a standard board opening; custom opening geometry is also supported.
 - Board-face shapes include multiple irregular templates. Inspect and reuse the actual shapes in the reference DXF; do not reduce them to generic rectangles/trapezoids.
 - Side-insert and quick-insert are different anchor types.

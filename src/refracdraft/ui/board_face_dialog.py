@@ -1,4 +1,4 @@
-"""Interactive editor for the four parameterized board-face cuts."""
+"""Interactive editor for the four parameterized cuts in each orthographic view."""
 
 from __future__ import annotations
 
@@ -8,11 +8,12 @@ from PySide6.QtCore import QEvent, QPointF, QRectF, Qt
 from PySide6.QtGui import QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QLineEdit, QPushButton, QScrollArea, QTabBar, QVBoxLayout, QWidget,
 )
 
-from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, CutStart
-from refracdraft.drawing.board_profiles import build_board_profile, chamfer_legs
+from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, CutFace, ModuleParameters
+from refracdraft.drawing.board_profiles import build_board_profile, chamfer_legs, profiles_by_face
+from refracdraft.drawing.multiface import machined_module
 from refracdraft.drawing.model import Dimension
 from refracdraft.geometry.primitives import Polyline, rectangle
 
@@ -30,6 +31,15 @@ class OutlinePreview(QWidget):
         self.dimensions: tuple[tuple[str, Dimension], ...] = ()
         self.setMinimumSize(450, 235)
         self.setAccessibleName("夹板面轮廓示意图")
+
+    @staticmethod
+    def dimension_endpoints(dim: Dimension, start: QPointF, end: QPointF, scale: float):
+        offset = max(-34, min(34, -dim.offset * scale))
+        if dim.orientation == "horizontal":
+            lane = min(start.y(), end.y()) + offset
+            return QPointF(start.x(), lane), QPointF(end.x(), lane)
+        lane = min(start.x(), end.x()) + offset
+        return QPointF(lane, start.y()), QPointF(lane, end.y())
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -56,16 +66,15 @@ class OutlinePreview(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         for letter, dim in self.dimensions:
             start, end = point(*dim.start), point(*dim.end)
+            first, last = self.dimension_endpoints(dim, start, end, scale)
             if dim.orientation == "horizontal":
-                shift = QPointF(0, max(-34, min(34, -dim.offset * scale)))
                 text_shift = QPointF(0, -10)
             else:
-                shift = QPointF(max(-34, min(34, -dim.offset * scale)), 0)
                 text_shift = QPointF(-12 if dim.offset > 0 else 12, 0)
-            painter.drawLine(start, start + shift)
-            painter.drawLine(end, end + shift)
-            painter.drawLine(start + shift, end + shift)
-            center = (start + end) / 2 + shift + text_shift
+            painter.drawLine(start, first)
+            painter.drawLine(end, last)
+            painter.drawLine(first, last)
+            center = (first + last) / 2 + text_shift
             label_rect = QRectF(center.x() - 8, center.y() - 8, 16, 16)
             painter.fillRect(label_rect, palette.base())
             painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, letter)
@@ -73,6 +82,7 @@ class OutlinePreview(QWidget):
 
 @dataclass
 class CutControls:
+    face: CutFace
     kind: QComboBox
     dimensions: dict[str, QLineEdit]
     depth: QLineEdit
@@ -99,7 +109,7 @@ class CutControls:
             raise ValueError("剪切深度须为正数，留空表示贯通") from None
         try:
             return BoardFaceFeature(
-                type=kind + 1, **values, cut_depth_mm=depth, cut_start=self.start.currentData(),
+                type=kind + 1, **values, face=self.face, cut_depth_mm=depth, cut_start=self.start.currentData(),
                 rotation_deg=self.angle, mirror_x=self.mirror.isChecked(),
             )
         except ValueError:
@@ -114,17 +124,25 @@ class CutControls:
 
 
 class BoardFaceDialog(QDialog):
-    def __init__(self, module_id: str, width: float, height: float,
-                 profile: BoardFaceProfile | None, parent: QWidget, *, max_depth: float | None = None):
+    def __init__(self, module: ModuleParameters, profile: BoardFaceProfile | None, parent: QWidget):
         super().__init__(parent)
-        self.setWindowTitle(f"异形模块 · {module_id}")
+        self.setWindowTitle(f"异形模块 · {module.module_id}")
         self.resize(900, 490)
-        self.max_depth = max_depth
+        self.module = module
+        self.active_face = CutFace.BOARD
         self.profile: BoardFaceProfile | None = profile
-        self.cuts: list[CutControls] = []
+        self._all_cuts: list[CutControls] = []
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(f"夹板面外框  {width:g} × {height:g} mm   ·   在参数表修改长度和厚度"))
+        self.faces = QTabBar()
+        self.faces.setExpanding(False)
+        for face in CutFace:
+            self.faces.addTab(face.value)
+        self.faces.setAccessibleName("加工面")
+        layout.addWidget(self.faces)
+        self.face_caption = QLabel()
+        layout.addWidget(self.face_caption)
+        width, height, _ = self.module.cut_face_dimensions(self.active_face)
         self.preview = OutlinePreview(width, height, self)
         layout.addWidget(self.preview, 1)
 
@@ -135,7 +153,7 @@ class BoardFaceDialog(QDialog):
         grid_widget = QWidget()
         self.grid = QGridLayout(grid_widget)
         self.grid.setAlignment(Qt.AlignmentFlag.AlignTop)
-        for column, label in enumerate(("轮廓类型", "a", "b", "c", "d", "剪切深度", "起切夹板", "旋转", "镜像", "")):
+        for column, label in enumerate(("轮廓类型", "a", "b", "c", "d", "剪切深度", "起切面", "旋转", "镜像", "")):
             self.grid.addWidget(QLabel(label), 0, column)
         for column in range(1, 5):
             self.grid.setColumnStretch(column, 1)
@@ -162,7 +180,23 @@ class BoardFaceDialog(QDialog):
         layout.addWidget(buttons)
         for feature in profile.features if profile else (None,):
             self._add_cut(feature)
-        self._refresh(self.cuts[0])
+        self.faces.currentChanged.connect(self._select_face)
+        self._select_face(0)
+
+    @property
+    def cuts(self) -> list[CutControls]:
+        return [cut for cut in self._all_cuts if cut.face == self.active_face]
+
+    def _select_face(self, index: int) -> None:
+        self.active_face = tuple(CutFace)[index]
+        width, height, depth = self.module.cut_face_dimensions(self.active_face)
+        self.preview.frame_width, self.preview.frame_height = width, height
+        self.preview.setAccessibleName(f"{self.active_face}切口示意图")
+        self.face_caption.setText(
+            f"外框 {width:g} × {height:g} mm  ·  最大盲切深度 {depth:g} mm  ·  更换起切面只反转深度方向"
+        )
+        self._place_rows()
+        self._refresh(next(iter(self.cuts), None))
 
     def eventFilter(self, watched, event):
         if event.type() == QEvent.Type.FocusIn:
@@ -173,10 +207,18 @@ class BoardFaceDialog(QDialog):
         return super().eventFilter(watched, event)
 
     def accept(self) -> None:
-        if self.confirm.isEnabled():
-            super().accept()
+        if not self.confirm.isEnabled():
+            return
+        if self.profile is not None and any(cut.face != CutFace.BOARD for cut in self.profile.features):
+            try:
+                machined_module(self.module, self.profile)
+            except ValueError as exc:
+                self.status.setText(str(exc))
+                return
+        super().accept()
 
     def _add_cut(self, feature: BoardFaceFeature | None = None) -> None:
+        face = feature.face if feature is not None else self.active_face
         kind = QComboBox()
         kind.addItems(CUT_NAMES)
         kind.setCurrentIndex(feature.type - 1 if feature else 0)
@@ -188,15 +230,15 @@ class BoardFaceDialog(QDialog):
         depth = QLineEdit()
         depth.setPlaceholderText("贯通")
         depth.setAccessibleName("剪切深度（mm）")
-        depth.setToolTip("从选定夹板向模块内部量取，留空表示贯通")
+        depth.setToolTip("从选定的起切面向模块内部量取，留空表示贯通")
         depth.setMinimumWidth(70)
         if feature and feature.cut_depth_mm is not None:
             depth.setText(f"{feature.cut_depth_mm:g}")
         start = QComboBox()
-        start.setAccessibleName("起切夹板")
-        for face in CutStart:
-            start.addItem(face.value, face.value)
-        start.setCurrentIndex(start.findData((feature.cut_start if feature else CutStart.LOWER).value))
+        start.setAccessibleName("起切面")
+        for origin in face.starts:
+            start.addItem(origin.value, origin.value)
+        start.setCurrentIndex(start.findData((feature.cut_start if feature else face.starts[0]).value))
         start.setEnabled(bool(depth.text()))
         rotate = QPushButton()
         rotate.setToolTip("逆时针旋转 90°")
@@ -207,9 +249,9 @@ class BoardFaceDialog(QDialog):
         remove = QPushButton("删除")
         for button in (rotate, mirror, remove):
             button.setAutoDefault(False)
-        cut = CutControls(kind, inputs, depth, start, rotate, mirror, remove, 0)
+        cut = CutControls(face, kind, inputs, depth, start, rotate, mirror, remove, 0)
         cut.set_angle(feature.rotation_deg if feature else 0)
-        self.cuts.append(cut)
+        self._all_cuts.append(cut)
         self._place_rows()
         self._set_inputs(cut, feature)
         for widget in cut.widgets():
@@ -224,12 +266,17 @@ class BoardFaceDialog(QDialog):
         remove.clicked.connect(lambda: self._remove_cut(cut))
 
     def _place_rows(self) -> None:
+        for cut in self._all_cuts:
+            for widget in cut.widgets():
+                self.grid.removeWidget(widget)
+                widget.hide()
         for row, cut in enumerate(self.cuts, 1):
             for column, widget in enumerate(cut.widgets()):
                 self.grid.addWidget(widget, row, column)
+                widget.show()
 
     def _set_inputs(self, cut: CutControls, feature: BoardFaceFeature | None = None) -> None:
-        width, height = self.preview.frame_width, self.preview.frame_height
+        width, height, _ = self.module.cut_face_dimensions(cut.face)
         if cut.angle in (90, 270):
             width, height = height, width
         kind = cut.kind.currentIndex()
@@ -262,7 +309,7 @@ class BoardFaceDialog(QDialog):
         self._refresh(cut)
 
     def _remove_cut(self, cut: CutControls) -> None:
-        self.cuts.remove(cut)
+        self._all_cuts.remove(cut)
         for widget in cut.widgets():
             self.grid.removeWidget(widget)
             widget.hide()
@@ -276,25 +323,28 @@ class BoardFaceDialog(QDialog):
         self.preview.dimensions = ()
         try:
             features = []
-            for index, cut in enumerate(self.cuts, 1):
+            for index, cut in enumerate(self._all_cuts, 1):
                 try:
                     feature = cut.read()
-                    if self.max_depth is not None and feature.cut_depth_mm is not None and feature.cut_depth_mm > self.max_depth:
-                        raise ValueError(f"剪切深度不能超过 {self.max_depth:g} mm")
+                    _, _, max_depth = self.module.cut_face_dimensions(cut.face)
+                    if feature.cut_depth_mm is not None and feature.cut_depth_mm > max_depth:
+                        raise ValueError(f"剪切深度不能超过 {max_depth:g} mm")
                     features.append(feature)
                 except ValueError as exc:
-                    raise ValueError(f"切口 {index}：{exc}") from exc
+                    raise ValueError(f"{cut.face}切口 {index}：{exc}") from exc
             self.profile = BoardFaceProfile(features=features) if features else None
-            if self.profile is None:
-                self.preview.outline = rectangle(width, height)
-            else:
-                outline, dimensions = build_board_profile(width, height, self.profile)
+            self.preview.outline = rectangle(width, height)
+            for face, profile in (profiles_by_face(self.profile).items() if self.profile is not None else ()):
+                face_width, face_height, _ = self.module.cut_face_dimensions(face)
+                outline, dimensions = build_board_profile(face_width, face_height, profile)
+                if face != self.active_face:
+                    continue
                 self.preview.outline = outline
-                if active is not None:
+                if active in self.cuts:
                     active_index = self.cuts.index(active)
                     key_groups = [
                         "".join(letter for letter in CUT_DIMENSIONS[feature.type - 1] if getattr(feature, letter) != 0)
-                        for feature in features
+                        for feature in profile.features
                     ]
                     start = sum(map(len, key_groups[:active_index]))
                     letters = key_groups[active_index]
@@ -303,6 +353,6 @@ class BoardFaceDialog(QDialog):
             self.status.setText(str(exc))
             self.confirm.setEnabled(False)
         else:
-            self.status.setText("矩形夹板面" if self.profile is None else "")
+            self.status.setText("此面没有切口" if not self.cuts else "")
             self.confirm.setEnabled(True)
         self.preview.update()

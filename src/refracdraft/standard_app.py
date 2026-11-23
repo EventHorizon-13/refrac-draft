@@ -260,6 +260,11 @@ def main() -> None:
                     cut.dimensions["b"].setText("60")
                     if not dialog.confirm.isEnabled() or dialog.profile.features[0].b != 60:
                         raise ValueError("斜切角未从弹窗读取 a、b")
+                    for letter, dim in dialog.preview.dimensions:
+                        start, end = (QPointF(x, -y) for x, y in (dim.start, dim.end))
+                        first, last = dialog.preview.dimension_endpoints(dim, start, end, 1.0)
+                        if (first.y() != last.y() if letter == "a" else first.x() != last.x()):
+                            raise ValueError("斜切角预览未把 a、b 分别画成水平和竖向尺寸")
                     cut.kind.setCurrentIndex(1)
                     cut.dimensions["a"].setText("80")
                     cut.dimensions["d"].setText("-20")
@@ -269,7 +274,17 @@ def main() -> None:
                     cut.mirror.click()
                     if not dialog.confirm.isEnabled() or dialog.preview.outline == initial_outline:
                         raise ValueError("异形夹板面示意图未随切口参数改变")
+                    for tab, start in ((1, "背面"), (2, "右端")):
+                        dialog.faces.setCurrentIndex(tab)
+                        dialog._add_cut()
+                        added = dialog.cuts[-1]
+                        added.dimensions["a"].setText("45")
+                        added.dimensions["b"].setText("55")
+                        added.depth.setText("40")
+                        added.start.setCurrentText(start)
                     dialog.confirm.click()
+                    if dialog.isVisible():
+                        raise ValueError(f"多面异形未通过弹窗验证：{dialog.status.text()}")
                 except Exception as exc:
                     dialog_errors.append(exc)
                     if dialog is not None:
@@ -279,14 +294,21 @@ def main() -> None:
             profile_button.click()
             if dialog_errors:
                 raise dialog_errors[0]
-            profile = window._collect_project().modules[0].board_face_outline
+            edited = window._collect_project()
+            profile = edited.modules[0].board_face_outline
             if (
                 not profile or profile.features[0].rotation_deg != 90
                 or not profile.features[0].mirror_x or profile.features[0].cut_depth_mm != 75
                 or profile.features[0].cut_start != "上夹板"
                 or profile.features[0].d != -20
+                or [(cut.face.value, cut.cut_start.value) for cut in profile.features[1:]]
+                != [("正面", "背面"), ("侧面", "右端")]
             ):
                 raise ValueError("异形夹板面参数未进入项目数据")
+            machined = DrawingGenerator().build_module(edited, edited.modules[0])
+            if (not machined.side_view or not machined.front_view.leaders
+                or not machined.side_view.leaders):
+                raise ValueError("多面剪切三视图或盲切标注缺失")
             window.undo()
             if window._collect_project().modules[0].board_face_outline is not None:
                 raise ValueError("撤销未清除异形轮廓")

@@ -4,7 +4,7 @@ from math import isfinite
 
 from ezdxf.math import Vec2, intersection_line_line_2d, is_point_on_line_2d
 
-from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile
+from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, CutFace
 from refracdraft.drawing.model import Dimension
 from refracdraft.geometry.primitives import Polyline
 
@@ -12,6 +12,13 @@ from refracdraft.geometry.primitives import Polyline
 Point = tuple[float, float]
 Measure = tuple[Point, Point, float] | tuple[Point, Point, float, bool]
 EPSILON = 1e-8
+
+
+def profiles_by_face(profile: BoardFaceProfile) -> dict[CutFace, BoardFaceProfile]:
+    grouped: dict[CutFace, list[BoardFaceFeature]] = {}
+    for feature in profile.features:
+        grouped.setdefault(feature.face, []).append(feature)
+    return {face: BoardFaceProfile(features=features) for face, features in grouped.items()}
 
 
 def chamfer_legs(width: float, height: float, feature: BoardFaceFeature) -> tuple[float, float]:

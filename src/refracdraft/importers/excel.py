@@ -8,7 +8,7 @@ from typing import Any
 from openpyxl import load_workbook
 
 from refracdraft.domain.models import (
-    AnchorParameters, BoardFaceFeature, BoardFaceProfile, BoardParameters, CutStart, GeometryType,
+    AnchorParameters, BoardFaceFeature, BoardFaceProfile, BoardParameters, CutFace, GeometryType,
     ModuleParameters, Project,
 )
 from refracdraft.standard_sheet import (
@@ -200,13 +200,15 @@ def _profiles(ws) -> dict[str, BoardFaceProfile]:
     features: dict[str, list[BoardFaceFeature]] = {}
     for number, row in enumerate(_rows(ws), start=2):
         try:
-            module_id, kind, a, b, c, d, angle, mirror, depth, cut_start = (row.get(key) for key in PROFILE_COLUMNS)
+            module_id, kind, a, b, c, d, angle, mirror, depth, cut_start, face = (row.get(key) for key in PROFILE_COLUMNS)
             if module_id is None or not str(module_id).strip():
                 raise ValueError("缺少编号")
             cuts = features.setdefault(str(module_id).strip(), [])
+            face = CutFace(str(face or "").strip() or CutFace.BOARD)
+            cut_start = str(cut_start or row.get("起切夹板") or "").strip() or face.starts[0]
             cuts.append(BoardFaceFeature(type=kind, a=a, b=b, c=c, d=d,
                                          cut_depth_mm=_number(depth) if depth not in (None, "", "贯通") else None,
-                                         cut_start=str(cut_start or "").strip() or CutStart.LOWER,
+                                         face=face, cut_start=cut_start,
                                          rotation_deg=angle or 0, mirror_x=_bool(mirror) if mirror is not None else False))
         except ValueError as exc:
             raise ValueError(f"「{PROFILE_SHEET}」第 {number} 行：{exc}") from exc

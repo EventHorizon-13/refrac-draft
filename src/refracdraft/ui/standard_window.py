@@ -63,6 +63,7 @@ from refracdraft.domain.models import (
     WELDED_ANCHOR_TYPES,
     BoardFaceProfile,
     BoardParameters,
+    GeometryType,
     ModuleParameters,
     Project,
 )
@@ -1097,7 +1098,7 @@ class StandardWindow(MainWindow):
     @staticmethod
     def _set_profile_button(button: QPushButton, profile: BoardFaceProfile | None) -> None:
         button.setText("异形模块 ✓" if profile is not None else "异形模块…")
-        button.setToolTip("编辑夹板面轮廓")
+        button.setToolTip("编辑夹板面、正面和侧面的切口")
 
     def _edit_board_face(self, row: int, button: QPushButton) -> None:
         if not 0 <= row < len(self._row_bases):
@@ -1105,21 +1106,36 @@ class StandardWindow(MainWindow):
         self.parameter_table.setCurrentCell(row, COLUMN_INDEX["module_id"])
         values = self._sheet_values(row)
         try:
-            width, height = standard_board_face_bounds(values)
-            depth_key = "small_head_mm" if values["taper_enabled"] else "expansion_length_mm"
-            max_depth = float(str(values[depth_key]).replace(",", ""))
-            if not (0 < max_depth < float("inf")):
-                raise ValueError("请填写有效的膨胀长度或小头尺寸")
+            length, thickness = standard_board_face_bounds(values)
+            geometry = GeometryType(str(values["taper_type"])) if values["taper_enabled"] else GeometryType.NORMAL
+            height_key = "big_head_mm" if values["taper_enabled"] else "expansion_length_mm"
+            height = float(str(values[height_key]).replace(",", ""))
+            if not 0 < height < float("inf"):
+                raise ValueError("请填写有效的膨胀长度或大头尺寸")
+            options = {}
+            if geometry != GeometryType.NORMAL:
+                small = float(str(values["small_head_mm"]).replace(",", ""))
+                if not 0 < small < height:
+                    raise ValueError("小头尺寸须为正数且小于大头")
+                if geometry == GeometryType.FRONT_TAPER:
+                    options = {"front_left_height_mm": height, "front_right_height_mm": small}
+                else:
+                    options = {"side_length_mm": thickness, "side_left_height_mm": height, "side_right_height_mm": small}
+            module = ModuleParameters(
+                module_id=str(values["module_id"]) or f"第 {row + 1} 行",
+                geometry_type=geometry, front_width_mm=length, front_height_mm=height,
+                board_face_width_mm=length, board_face_height_mm=thickness, **options,
+            )
         except ValueError as exc:
             QMessageBox.warning(self, "请先填写有效的外尺寸", str(exc))
             return
         base = self._row_bases[row]
-        dialog = BoardFaceDialog(str(values["module_id"]) or f"第 {row + 1} 行", width, height, base.profile, self, max_depth=max_depth)
+        dialog = BoardFaceDialog(module, base.profile, self)
         if dialog.exec() == QDialog.DialogCode.Accepted and dialog.profile != base.profile:
             self._row_bases[row] = replace(base, profile=dialog.profile)
             self._set_profile_button(button, dialog.profile)
             self._record_history()
-            self.statusBar().showMessage("夹板面轮廓已修改，点击「预览」更新图纸。")
+            self.statusBar().showMessage("异形切口已修改，点击「预览」更新图纸。")
         dialog.deleteLater()
         self.activateWindow()
         self.parameter_table.setFocus(Qt.FocusReason.OtherFocusReason)
