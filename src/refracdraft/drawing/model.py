@@ -7,6 +7,10 @@ from dataclasses import dataclass, field
 from refracdraft.geometry.primitives import Polyline
 
 
+LAYER_MARK_ACI = 153
+LAYER_MARK_LINEWEIGHT = 18
+
+
 def linetype_role(value: str | None) -> str:
     """Classify imported CAD line styles for both preview and export."""
     name = (value or "").upper()
@@ -85,6 +89,7 @@ class ViewDrawing:
     anchor_marker_style: str = "target"
     hidden_lines: tuple[Polyline, ...] = ()
     leaders: tuple[LeaderNote, ...] = ()
+    layer_marks: tuple[Polyline, ...] = ()
 
 
 @dataclass(frozen=True)

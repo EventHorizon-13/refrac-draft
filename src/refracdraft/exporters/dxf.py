@@ -31,11 +31,12 @@ from refracdraft.drawing.layout import (
     view_label_position,
     view_placement,
 )
-from refracdraft.drawing.model import DrawingDocument, ViewDrawing, linetype_role
+from refracdraft.drawing.model import LAYER_MARK_ACI, LAYER_MARK_LINEWEIGHT, DrawingDocument, ViewDrawing, linetype_role
 
 
 LAYER_COLORS = {
     "OUTLINE": 7,
+    "LAYER_MARKS": LAYER_MARK_ACI,
     "DIMENSIONS": 4,
     "HIDDEN": 7,
     "ANCHORS": 5,
@@ -222,6 +223,9 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
     for line in view.internal_lines:
         pts = [(ox + x, oy + y) for x, y in line.points]
         _add_polyline(msp, pts, line.closed, "OUTLINE")
+    for line in view.layer_marks:
+        pts = [(ox + x, oy + y) for x, y in line.points]
+        _add_polyline(msp, pts, line.closed, "LAYER_MARKS", lineweight=LAYER_MARK_LINEWEIGHT)
     for line in view.hidden_lines:
         pts = [(ox + x, oy + y) for x, y in line.points]
         _add_polyline(msp, pts, line.closed, "HIDDEN", lineweight=13, linetype="HIDDEN")

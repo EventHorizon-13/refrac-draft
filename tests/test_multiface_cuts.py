@@ -1,10 +1,16 @@
+from pathlib import Path
+
+import ezdxf
 import pytest
 
 from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, CutFace, CutStart, Project
 from refracdraft.drawing.generator import DrawingGenerator
+from refracdraft.drawing.model import LAYER_MARK_ACI
 from refracdraft.drawing.multiface import machined_module, project_module
+from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.project import export_standard_excel
 from refracdraft.importers.excel import import_project_xlsx
+from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.standard_sheet import DEFAULT_ROW, build_standard_row
 
 
@@ -104,3 +110,36 @@ def test_back_cut_relocates_anchor_to_remaining_installation_surface():
     project, _ = _project(through, anchor_enabled=True, anchor_type="M型", anchor_position_mm="100")
     with pytest.raises(ValueError, match="移除锚固件"):
         DrawingGenerator().build_module(project, project.modules[0])
+
+
+def test_no_anchor_layer_marks_survive_multiface_cuts_and_stop_at_the_chamfer(tmp_path):
+    library = ReferenceLibrary(Path(__file__).resolve().parents[1] / "references" / "示例.dxf")
+    generator = DrawingGenerator(library)
+    side = BoardFaceFeature(face=CutFace.SIDE, type=1, a=92, b=60, mirror_x=True)
+    board = BoardFaceFeature(type=1, a=120, b=46)
+    front = BoardFaceFeature(face=CutFace.FRONT, type=3, a=75, b=75)
+    sizes = {"thickness_mm": "230", "expansion_length_mm": "300"}
+    project, _ = _project(front, side, board, **sizes)
+    drawing = generator.generate(project)
+    module = drawing.pages[0].modules[0].drawing
+    original = library.stacked_front_lines(300, 300)
+    assert len(module.front_view.layer_marks) == len(original) == 4
+    assert module.front_view.layer_marks == original
+    assert not module.side_view.layer_marks
+    assert any(line.points[0][0] == line.points[-1][0] for line in module.front_view.internal_lines)
+
+    path = export_dxf(drawing, tmp_path / "layer-marks.dxf")
+    doc = ezdxf.readfile(path)
+    assert doc.layers.get("LAYER_MARKS").color == LAYER_MARK_ACI
+    assert doc.layers.get("OUTLINE").color == 7
+    marks = [entity for entity in doc.modelspace().query("LWPOLYLINE") if entity.dxf.layer == "LAYER_MARKS"]
+    assert len(marks) == 4
+
+    chamfer = front.model_copy(update={"a": 100, "b": 200, "mirror_x": True})
+    clipped, _ = _project(chamfer, side, board, **sizes)
+    view = generator.build_module(clipped, clipped.modules[0]).front_view
+    assert len(view.layer_marks) == 4
+    for mark, source in zip(view.layer_marks, original):
+        x, y = max(mark.points)
+        assert x == pytest.approx(min(max(source.points)[0], 300 - (y - 100) / 2))
+    assert view.layer_marks != original

@@ -158,7 +158,7 @@ def test_stacked_no_anchor_uses_source_layer_marks():
     project = Project(modules=[module], anchors=[AnchorParameters(module_id="S1", exists=False, anchor_type=AnchorType.NONE, count=0)])
     drawing = DrawingGenerator(ReferenceLibrary(REF_DXF) if REF_DXF.exists() else None).generate(project).pages[0].modules[0].drawing
     if REF_DXF.exists():
-        assert len(drawing.front_view.internal_lines) == 4
+        assert len(drawing.front_view.layer_marks) == 4
     assert drawing.board_view.note == "夹板"
 
 

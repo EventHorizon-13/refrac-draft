@@ -425,8 +425,9 @@ def test_no_anchor_views_include_expansion_face_marks():
     project = Project(modules=[module], boards=[board], anchors=[anchor])
     document = DrawingGenerator(ReferenceLibrary("references/示例.dxf")).generate(project)
     drawing = document.pages[0].modules[0].drawing
-    assert len(drawing.front_view.internal_lines) == 6
-    assert len(drawing.side_view.internal_lines) == 4
+    assert len(drawing.front_view.internal_lines) == 2
+    assert len(drawing.front_view.layer_marks) == 4
+    assert len(drawing.side_view.layer_marks) == 4
 
 
 def test_diamond_side_anchor_uses_expansion_face_profile():

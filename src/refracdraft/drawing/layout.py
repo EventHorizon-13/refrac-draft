@@ -92,7 +92,8 @@ def _leader_text_bounds(note: LeaderNote, denominator: int) -> tuple[float, floa
 def view_bounds(view: ViewDrawing, denominator: int = 10) -> tuple[float, float, float, float]:
     """Conservative paper-space bounds of the visible geometry and its dimensions."""
     annotation_scale = annotation_factor(denominator)
-    geometry = (view.outline, *view.internal_lines, *view.hidden_lines, *view.anchor_symbols, *view.cutouts)
+    geometry = (view.outline, *view.internal_lines, *view.hidden_lines, *view.layer_marks,
+                *view.anchor_symbols, *view.cutouts)
     boxes = [line.bounds for line in geometry]
     left = min(box[0] for box in boxes) / denominator
     bottom = min(box[1] for box in boxes) / denominator
@@ -349,7 +350,7 @@ def view_label_position(view: ViewDrawing, module_id: str, denominator: int) -> 
     for line in (*view.anchor_symbols, *view.cutouts):
         x1, y1, x2, y2 = (value / denominator for value in line.bounds)
         boxes.append((x1 - 0.4, y1 - 0.4, x2 + 0.4, y2 + 0.4))
-    for line in (*view.internal_lines, *view.hidden_lines):
+    for line in (*view.internal_lines, *view.hidden_lines, *view.layer_marks):
         for a, b in zip(line.points, line.points[1:]):
             left_edge, right_edge = sorted((a[0] / denominator, b[0] / denominator))
             bottom_edge, top_edge = sorted((a[1] / denominator, b[1] / denominator))
@@ -388,7 +389,7 @@ def place_cut_notes(view: ViewDrawing, denominator: int, module_id: str) -> View
     labels = tuple(_dimension_text_boxes(view, denominator))
     strokes = tuple(_dimension_stroke_boxes(view, denominator))
     edges = []
-    for line in (view.outline, *view.internal_lines, *view.hidden_lines):
+    for line in (view.outline, *view.internal_lines, *view.hidden_lines, *view.layer_marks):
         points = line.points
         followers = points[1:] + points[:1] if line.closed else points[1:]
         for (x1, y1), (x2, y2) in zip(points, followers):

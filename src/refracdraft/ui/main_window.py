@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ezdxf.colors import aci2rgb
 from PySide6.QtCore import QEvent, QIODevice, QSaveFile, Qt, Signal
 from PySide6.QtGui import (
     QAction, QColor, QBrush, QFont, QFontMetricsF, QPen, QPainter, QPalette, QPixmap,
@@ -16,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from refracdraft.domain.models import Project
 from refracdraft.drawing.generator import DrawingGenerator
-from refracdraft.drawing.model import linetype_role
+from refracdraft.drawing.model import LAYER_MARK_ACI, LAYER_MARK_LINEWEIGHT, linetype_role
 from refracdraft.drawing.layout import (
     DETAIL_LINE_HEIGHT_MM,
     DETAIL_TEXT_SIZE_MM,
@@ -250,6 +251,11 @@ class DrawingPreview(QGraphicsView):
             p = [(ox + x * scale, 210 - (oy + y * scale)) for x, y in line.points]
             for a, b in zip(p, p[1:]):
                 scene.addLine(a[0], a[1], b[0], b[1], QPen(QColor("#111111"), 0.22))
+        layer_mark_pen = QPen(QColor(*aci2rgb(LAYER_MARK_ACI)), LAYER_MARK_LINEWEIGHT / 100.0)
+        for line in view.layer_marks:
+            (x1, y1), (x2, y2) = line.points
+            scene.addLine(ox + x1 * scale, 210 - oy - y1 * scale,
+                          ox + x2 * scale, 210 - oy - y2 * scale, layer_mark_pen)
         hidden_pen = QPen(QColor("#111111"), 0.13, Qt.PenStyle.DashLine)
         hidden_pen.setDashPattern([9.2, 4.6])
         for line in view.hidden_lines:

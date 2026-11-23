@@ -8,7 +8,7 @@ from manifold3d import CrossSection, FillRule, Manifold, OpType
 
 from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, CutFace, GeometryType, ModuleParameters
 from refracdraft.drawing.board_profiles import build_board_profile, profiles_by_face
-from refracdraft.geometry.primitives import Polyline, module_front_outline, module_side_outline, rectangle
+from refracdraft.geometry.primitives import Polyline, module_front_outline, module_side_outline, point_in_outline, rectangle
 
 
 TOLERANCE = 1e-5
@@ -157,6 +157,28 @@ class Projection:
     holes: tuple[Polyline, ...]
     visible: tuple[Polyline, ...]
     hidden: tuple[Polyline, ...]
+
+
+def clip_layer_marks(marks: tuple[Polyline, ...], projection: Projection) -> tuple[Polyline, ...]:
+    """Keep layer marks on projected material, including surfaces exposed by blind cuts."""
+    if not marks:
+        return ()
+    edges = tuple(
+        (Vec2(a), Vec2(b))
+        for path in (projection.outline, *projection.holes)
+        for a, b in zip(path.points, path.points[1:] + path.points[:1])
+    )
+    visible = []
+    for mark in marks:
+        start, end = map(Vec2, mark.points)
+        stations = _segment_stations(start, end, edges)
+        for lo, hi in zip(stations, stations[1:]):
+            mid = tuple(start.lerp(end, (lo + hi) / 2))
+            if point_in_outline(projection.outline, mid) and not any(
+                point_in_outline(hole, mid) for hole in projection.holes
+            ):
+                visible.append(Polyline((tuple(start.lerp(end, lo)), tuple(start.lerp(end, hi))), closed=False))
+    return tuple(visible)
 
 
 def _merge_lines(segments, visible: bool) -> tuple[Polyline, ...]:

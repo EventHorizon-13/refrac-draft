@@ -19,7 +19,9 @@ from refracdraft.domain.models import (
     format_bolt_remark,
 )
 from refracdraft.drawing.board_profiles import board_cut_edges, build_board_profile, machining_dimensions, profiles_by_face
-from refracdraft.drawing.multiface import Projection, is_through_cut, machined_module, mounting_sections, project_module
+from refracdraft.drawing.multiface import (
+    Projection, clip_layer_marks, is_through_cut, machined_module, mounting_sections, project_module,
+)
 from refracdraft.drawing.model import Dimension, DrawingDocument, LeaderNote, ModuleDrawing, SheetPage, PlacedModule, ViewDrawing
 from refracdraft.drawing.layout import (
     TITLE_BLOCK_LEFT_MM,
@@ -385,6 +387,7 @@ def _cut_annotations(module, face: CutFace, profile: BoardFaceProfile | None, pr
 def _machined_view(view: ViewDrawing, projection: Projection, dimensions, notes) -> ViewDrawing:
     return replace(view, outline=projection.outline, internal_lines=projection.visible,
                    hidden_lines=projection.hidden, cutouts=(*view.cutouts, *projection.holes),
+                   layer_marks=clip_layer_marks(view.layer_marks, projection),
                    dimensions=(*view.dimensions, *dimensions), leaders=(*view.leaders, *notes))
 
 
@@ -487,18 +490,17 @@ class DrawingGenerator:
                     front_symbol_linetypes.extend(("CONTINUOUS",) * count if welded else profile_linetypes)
             except KeyError as exc:
                 warnings.append(str(exc))
+        front_marks = ()
         if not positions and self.reference_library:
-            front_internal_lines.extend(
-                self.reference_library.stacked_front_lines(module.front_width_mm, module.front_height_mm)
-            )
-        front_internal = tuple(front_internal_lines)
+            front_marks = self.reference_library.stacked_front_lines(module.front_width_mm, module.front_height_mm)
         front_points = tuple((x * module.front_width_mm / module.board_face_width_mm,
                               module.front_height_mm / 2.0) for x, _y in positions) if positions else ()
         if front_symbols and (welded or anchor.anchor_type in INSERT_ANCHOR_TYPES):
             front_points = ()
         front_view = ViewDrawing(
             "front", "正面", front, front_dims, tuple(front_symbols), front_points,
-            internal_lines=front_internal, anchor_symbol_colors=tuple(front_symbol_colors),
+            internal_lines=tuple(front_internal_lines), layer_marks=front_marks,
+            anchor_symbol_colors=tuple(front_symbol_colors),
             anchor_symbol_lineweights=tuple(front_symbol_lineweights),
             anchor_symbol_linetypes=tuple(front_symbol_linetypes),
             anchor_marker_style="cross" if anchor.anchor_type == AnchorType.QUICK_INSERT else "target",
@@ -531,7 +533,7 @@ class DrawingGenerator:
             side_symbol_colors: list[int] = []
             side_symbol_lineweights: list[int] = []
             side_symbol_linetypes: list[str] = []
-            side_internal: tuple[Polyline, ...] = ()
+            side_marks: tuple[Polyline, ...] = ()
             if positions and self.reference_library and bolt is None:
                 try:
                     side_profile = self.reference_library.side_anchor_symbol(front_anchor_type.value)
@@ -556,8 +558,8 @@ class DrawingGenerator:
                     side_symbol_linetypes.extend(profile_linetypes)
                 except KeyError as exc:
                     warnings.append(str(exc))
-            elif not positions and self.reference_library:
-                side_internal = self.reference_library.side_expansion_lines(
+            elif not positions and self.reference_library and module.geometry_type == GeometryType.SIDE_TAPER:
+                side_marks = self.reference_library.side_expansion_lines(
                     side_length,
                     side_overall_h,
                     side_left_h,
@@ -569,7 +571,7 @@ class DrawingGenerator:
                                     anchor_symbol_colors=tuple(side_symbol_colors),
                                     anchor_symbol_lineweights=tuple(side_symbol_lineweights),
                                     anchor_symbol_linetypes=tuple(side_symbol_linetypes),
-                                    internal_lines=side_internal)
+                                    layer_marks=side_marks)
 
         profile_dimensions = ()
         cut_lines: list[Polyline] = []
