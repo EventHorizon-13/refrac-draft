@@ -413,14 +413,55 @@ def main() -> None:
             app.processEvents()
             length_point = table.visualItemRect(table.item(row, length_column)).center()
             QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=length_point)
-            QTest.keyClick(table, Qt.Key.Key_5)
-            app.processEvents()
-            editor = table.focusWidget()
-            if not isinstance(editor, QLineEdit) or editor.text() != "5":
-                raise ValueError("选中单元格直接输入时丢失了首位 5")
-            QTest.keyClicks(editor, "60")
-            if editor.text() != "560":
-                raise ValueError("连续输入 560 后编辑器内容错误")
+            def type_in_cell(text, *, refresh_cell=False):
+                for index, character in enumerate(text):
+                    QTest.keyClicks(QApplication.focusWidget(), character)
+                    if index == 0 and refresh_cell:
+                        item = table.currentItem()
+                        tooltip = item.toolTip()
+                        item.setToolTip("验证正在编辑的单元格刷新")
+                        item.setToolTip(tooltip)
+                editor = QApplication.focusWidget()
+                if not isinstance(editor, QLineEdit) or editor.text() != text:
+                    raise ValueError(f"直接连续输入 {text} 后编辑器内容错误")
+                return editor
+
+            editor = type_in_cell("356", refresh_cell=True)
+            QTest.keyClick(editor, Qt.Key.Key_Right)
+            if (table.currentRow(), table.currentColumn()) != (row, COLUMN_INDEX["thickness_mm"]) or (
+                window._cell_text(row, "length_mm") != "356"
+            ):
+                raise ValueError("光标在右端时，右键未保存 356 并跳过锁定的膨胀长度")
+
+            table.setCurrentCell(row, length_column)
+            editor = type_in_cell("357")
+            for expected_position in (2, 1, 0):
+                QTest.keyClick(editor, Qt.Key.Key_Left)
+                if table.currentColumn() != length_column or editor.cursorPosition() != expected_position:
+                    raise ValueError("左键在文本内未逐字符移动光标")
+            QTest.keyClick(editor, Qt.Key.Key_Left)
+            if table.currentColumn() != COLUMN_INDEX["module_id"] or window._cell_text(row, "length_mm") != "357":
+                raise ValueError("光标在左端时，左键未保存并切换到左侧单元格")
+
+            table.setCurrentCell(row, length_column)
+            editor = type_in_cell("358")
+            editor.setCursorPosition(1)
+            QTest.keyClick(editor, Qt.Key.Key_Down)
+            if (table.currentRow(), table.currentColumn()) != (added, length_column) or (
+                window._cell_text(row, "length_mm") != "358"
+            ):
+                raise ValueError("编辑时下键未保存并切换到下一行")
+            editor = type_in_cell("359")
+            QTest.keyClick(editor, Qt.Key.Key_Down)
+            if QApplication.focusWidget() is not editor or editor.text() != "359":
+                raise ValueError("末行按下键时意外结束了编辑")
+            QTest.keyClick(editor, Qt.Key.Key_Up)
+            if (table.currentRow(), table.currentColumn()) != (row, length_column) or (
+                window._cell_text(added, "length_mm") != "359"
+            ):
+                raise ValueError("编辑时上键未保存并切换到上一行")
+
+            editor = type_in_cell("560")
             QTest.keyClick(editor, Qt.Key.Key_Return)
             if (
                 table.currentRow() != added

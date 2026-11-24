@@ -104,6 +104,12 @@ COLUMN_INDEX = {spec.key: index for index, spec in enumerate(COLUMN_SPECS)}
 PROFILE_COLUMN = len(COLUMN_SPECS)
 COLUMN_BY_KEY = {spec.key: spec for spec in COLUMN_SPECS}
 AUTOMATIC_PREVIEW_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+ARROW_STEPS = {
+    Qt.Key.Key_Left: (0, -1),
+    Qt.Key.Key_Right: (0, 1),
+    Qt.Key.Key_Up: (-1, 0),
+    Qt.Key.Key_Down: (1, 0),
+}
 TAPER_SETTING_KEYS = ("big_head_mm", "small_head_mm", "taper_type")
 ANCHOR_SETTING_KEYS = (
     "anchor_position_mm",
@@ -207,21 +213,37 @@ class ParameterDelegate(QStyledItemDelegate):
         return editor
 
     def eventFilter(self, editor, event) -> bool:
-        if (
-            isinstance(editor, QLineEdit)
-            and event.type() == QEvent.Type.KeyPress
-            and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
-        ):
+        if not isinstance(editor, QLineEdit) or event.type() != QEvent.Type.KeyPress:
+            return super().eventFilter(editor, event)
+        key = event.key()
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             if editor.hasAcceptableInput():
-                self.parent()._commit_and_move_down(editor)
+                self.parent()._commit_and_move(editor, 1, 0, commit_at_edge=True)
+            return True
+        if key in ARROW_STEPS and event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier):
+            row_step, column_step = ARROW_STEPS[key]
+            if column_step and not self._at_text_edge(editor, column_step):
+                return super().eventFilter(editor, event)
+            if editor.hasAcceptableInput():
+                self.parent()._commit_and_move(editor, row_step, column_step)
             return True
         return super().eventFilter(editor, event)
 
+    @staticmethod
+    def _at_text_edge(editor: QLineEdit, step: int) -> bool:
+        if editor.hasSelectedText():
+            return False
+        # Qt's cursor position counts UTF-16 code units.
+        edge = 0 if step < 0 else len(editor.text().encode("utf-16-le")) // 2
+        return editor.cursorPosition() == edge
+
     def setEditorData(self, editor, index) -> None:
+        if not isinstance(editor, QLineEdit) or editor.isModified():
+            return
         value = index.data(Qt.ItemDataRole.DisplayRole) or ""
-        if isinstance(editor, QLineEdit):
-            if value == AUTOMATIC:
-                value = index.data(AUTOMATIC_PREVIEW_ROLE) or ""
+        if value == AUTOMATIC:
+            value = index.data(AUTOMATIC_PREVIEW_ROLE) or ""
+        if editor.text() != str(value):
             editor.setText(str(value))
             editor.selectAll()
 
@@ -339,12 +361,11 @@ class ParameterTable(QTableWidget):
             self.setCurrentIndex(index)
             self.edit(index)
 
-    def _move_current_cell(self, row_step: int, column_step: int) -> None:
-        self._preset_list.hide()
+    def _adjacent_cell(self, row_step: int, column_step: int) -> tuple[int, int] | None:
         row = self.currentRow()
         column = self.currentColumn()
         if row < 0 or column < 0:
-            return
+            return None
         row += row_step
         column += column_step
         while 0 <= row < self.rowCount() and 0 <= column < self.columnCount():
@@ -355,18 +376,27 @@ class ParameterTable(QTableWidget):
                 and item is not None
                 and item.flags() & Qt.ItemFlag.ItemIsEnabled
             ):
-                self.clearSelection()
-                self.setCurrentCell(row, column)
-                self.setFocus()
-                self._show_cell_menu(row, column)
-                return
+                return row, column
             row += row_step
             column += column_step
+        return None
 
-    def _commit_and_move_down(self, editor: QLineEdit) -> None:
+    def _move_current_cell(self, row_step: int, column_step: int) -> None:
+        self._preset_list.hide()
+        cell = self._adjacent_cell(row_step, column_step)
+        if cell is not None:
+            self.clearSelection()
+            self.setCurrentCell(*cell)
+            self.setFocus()
+            self._show_cell_menu(*cell)
+
+    def _commit_and_move(self, editor: QLineEdit, row_step: int, column_step: int, *,
+                         commit_at_edge: bool = False) -> None:
+        if not commit_at_edge and self._adjacent_cell(row_step, column_step) is None:
+            return
         self.commitData(editor)
         self.closeEditor(editor, QAbstractItemDelegate.EndEditHint.NoHint)
-        self._move_current_cell(1, 0)
+        self._move_current_cell(row_step, column_step)
 
     def _show_cell_menu(self, row: int, column: int) -> None:
         self._preset_list.hide()
@@ -581,19 +611,12 @@ class ParameterTable(QTableWidget):
             event.accept()
             return
         self._preset_list.hide()
-        directions = {
-            Qt.Key.Key_Left: (0, -1),
-            Qt.Key.Key_Right: (0, 1),
-            Qt.Key.Key_Up: (-1, 0),
-            Qt.Key.Key_Down: (1, 0),
-        }
         if (
-            event.key() in directions
-            and event.modifiers() == Qt.KeyboardModifier.NoModifier
+            event.key() in ARROW_STEPS
+            and event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier)
             and self.state() != QAbstractItemView.State.EditingState
         ):
-            row_step, column_step = directions[event.key()]
-            self._move_current_cell(row_step, column_step)
+            self._move_current_cell(*ARROW_STEPS[event.key()])
             event.accept()
             return
         if event.matches(QKeySequence.StandardKey.Paste):
@@ -613,15 +636,10 @@ class ParameterTable(QTableWidget):
             and self.state() != QAbstractItemView.State.EditingState
             and (index.flags() & required_flags) == required_flags
         ):
-            # Open the editor without forwarding the triggering key. Insert its
-            # text explicitly after the editor has selected the old cell value.
-            if self.edit(index, QAbstractItemView.EditTrigger.AllEditTriggers, None):
-                editor = self.indexWidget(index) or self.focusWidget()
-                if isinstance(editor, QLineEdit):
-                    editor.selectAll()
-                    editor.insert(text)
-                    event.accept()
-                    return
+            # Qt delivers the original key to the editor after it is initialized.
+            if self.edit(index, QAbstractItemView.EditTrigger.AnyKeyPressed, event):
+                event.accept()
+                return
         super().keyPressEvent(event)
 
     def _clear_selection(self) -> None:
@@ -1273,7 +1291,7 @@ class StandardWindow(MainWindow):
         item = self.parameter_table.item(row, COLUMN_INDEX[key])
         if item is None:
             return
-        flags = item.flags()
+        previous = flags = item.flags()
         if enabled:
             flags |= Qt.ItemFlag.ItemIsEnabled
             if COLUMN_BY_KEY[key].kind != "check":
@@ -1281,7 +1299,8 @@ class StandardWindow(MainWindow):
         else:
             flags &= ~Qt.ItemFlag.ItemIsEnabled
             flags &= ~Qt.ItemFlag.ItemIsEditable
-        item.setFlags(flags)
+        if flags != previous:
+            item.setFlags(flags)
 
     def _update_conditional_states(self) -> None:
         table = self.parameter_table
