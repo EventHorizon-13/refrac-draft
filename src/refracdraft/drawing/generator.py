@@ -17,7 +17,6 @@ from refracdraft.domain.models import (
     OutlineKind,
     Project,
     WELDED_ANCHOR_TYPES,
-    format_bolt_remark,
 )
 from refracdraft.drawing.board_profiles import board_cut_edges, build_board_profile, machining_dimensions, profiles_by_face
 from refracdraft.drawing.multiface import (
@@ -310,14 +309,8 @@ def _details(module, board, anchor) -> tuple[str, ...]:
     hose = anchor.hose_spec if anchor.exists else "无胶管"
     board_text = board.material if board.exists else "无夹板"
     lines.append(f"7、{hose or '未填写胶管'}，{board_text}")
-    remark = module.source_note
-    bolt_length = anchor.bolt_length_mm
-    if anchor.exists and anchor.count and bolt_length is not None:
-        bolt_note = format_bolt_remark(bolt_length, anchor.bolt_exposure_mm)
-        if bolt_note not in remark:
-            remark = "，".join(filter(None, (bolt_note, remark)))
-    if remark:
-        lines.append(f"8、{remark}")
+    if module.source_note:
+        lines.append(f"8、{module.source_note}")
     return tuple(lines)
 
 
@@ -858,7 +851,8 @@ class DrawingGenerator:
         leaders = tuple(cut_notes)
         if bolt is not None and positions:
             x, y = max(positions, key=lambda point: (point[1], -point[0]))
-            leaders = (*leaders, LeaderNote((x, y + exposure), f"焊接{anchor.thread_spec}螺栓 外露{exposure:g}", (1.5, 3)))
+            shank_y = y + min(exposure / 2, 16.0)
+            leaders = (*leaders, LeaderNote((x, shank_y), f"焊接{anchor.thread_spec}螺栓 外露{exposure:g}", (1.5, 3)))
         if bolt is not None and anchor.anchor_type == AnchorType.WELDED_DIAMOND and positions:
             # Place axial sizes between the first bolt and the outer callout,
             # away from the central cutting and chain dimension labels.

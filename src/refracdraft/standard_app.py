@@ -100,7 +100,7 @@ def main() -> None:
     from pathlib import Path
 
     from PySide6.QtCore import QEvent, QPointF, QTimer, Qt
-    from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QKeyEvent, QMouseEvent
+    from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QInputMethodEvent, QKeyEvent, QMouseEvent
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QWidget
 
@@ -386,6 +386,13 @@ def main() -> None:
             if not table.isColumnHidden(COLUMN_INDEX["bolt_exposure_mm"]):
                 raise ValueError("普通锚固件仍显示螺栓外露长度")
             trace.write_text("conditional fields passed\n", encoding="utf-8")
+            check_column = COLUMN_INDEX["anchor_enabled"]
+            table.setCurrentCell(row, check_column)
+            table.setFocus()
+            for expected, key in ((False, Qt.Key.Key_Return), (True, Qt.Key.Key_Enter)):
+                QTest.keyClick(table, key, Qt.KeyboardModifier.ControlModifier)
+                if window._cell_bool(row, "anchor_enabled") != expected or table.currentColumn() != check_column:
+                    raise ValueError("Ctrl+Enter 未留在复选格切换勾选状态")
 
             table.item(row, COLUMN_INDEX["module_id"]).setText("B2X")
             added = window._add_module()
@@ -434,7 +441,15 @@ def main() -> None:
                 raise ValueError("光标在右端时，右键未保存 356 并跳过锁定的膨胀长度")
 
             table.setCurrentCell(row, length_column)
-            editor = type_in_cell("357")
+            direct_commit = QInputMethodEvent()
+            direct_commit.setCommitString("3")
+            QApplication.sendEvent(table, direct_commit)
+            editor = QApplication.focusWidget()
+            if not isinstance(editor, QLineEdit) or editor.text() != "3":
+                raise ValueError("输入法直接提交时丢失了首位 3")
+            QTest.keyClicks(editor, "57")
+            if editor.text() != "357":
+                raise ValueError("输入法首键后连续键入结果错误")
             for expected_position in (2, 1, 0):
                 QTest.keyClick(editor, Qt.Key.Key_Left)
                 if table.currentColumn() != length_column or editor.cursorPosition() != expected_position:

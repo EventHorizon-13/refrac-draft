@@ -101,7 +101,6 @@ def test_exposure_and_blind_cut_round_trip_and_depth_controls_projection(tmp_pat
 
 
 def test_welded_diamond_depth_and_remark_are_independent_of_anchor_length(tmp_path: Path):
-    from dataclasses import replace
     from refracdraft.reference.library import ReferenceLibrary
 
     values = {
@@ -138,11 +137,11 @@ def test_welded_diamond_depth_and_remark_are_independent_of_anchor_length(tmp_pa
     assert "4、锚固件长度：245mm" in data.details
     assert data.details[-1] == "8、螺栓长度330mm，外露190mm"
     denominator = page.scale_denominator
-    _, _, _, top = view_bounds(replace(view, leaders=()), denominator)
     assert len(leader.vertices_mm) == 2
     dx, dy = leader.offset_mm
     assert all(x * dy == pytest.approx(y * dx) for path in leader.paths_mm for x, y in path)
-    assert leader.tip[1] / denominator + leader.offset_mm[1] > top
+    assert leader.tip == (250, 616)
+    assert _leader_text_bounds(leader, denominator)[3] < 790 / denominator
     assert {"140", "190", "330"} <= {dim.label for dim in view.dimensions if dim.orientation == "vertical"}
 
     edited = anchor.model_copy(update={"length_mm": None})
@@ -150,9 +149,9 @@ def test_welded_diamond_depth_and_remark_are_independent_of_anchor_length(tmp_pa
     assert edited.bolt_length_mm == 330
     assert generator.build_module(new_project, module).board_view.anchor_symbols == view.anchor_symbols
     manual_module = module.model_copy(update={"source_note": "客户自备"})
-    assert generator.build_module(project, manual_module).details[-1] == (
-        "8、螺栓长度330mm，外露190mm，客户自备"
-    )
+    assert generator.build_module(project, manual_module).details[-1] == "8、客户自备"
+    blank_module = module.model_copy(update={"source_note": ""})
+    assert len(generator.build_module(project, blank_module).details) == 7
 
     excel = tmp_path / "welded.xlsx"
     export_standard_excel(project, excel)
@@ -197,7 +196,7 @@ def test_welded_diamond_depth_and_remark_are_independent_of_anchor_length(tmp_pa
         stepped = generator.build_module(Project(modules=[body], boards=[plate], anchors=[hardware]), body)
         assert max(line.bounds[3] for line in stepped.board_view.anchor_symbols) == pytest.approx(expected_contact)
         if "焊接" in kind:
-            assert stepped.board_view.leaders[0].tip == (180, 285)
+            assert stepped.board_view.leaders[0].tip == (180, 251)
         if kind == "菱形":
             assert any(dim.start == (180, 235) and dim.end == (180, 185) and dim.label == "50"
                        for dim in stepped.board_view.dimensions)

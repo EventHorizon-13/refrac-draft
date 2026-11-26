@@ -16,6 +16,7 @@ from PySide6.QtGui import (
     QColor,
     QDoubleValidator,
     QImage,
+    QInputMethodEvent,
     QIntValidator,
     QKeySequence,
     QPainter,
@@ -599,6 +600,15 @@ class ParameterTable(QTableWidget):
 
     def keyPressEvent(self, event) -> None:
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            item = self.currentItem()
+            modifiers = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+            if (modifiers == Qt.KeyboardModifier.ControlModifier and item is not None
+                and item.column() < PROFILE_COLUMN and COLUMN_SPECS[item.column()].kind == "check"):
+                if item.flags() & Qt.ItemFlag.ItemIsEnabled and not event.isAutoRepeat():
+                    item.setCheckState(Qt.CheckState.Unchecked if item.checkState() == Qt.CheckState.Checked
+                                       else Qt.CheckState.Checked)
+                event.accept()
+                return
             self._move_current_cell(1, 0)
             event.accept()
             return
@@ -641,6 +651,22 @@ class ParameterTable(QTableWidget):
                 event.accept()
                 return
         super().keyPressEvent(event)
+
+    def inputMethodEvent(self, event: QInputMethodEvent) -> None:
+        index = self.currentIndex()
+        editable = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsEditable
+        if (event.commitString() and not event.preeditString()
+            and self.state() != QAbstractItemView.State.EditingState
+            and (index.flags() & editable) == editable):
+            # A commit without preedit can arrive before an editor has focus.
+            self._preset_list.hide()
+            if self.edit(index, QAbstractItemView.EditTrigger.AllEditTriggers, None):
+                editor = self.indexWidget(index)
+                if isinstance(editor, QLineEdit):
+                    QApplication.sendEvent(editor, event)
+                    event.accept()
+                    return
+        super().inputMethodEvent(event)
 
     def _clear_selection(self) -> None:
         self.blockSignals(True)
