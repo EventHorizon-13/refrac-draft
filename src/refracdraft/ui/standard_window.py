@@ -599,36 +599,49 @@ class ParameterTable(QTableWidget):
         self.changed.emit()
 
     def keyPressEvent(self, event) -> None:
-        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+        key = event.key()
+        modifiers = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+        choices = self._preset_list
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             item = self.currentItem()
-            modifiers = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
             if (modifiers == Qt.KeyboardModifier.ControlModifier and item is not None
                 and item.column() < PROFILE_COLUMN and COLUMN_SPECS[item.column()].kind == "check"):
                 if item.flags() & Qt.ItemFlag.ItemIsEnabled and not event.isAutoRepeat():
                     item.setCheckState(Qt.CheckState.Unchecked if item.checkState() == Qt.CheckState.Checked
                                        else Qt.CheckState.Checked)
-                event.accept()
-                return
-            self._move_current_cell(1, 0)
+            elif modifiers == Qt.KeyboardModifier.NoModifier and choices.isVisible():
+                entry = choices.currentItem()
+                if entry is not None:
+                    self._select_preset(entry)
+            else:
+                self._move_current_cell(1, 0)
             event.accept()
             return
         if (
-            event.key() == Qt.Key.Key_Down
+            key == Qt.Key.Key_Down
             and event.modifiers() == Qt.KeyboardModifier.AltModifier
             and self.currentIndex().isValid()
         ):
             self._show_cell_menu(self.currentRow(), self.currentColumn())
             event.accept()
             return
-        self._preset_list.hide()
         if (
-            event.key() in ARROW_STEPS
-            and event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier)
+            key in ARROW_STEPS
+            and modifiers == Qt.KeyboardModifier.NoModifier
             and self.state() != QAbstractItemView.State.EditingState
         ):
-            self._move_current_cell(*ARROW_STEPS[event.key()])
+            row_step, column_step = ARROW_STEPS[key]
+            if row_step and choices.isVisible():
+                last = choices.count() - 1
+                current = choices.currentRow()
+                if current < 0:
+                    current = -1 if row_step > 0 else last + 1
+                choices.setCurrentRow(max(0, min(last, current + row_step)))
+            else:
+                self._move_current_cell(row_step, column_step)
             event.accept()
             return
+        choices.hide()
         if event.matches(QKeySequence.StandardKey.Paste):
             self._paste_clipboard()
             event.accept()
@@ -987,7 +1000,8 @@ class StandardWindow(MainWindow):
             " border: 2px solid #5688c7; }"
             "QListWidget#parameterPresetList::item {"
             " background-color: palette(base); color: palette(text); padding: 4px 7px; }"
-            "QListWidget#parameterPresetList::item:hover, QListWidget#parameterPresetList::item:selected {"
+            "QListWidget#parameterPresetList::item:hover { background: palette(alternate-base); }"
+            "QListWidget#parameterPresetList::item:selected {"
             " background: palette(highlight); color: palette(highlighted-text); }"
             "QPushButton[primary='true'] { background: #2f6fde; color: white;"
             " border: 1px solid #245bb8; border-radius: 4px; padding: 6px 10px; }"

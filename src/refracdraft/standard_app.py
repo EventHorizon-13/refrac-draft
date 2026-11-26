@@ -528,16 +528,45 @@ def main() -> None:
                 underlay.hide()
                 underlay.deleteLater()
                 app.sendPostedEvents(underlay, QEvent.Type.DeferredDelete)
-            QApplication.sendEvent(table, QKeyEvent(
-                QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
-            ))
-            if table.currentRow() != added or table.currentColumn() != structure:
-                raise ValueError("预设下拉展开时回车未移到同列下一行")
-            QApplication.sendEvent(table, QKeyEvent(
-                QEvent.Type.KeyPress, Qt.Key.Key_Up, Qt.KeyboardModifier.NoModifier
-            ))
-            if table.currentRow() != row or not table._preset_list.isVisible():
-                raise ValueError("预设下拉展开时方向键未切换单元格")
+            QTest.keyClick(table, Qt.Key.Key_Left)
+            thickness = COLUMN_INDEX["thickness_mm"]
+            if table.currentColumn() != thickness or presets.isVisible():
+                raise ValueError("预设下拉展开时左键未切换到左侧单元格")
+            QTest.keyClick(table, Qt.Key.Key_Right)
+            if table.currentColumn() != structure or not presets.isVisible():
+                raise ValueError("右键切换到预设单元格后未展开下拉")
+            original_structure = table.currentItem().text()
+            initial_choice = presets.currentRow()
+            QTest.keyClick(table, Qt.Key.Key_Down)
+            selected = presets.currentItem()
+            if (
+                table.currentRow() != row or not presets.isVisible() or selected is None
+                or presets.currentRow() != initial_choice + 1
+                or table.currentItem().text() != original_structure
+            ):
+                raise ValueError("下键未在当前单元格内高亮下一项")
+            QTest.keyClick(table, Qt.Key.Key_Up)
+            if presets.currentRow() != initial_choice:
+                raise ValueError("上键未高亮上一项")
+            QTest.keyClick(table, Qt.Key.Key_Down)
+            selected_value = selected.data(Qt.ItemDataRole.UserRole)
+            QTest.keyClick(table, Qt.Key.Key_Return)
+            if (
+                presets.isVisible() or (table.currentRow(), table.currentColumn()) != (row, structure)
+                or table.currentItem().text() != selected_value
+            ):
+                raise ValueError("回车未确认预设并停留在当前单元格")
+            table.currentItem().setText(original_structure)
+            QTest.keyClick(table, Qt.Key.Key_Down)
+            if (table.currentRow(), table.currentColumn()) != (added, structure) or not presets.isVisible():
+                raise ValueError("下拉关闭时下键未切换到下一行并展开该行的下拉菜单")
+            QTest.keyClick(table, Qt.Key.Key_Right)
+            if table.currentColumn() != COLUMN_INDEX["material"] or not presets.isVisible():
+                raise ValueError("预设下拉展开时右键未切换到右侧单元格")
+            QTest.keyClick(table, Qt.Key.Key_Escape)
+            table.setCurrentCell(row, structure)
+            center = table.visualRect(table.currentIndex()).center()
+            global_center = table.viewport().mapToGlobal(center)
             QApplication.sendEvent(table.viewport(), QMouseEvent(
                 QEvent.Type.MouseButtonDblClick, QPointF(center), QPointF(global_center),
                 Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
