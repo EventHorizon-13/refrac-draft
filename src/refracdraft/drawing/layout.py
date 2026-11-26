@@ -337,6 +337,7 @@ def place_bolt_note(view: ViewDrawing, denominator: int) -> ViewDrawing:
     labels = tuple(_dimension_text_boxes(view, denominator))
     strokes = tuple(_dimension_stroke_boxes(view, denominator))
     symbols = tuple(tuple(value / denominator for value in line.bounds) for line in view.anchor_symbols)
+    bolt_top = max((box[3] for box in symbols), default=tip_y)
     edges = tuple((min(x1, x2) / denominator - .3, min(y1, y2) / denominator - .3,
                    max(x1, x2) / denominator + .3, max(y1, y2) / denominator + .3)
                   for (x1, y1), (x2, y2) in zip(view.outline.points, view.outline.points[1:] + view.outline.points[:1]))
@@ -348,15 +349,18 @@ def place_bolt_note(view: ViewDrawing, denominator: int) -> ViewDrawing:
         text = (x1 - .4, y1 - .4, x2 + .4, y2 + .4)
         dx, dy = candidate.offset_mm
         overflow = max(0.0, left - x1, x2 - right) + max(0.0, bottom - y1)
-        return (sum(_overlaps(text, box) for box in obstacles),
+        return (sum(_overlaps(text, box) for box in obstacles), y2 >= bolt_top,
                 abs((y1 + y2) / 2 - top) + overflow / 2,
                 sum(_segment_interval(start, (dx, dy), box) is not None for box in (*labels, *strokes)),
                 abs(dx) + abs(dy))
 
-    runs = (-18.0, -10.0, -6.0, -3.0, 3.0, 6.0, 10.0, 18.0, left - tip_x - 2, right - tip_x + 2)
+    clear_left = min((box[0] for box in obstacles), default=left) - 1.2
+    clear_right = max((box[2] for box in obstacles), default=right) + 1.2
+    runs = (-18.0, -10.0, -6.0, -3.0, 3.0, 6.0, 10.0, 18.0, left - tip_x - 2, right - tip_x + 2,
+            clear_left - tip_x, clear_right - tip_x)
     _, _, _, content_top = view_bounds(replace(view, leaders=()), denominator)
-    baselines = (top - height - 2, top - height - 5, top - height - 9, top - height - 14,
-                 top + 1.6, top + 4, top + 7, content_top + 1.5)
+    baselines = (top - height - .8, top - height - 2, top - height - 5, top - height - 9, top - height - 14,
+                 top + .8, top + 1.6, top + 4, top + 7, bolt_top - height - .8, content_top + 1.5)
     candidates = (replace(note, offset_mm=(run, y - tip_y), align_right=run < 0) for y in baselines for run in runs)
     note = _leader_with_clear_dimensions(min(candidates, key=score), denominator, (*labels, *strokes))
     return replace(view, leaders=(note, *(leader for leader in view.leaders if leader.machining)))

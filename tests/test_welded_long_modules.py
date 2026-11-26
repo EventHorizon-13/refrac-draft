@@ -153,6 +153,17 @@ def test_welded_diamond_depth_and_remark_are_independent_of_anchor_length(tmp_pa
     blank_module = module.model_copy(update={"source_note": ""})
     assert len(generator.build_module(project, blank_module).details) == 7
 
+    short, plate, hardware = build_standard_row({
+        **DEFAULT_ROW, "length_mm": "600", "thickness_mm": "300", "anchor_enabled": True,
+        "anchor_type": "焊接M型", "bolt_exposure_mm": "80", "source_note": "客户自备",
+    })
+    short_project = Project(modules=[short], boards=[plate], anchors=[hardware])
+    page = generator.generate(short_project).pages[0]
+    short_view = page.modules[0].drawing.board_view
+    short_note, = short_view.leaders
+    assert short_note.paths_mm
+    assert _leader_text_bounds(short_note, page.scale_denominator)[3] < 380 / page.scale_denominator
+
     excel = tmp_path / "welded.xlsx"
     export_standard_excel(project, excel)
     recovered = import_project_xlsx(excel).anchors[0]
