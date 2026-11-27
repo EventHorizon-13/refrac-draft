@@ -42,6 +42,7 @@ def format_bolt_remark(length_mm: float, exposure_mm: float) -> str:
 class LayoutMode(StrEnum):
     EXPLICIT = "指定坐标"
     EQUAL = "均布"
+    EQUAL_SEGMENTS = "均分"
     FIXED_SPACING = "指定间距"
 
 

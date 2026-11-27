@@ -40,7 +40,10 @@ from refracdraft.drawing.layout import (
     place_machining_dimensions,
     view_placement,
 )
-from refracdraft.geometry.primitives import Polyline, equal_anchor_positions, module_front_outline, module_side_outline, parametric_outline, point_in_outline, rectangle, scale_template
+from refracdraft.geometry.primitives import (
+    Polyline, board_anchor_top_offset, equal_anchor_positions, equal_segment_layout, module_front_outline, module_side_outline,
+    parametric_outline, point_in_outline, rectangle, scale_template,
+)
 from refracdraft.reference.library import ReferenceLibrary, SymbolGeometry
 from refracdraft.drawing.welded_anchors import welded_bolt_symbol, welded_side_symbol
 
@@ -52,15 +55,6 @@ ANCHOR_SYMBOL_ID = {
 
 INSERT_ANCHOR_TYPES = (AnchorType.SIDE_INSERT, AnchorType.QUICK_INSERT)
 
-BOARD_ANCHOR_TOP_OFFSET_MM = {
-    AnchorType.M_SHAPE: 35.4391501542,
-    # The 60 mm reference board symbol starts at the board's top edge.
-    AnchorType.SIDE_INSERT: 30.0,
-    AnchorType.QUICK_INSERT: 30.0,
-    AnchorType.WELDED_M: 0.0,
-    AnchorType.WELDED_DIAMOND: 0.0,
-}
-
 def _anchor_x_positions(anchor: AnchorParameters, width: float) -> list[float]:
     if not anchor.exists or anchor.anchor_type == AnchorType.NONE or anchor.count == 0:
         return []
@@ -68,8 +62,9 @@ def _anchor_x_positions(anchor: AnchorParameters, width: float) -> list[float]:
         return [p.x_mm for p in anchor.positions]
     if anchor.layout_mode == LayoutMode.EQUAL:
         return [p.x for p in equal_anchor_positions(width, 1.0, anchor.count, anchor.edge_offset_mm)]
-    # Fixed-spacing mode is centered as a group; explicit coordinates remain the preferred
-    # way to reproduce the segmented positioning dimensions in the supplied PDFs.
+    if anchor.layout_mode == LayoutMode.EQUAL_SEGMENTS:
+        start, spacing = equal_segment_layout(width, anchor.count)
+        return [start + i * spacing for i in range(anchor.count)]
     spacing = anchor.spacing_mm or 0.0
     group_width = spacing * max(0, anchor.count - 1)
     start = anchor.edge_offset_mm
@@ -88,13 +83,7 @@ def _anchor_positions(
         return [(p.x_mm, p.y_mm) for p in anchor.positions]
     xs = _anchor_x_positions(anchor, width)
     if board_face:
-        if anchor.anchor_type == AnchorType.DIAMOND and anchor.embedment_depth_mm:
-            # The source diamond block defaults to a 70 mm insertion offset, but the
-            # user-facing embedment depth is a real geometric parameter. The symbol is
-            # extracted around its insertion point, so that point must coincide with
-            # the dimension endpoint instead of keeping the block's stale default.
-            return [(x, max(0.0, height - anchor.embedment_depth_mm)) for x in xs]
-        offset = BOARD_ANCHOR_TOP_OFFSET_MM.get(anchor.anchor_type, 35.4391501542)
+        offset = board_anchor_top_offset(anchor.anchor_type, anchor.embedment_depth_mm)
         y = max(0.0, height - offset)
     else:
         y = height / 2.0
@@ -783,7 +772,7 @@ class DrawingGenerator:
             elif anchor.anchor_type == AnchorType.DIAMOND and anchor.embedment_depth_mm:
                 y = mounting_y - anchor.embedment_depth_mm - symbol_top
             elif mounting_y < board_height - 1e-6:
-                nominal_offset = BOARD_ANCHOR_TOP_OFFSET_MM.get(anchor.anchor_type, 35.4391501542)
+                nominal_offset = board_anchor_top_offset(anchor.anchor_type)
                 y = min(y, mounting_y - max(symbol_top, nominal_offset))
             checks = {(x, y), (x, y - embedded), (x, y - embedded / 2)}
             if any(not point_in_outline(seat_outline, point)

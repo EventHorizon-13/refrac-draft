@@ -57,7 +57,7 @@ from refracdraft.exporters.pdf import (
 from refracdraft.exporters.project import export_standard_excel
 from refracdraft.release import latest_portable_release
 from refracdraft.standard_sheet import (
-    AUTOMATIC, AUTOMATIC_FIELDS, COLUMN_SPECS, DEFAULT_ROW, anchor_length_options, build_standard_row,
+    AUTOMATIC, AUTOMATIC_FIELDS, COLUMN_SPECS, DEFAULT_ROW, EQUAL_SEGMENTS, anchor_length_options, build_standard_row,
     resolve_automatic_values,
 )
 from refracdraft.standard import (
@@ -275,6 +275,7 @@ def test_standard_excel_generic_heads_move_to_side_for_side_taper():
 @pytest.mark.parametrize(("label", "expected_type", "has_side_view"), [
     ("侧敲", GeometryType.SIDE_TAPER, True),
     ("正敲", GeometryType.FRONT_TAPER, False),
+    ("正常敲", GeometryType.FRONT_TAPER, False),
 ])
 def test_standard_taper_labels_generate_the_correct_views(label, expected_type, has_side_view):
     module, board, anchor = build_standard_row({
@@ -284,8 +285,9 @@ def test_standard_taper_labels_generate_the_correct_views(label, expected_type, 
     project = Project(modules=[module], boards=[board], anchors=[anchor])
     view = DrawingGenerator().generate(project).pages[0].modules[0].drawing
     assert (view.side_view is not None) == has_side_view
+    assert view.details[-1] == ("8、侧敲" if has_side_view else "8、正常敲")
     legacy = module.model_dump(mode="json")
-    legacy["geometry_type"] = "侧敲" if label == "正敲" else "正敲"
+    legacy["geometry_type"] = "正敲" if has_side_view else "侧敲"
     assert ModuleParameters.model_validate(legacy).geometry_type == expected_type
 
 
@@ -827,7 +829,10 @@ def test_measured_details_pack_the_450mm_pair_without_compressing_text(tmp_path)
 
 @pytest.mark.parametrize(
     ("anchor_type", "taper", "height", "expected"),
-    [("M型", "正敲", 320, 182), ("M型", "侧敲", 310, 255), ("M型", "", 350, 295),
+    [("M型", "正常敲", 320, 180), ("M型", "侧敲", 310, 240), ("M型", "", 350, 240),
+     ("M型", "", 270, 220), ("M型", "", 269.99, 200), ("菱形", "", 280, 230), ("菱形", "", 279.99, 200),
+     ("菱形", "", 170, 120), ("菱形", "", 169.99, None),
+     ("菱形", "正常敲", 320, 180), ("菱形", "侧敲", 310, 230),
      ("旁插", "正敲", 320, 180), ("快插", "", 460, 410), ("快插", "", 400, 350)],
 )
 def test_standard_automatic_anchor_lengths_use_installation_height(anchor_type, taper, height, expected):
@@ -836,7 +841,43 @@ def test_standard_automatic_anchor_lengths_use_installation_height(anchor_type, 
                   anchor_type=anchor_type, anchor_position_mm="60", anchor_spacing_mm="300",
                   anchor_count="2", anchor_length_mm=AUTOMATIC)
     _, _, anchor = build_standard_row(values)
-    assert anchor.length_mm == pytest.approx(expected)
+    assert anchor.length_mm == expected
+
+
+def test_standard_equal_segments_survive_json_and_excel_and_dimension_each_anchor(tmp_path):
+    def build(length, count):
+        return build_standard_row(dict(DEFAULT_ROW, length_mm=str(length), anchor_count=str(count),
+                                       anchor_enabled=True, anchor_spacing_mm=""))
+
+    _, _, single = build(450, 1)
+    assert single.layout_mode == LayoutMode.EQUAL_SEGMENTS and single.edge_offset_mm == 225
+
+    module, board, anchor = build(610, 3)
+    assert anchor.edge_offset_mm == pytest.approx(610 / 6)
+    assert anchor.spacing_mm == pytest.approx(610 / 3)
+    project = Project(modules=[module], boards=[board], anchors=[anchor])
+    workbook = tmp_path / "equal.xlsx"
+    export_standard_excel(project, workbook)
+    for restored in (import_project_xlsx(workbook), Project.model_validate_json(project.model_dump_json())):
+        restored_anchor = restored.anchors[0]
+        assert restored_anchor.layout_mode == LayoutMode.EQUAL_SEGMENTS
+        xs = [x for x, _ in _anchor_positions(restored_anchor, 610, 230, board_face=True)]
+        assert xs == pytest.approx([610 / 6, 305, 610 * 5 / 6])
+        drawing = DrawingGenerator().build_module(restored, restored.modules[0])
+        assert {"101.667", "203.333", "610"} <= {mark.label for mark in drawing.board_view.dimensions}
+
+
+def test_standard_taper_pin_length_tracks_equal_positions_and_embedment():
+    values = dict(DEFAULT_ROW, length_mm="600", taper_enabled=True, taper_type="正常敲",
+                  big_head_mm="320", small_head_mm="190", anchor_enabled=True, anchor_length_mm=AUTOMATIC,
+                  anchor_position_mm=EQUAL_SEGMENTS, anchor_count="3")
+    assert build_standard_row(values)[2].length_mm == 150
+    values["anchor_count"] = "1"
+    assert build_standard_row(values)[2].length_mm == 200
+    values.update(taper_type="侧敲", anchor_type="菱形", big_head_mm="310", embedment_depth_mm="100")
+    assert build_standard_row(values)[2].length_mm == 200
+    values.update(anchor_type="焊接菱形", bolt_exposure_mm="50")
+    assert build_standard_row(values)[0].source_note == "侧敲；螺栓长度150mm，外露50mm"
 
 
 def test_tall_1120_style_pair_keeps_details_clear(tmp_path):

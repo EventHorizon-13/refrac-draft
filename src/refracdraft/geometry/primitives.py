@@ -6,7 +6,22 @@ from typing import Iterable
 
 from ezdxf.math import ConstructionArc, bulge_to_arc
 
-from refracdraft.domain.models import GeometryType, ModuleParameters, OutlineKind, OutlineSpec, Point2D
+from refracdraft.domain.models import AnchorType, GeometryType, ModuleParameters, OutlineKind, OutlineSpec, Point2D
+
+
+BOARD_ANCHOR_TOP_OFFSETS = {
+    # The 60 mm insert-anchor symbol starts at the board's top edge.
+    AnchorType.SIDE_INSERT: 30.0,
+    AnchorType.QUICK_INSERT: 30.0,
+    AnchorType.WELDED_M: 0.0,
+    AnchorType.WELDED_DIAMOND: 0.0,
+}
+
+
+def board_anchor_top_offset(anchor_type: AnchorType, embedment_depth_mm: float | None = None) -> float:
+    if anchor_type == AnchorType.DIAMOND:
+        return embedment_depth_mm if embedment_depth_mm is not None else 50.0
+    return BOARD_ANCHOR_TOP_OFFSETS.get(anchor_type, 35.4391501542)
 
 
 @dataclass(frozen=True)
@@ -140,6 +155,12 @@ def scale_template(points: Iterable[tuple[float, float]], width: float, height: 
         raise ValueError("模板轮廓边界无效")
     sx, sy = width / (max_x - min_x), height / (max_y - min_y)
     return Polyline(tuple(((x - min_x) * sx, (y - min_y) * sy) for x, y in pts))
+
+
+def equal_segment_layout(length: float, count: int) -> tuple[float, float]:
+    """Return the first center and spacing when each anchor centers in its segment."""
+    spacing = length / count
+    return spacing / 2.0, spacing
 
 
 def equal_anchor_positions(width: float, height: float, count: int, edge_offset: float = 50.0) -> list[Point2D]:

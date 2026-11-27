@@ -18,6 +18,7 @@ from refracdraft.domain.models import (
     StructureType,
 )
 from refracdraft.drawing.board_profiles import build_board_profile, profiles_by_face
+from refracdraft.geometry.primitives import equal_segment_layout
 
 
 @dataclass(frozen=True)
@@ -44,8 +45,8 @@ class StandardModuleValues:
 @dataclass(frozen=True)
 class StandardAnchorValues:
     enabled: bool = False
-    position_mm: float = 150.0
-    spacing_mm: float = 300.0
+    position_mm: float | None = 150.0
+    spacing_mm: float | None = 300.0
     count: int = 1
     anchor_type: AnchorType = AnchorType.M_SHAPE
     embedment_depth_mm: float | None = None
@@ -56,6 +57,7 @@ class StandardAnchorValues:
     length_mm: float | None = 230.0
     custom_type_label: str = ""
     bolt_exposure_mm: float | None = None
+    layout_mode: LayoutMode = LayoutMode.FIXED_SPACING
 
 
 def _positive(value: float | None, label: str, module_id: str) -> float:
@@ -234,15 +236,17 @@ def build_standard_anchor(
 
     if values.anchor_type == AnchorType.NONE:
         raise ValueError(f"{module_id}: 已勾选锚固件，必须选择锚固件类型")
-    position = _positive(values.position_mm, "锚固件位置", module_id)
-    spacing = _positive(values.spacing_mm, "锚固件间距", module_id)
     length = _positive(values.length_mm, "锚固件长度", module_id) if values.length_mm is not None else None
     count = int(values.count)
     if count < 1:
         raise ValueError(f"{module_id}: 锚固件数量至少为 1")
-    group_end = position + spacing * (count - 1)
-    if group_end > module_length_mm:
-        raise ValueError(f"{module_id}: 锚固件位置与间距超出模块长度")
+    if values.layout_mode == LayoutMode.EQUAL_SEGMENTS:
+        position, spacing = equal_segment_layout(module_length_mm, count)
+    else:
+        position = _positive(values.position_mm, "锚固件位置", module_id)
+        spacing = _positive(values.spacing_mm, "锚固件间距", module_id)
+        if position + spacing * (count - 1) > module_length_mm:
+            raise ValueError(f"{module_id}: 锚固件位置与间距超出模块长度")
     embedment = None
     if values.anchor_type == AnchorType.DIAMOND:
         embedment = _positive(
@@ -255,7 +259,7 @@ def build_standard_anchor(
         exists=True,
         anchor_type=values.anchor_type,
         count=count,
-        layout_mode=LayoutMode.FIXED_SPACING,
+        layout_mode=values.layout_mode,
         positions=[],
         edge_offset_mm=position,
         spacing_mm=spacing,
@@ -332,6 +336,8 @@ def standard_anchor_values(anchor: AnchorParameters) -> StandardAnchorValues:
         hose_spec=anchor.hose_spec or _default_hose_spec(anchor.thread_spec),
         length_mm=anchor.length_mm,
         custom_type_label=anchor.custom_type_label,
+        layout_mode=(LayoutMode.EQUAL_SEGMENTS if anchor.layout_mode == LayoutMode.EQUAL_SEGMENTS
+                     else LayoutMode.FIXED_SPACING),
     )
 
 

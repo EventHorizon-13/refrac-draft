@@ -129,7 +129,7 @@ def _enum_value(field: str, value: Any) -> Any:
     if field == "geometry_type":
         if "侧敲" in v:
             return "侧敲"
-        if "正敲" in v:
+        if "正常敲" in v or "正敲" in v:
             return "正敲"
         if "普通" in v:
             return "普通"
@@ -247,7 +247,7 @@ def _import_standard_sheet(
                 values[spec.key] = parsed
             else:
                 if spec.key == "anchor_position_mm" and value is None:
-                    continue
+                    value = "150"  # Earlier workbooks used a 150 mm default for a blank position.
                 values[spec.key] = "" if value is None else str(value).strip()
         if legacy_taper_labels and values["taper_enabled"]:
             values["taper_type"] = {"正敲": "侧敲", "侧敲": "正敲"}.get(values["taper_type"], values["taper_type"])

@@ -6,7 +6,7 @@ from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from refracdraft.standard_sheet import COLUMN_SPECS
+from refracdraft.standard_sheet import AUTOMATIC, COLUMN_SPECS, EQUAL_SEGMENTS
 
 
 def create_example(path: Path) -> None:
@@ -19,7 +19,7 @@ def create_example(path: Path) -> None:
             (300, 300, "折叠", "1430", 1, "", None, 1),
             (450, 350, "半折叠", "1350", 2, "", None, 2),
             (750, 400, "层叠", "1260", 3, "", None, 3),
-            (300, 300, "自定义折叠", "1430", 1, "正敲", 220, 1),
+            (300, 300, "自定义折叠", "1430", 1, "正常敲", 220, 1),
             (450, 300, "折叠", "1350", 1, "侧敲", 220, 2),
             (750, 330, "半折叠", "1260", 2, "侧敲", 250, 3),
         ],
@@ -44,7 +44,7 @@ def create_example(path: Path) -> None:
             "show_upper_board": "否",
             "show_lower_board": "否",
             "anchor_enabled": "是",
-            "anchor_position_mm": 150,
+            "anchor_position_mm": EQUAL_SEGMENTS if number <= 3 else 150,
             "anchor_spacing_mm": 300,
             "anchor_count": count,
             "anchor_type": "菱形" if diamond else "M型",
@@ -55,7 +55,7 @@ def create_example(path: Path) -> None:
             "pin_diameter_mm": None if diamond else 8,
             "hose_spec": "25" if diamond else "32",
             "embedment_depth_mm": 50 if diamond else None,
-            "source_note": f"{taper or '普通模块'}示例",
+            "source_note": AUTOMATIC if taper else "普通模块示例",
         }
         sheet.append([row[spec.key] for spec in COLUMN_SPECS])
 
@@ -63,7 +63,7 @@ def create_example(path: Path) -> None:
         letter = get_column_letter(index)
         sheet.column_dimensions[letter].width = max(9, round(spec.width / 6))
         choices = ("是", "否") if spec.kind == "check" else spec.options
-        if choices:
+        if choices and spec.key != "anchor_position_mm":
             validation = DataValidation(type="list", formula1='"' + ",".join(choices) + '"', allow_blank=True)
             sheet.add_data_validation(validation)
             validation.add(f"{letter}2:{letter}200")

@@ -21,7 +21,7 @@ def _smoke_test_welded_output(window) -> None:
 
     common = {
         **DEFAULT_ROW, "anchor_enabled": True, "thread_spec": "M8",
-        "source_note": "自动", "hose_spec": "无",
+        "source_note": "自动", "hose_spec": "无", "anchor_position_mm": "150",
     }
     short = build_standard_row(
         {**common, "module_id": "W1", "length_mm": "600", "anchor_type": "焊接M型", "bolt_exposure_mm": "50",
@@ -166,6 +166,12 @@ def main() -> None:
             window.resize(1500, 900)
             window.show()
             app.processEvents()
+            for enabled in (True, False):
+                window.stay_on_top_action.setChecked(enabled)
+                if bool(window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint) != enabled or not window.isVisible():
+                    raise ValueError("置顶按钮未在保持窗口可见的同时切换置顶")
+            window.activateWindow()
+            app.processEvents()
             window.grab().save("RefracDraft-Standard-ui.png")
             trace.write_text("editor populated\n", encoding="utf-8")
             if len(window.rows) != 1:
@@ -182,7 +188,7 @@ def main() -> None:
             if (
                 not window._cell_bool(row, "taper_enabled")
                 or window._cell_text(row, "big_head_mm") != "289"
-                or window._cell_text(row, "taper_type") != "正敲"
+                or window._cell_text(row, "taper_type") != "正常敲"
             ):
                 raise ValueError("大小头参数未按 B2 示例载入")
             if not window._cell_bool(row, "anchor_enabled"):
@@ -221,6 +227,8 @@ def main() -> None:
                 raise ValueError("单行参数未正确映射到模块尺寸")
             if module.front_left_height_mm != 289 or module.front_right_height_mm != 220:
                 raise ValueError("大小头尺寸映射错误")
+            if module.source_note != "正常敲":
+                raise ValueError("缺少正常敲自动备注")
             if module.material != "1430材质" or module.production_quantity != 26:
                 raise ValueError("模块材质或数量映射错误")
             if roundtrip.boards[0].material != "9厘夹板":

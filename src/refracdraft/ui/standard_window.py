@@ -77,9 +77,10 @@ from refracdraft.resources import application_directory
 from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.standard import ensure_standard_project
 from refracdraft.standard_sheet import (
-    AUTOMATIC, AUTOMATIC_FIELDS, COLUMN_SPECS, DEFAULT_ROW, EMPTY_SELECTS_AUTOMATIC, OPTIONAL_ANCHOR_FIELDS,
-    STANDARD_LINK_VERSION, anchor_length_options, automatic_fields, build_standard_row, legacy_automatic_fields,
-    legacy_source_note, resolve_automatic_values, row_values_from_models, standard_board_face_bounds,
+    AUTOMATIC, AUTOMATIC_FIELDS, COLUMN_SPECS, DEFAULT_ROW, EMPTY_SELECTS_AUTOMATIC, EQUAL_SEGMENTS,
+    OPTIONAL_ANCHOR_FIELDS, STANDARD_LINK_VERSION, anchor_length_options, automatic_fields, build_standard_row,
+    equal_segment_values, legacy_automatic_fields, legacy_source_note, resolve_automatic_values,
+    row_values_from_models, standard_board_face_bounds, standard_taper_geometry, standard_taper_label,
 )
 from refracdraft.ui.about import AboutDialog
 from refracdraft.ui.board_face_dialog import BoardFaceDialog
@@ -242,7 +243,7 @@ class ParameterDelegate(QStyledItemDelegate):
         if not isinstance(editor, QLineEdit) or editor.isModified():
             return
         value = index.data(Qt.ItemDataRole.DisplayRole) or ""
-        if value == AUTOMATIC:
+        if value in (AUTOMATIC, EQUAL_SEGMENTS):
             value = index.data(AUTOMATIC_PREVIEW_ROLE) or ""
         if editor.text() != str(value):
             editor.setText(str(value))
@@ -250,15 +251,16 @@ class ParameterDelegate(QStyledItemDelegate):
 
     def setModelData(self, editor, model, index) -> None:
         if isinstance(editor, QLineEdit):
-            if index.data(Qt.ItemDataRole.EditRole) == AUTOMATIC and not editor.isModified():
+            if index.data(Qt.ItemDataRole.EditRole) in (AUTOMATIC, EQUAL_SEGMENTS) and not editor.isModified():
                 return
             model.setData(index, editor.text(), Qt.ItemDataRole.EditRole)
 
     def initStyleOption(self, option, index) -> None:
         super().initStyleOption(option, index)
         suggestion = index.data(AUTOMATIC_PREVIEW_ROLE)
-        if suggestion is not None and index.data(Qt.ItemDataRole.DisplayRole) == AUTOMATIC:
-            option.text = str(suggestion)
+        if suggestion is not None:
+            raw = index.data(Qt.ItemDataRole.DisplayRole)
+            option.text = f"{suggestion} · {EQUAL_SEGMENTS}" if raw == EQUAL_SEGMENTS else str(suggestion)
             option.font.setItalic(True)
 
     def updateEditorGeometry(self, editor, option, index) -> None:
@@ -739,7 +741,10 @@ class ParameterTable(QTableWidget):
                                 Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
                             )
                             item.setText("")
-                        elif item.flags() & Qt.ItemFlag.ItemIsEditable:
+                        elif item.flags() & Qt.ItemFlag.ItemIsEditable or (
+                            spec.key == "anchor_spacing_mm" and item.flags() & Qt.ItemFlag.ItemIsEnabled
+                            and self.item(row, COLUMN_INDEX["anchor_position_mm"]).text() != EQUAL_SEGMENTS
+                        ):
                             item.setText(value.strip())
                     column_index += 1
         finally:
@@ -766,6 +771,7 @@ class StandardWindow(MainWindow):
         split = self._settings.value("window/output_splitter", QByteArray())
         if isinstance(split, QByteArray) and not split.isEmpty():
             self.output_splitter.restoreState(split)
+        self.stay_on_top_action.setChecked(self._settings.value("window/stay_on_top", False, type=bool))
         self.setWindowTitle(f"RefracDraft Standard v{app_version()} — 模块加工图生成器")
         self.statusBar().showMessage("修改参数后点击「预览」；可拖动选区右下角批量填充。")
 
@@ -799,6 +805,11 @@ class StandardWindow(MainWindow):
         self.redo_action.triggered.connect(self.redo)
         toolbar.addAction(self.redo_action)
         toolbar.addSeparator()
+        self.stay_on_top_action = QAction("置顶", self)
+        self.stay_on_top_action.setCheckable(True)
+        self.stay_on_top_action.setToolTip("保持主窗口在其他窗口上方")
+        self.stay_on_top_action.toggled.connect(self._set_stay_on_top)
+        toolbar.addAction(self.stay_on_top_action)
         about = QAction("关于", self)
         about.triggered.connect(self._show_about)
         toolbar.addAction(about)
@@ -1012,6 +1023,13 @@ class StandardWindow(MainWindow):
     def _add_empty_rows(self) -> None:
         self._add_module()
 
+    def _set_stay_on_top(self, enabled: bool) -> None:
+        visible = self.isVisible()
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, enabled)
+        if visible:
+            self.show()
+        self._settings.setValue("window/stay_on_top", enabled)
+
     def _show_about(self) -> None:
         dialog = AboutDialog(self)
         dialog.exec()
@@ -1168,7 +1186,10 @@ class StandardWindow(MainWindow):
         values = self._sheet_values(row)
         try:
             length, thickness = standard_board_face_bounds(values)
-            geometry = GeometryType(str(values["taper_type"])) if values["taper_enabled"] else GeometryType.NORMAL
+            geometry = (
+                standard_taper_geometry(str(values["taper_type"]), str(values["module_id"]))
+                if values["taper_enabled"] else GeometryType.NORMAL
+            )
             height_key = "big_head_mm" if values["taper_enabled"] else "expansion_length_mm"
             height = float(str(values[height_key]).replace(",", ""))
             if not 0 < height < float("inf"):
@@ -1327,15 +1348,17 @@ class StandardWindow(MainWindow):
             if big:
                 self._set_cell_text(row, "expansion_length_mm", big)
 
-    def _set_cell_enabled(self, row: int, key: str, enabled: bool) -> None:
+    def _set_cell_enabled(self, row: int, key: str, enabled: bool, *, editable: bool = True) -> None:
         item = self.parameter_table.item(row, COLUMN_INDEX[key])
         if item is None:
             return
         previous = flags = item.flags()
         if enabled:
             flags |= Qt.ItemFlag.ItemIsEnabled
-            if COLUMN_BY_KEY[key].kind != "check":
+            if editable and COLUMN_BY_KEY[key].kind != "check":
                 flags |= Qt.ItemFlag.ItemIsEditable
+            else:
+                flags &= ~Qt.ItemFlag.ItemIsEditable
         else:
             flags &= ~Qt.ItemFlag.ItemIsEnabled
             flags &= ~Qt.ItemFlag.ItemIsEditable
@@ -1376,6 +1399,10 @@ class StandardWindow(MainWindow):
                 anchor = self._cell_bool(row, "anchor_enabled")
                 anchor_type = self._cell_text(row, "anchor_type")
                 is_diamond = anchor_type in DIAMOND_ANCHOR_TYPES
+                taper_item = table.item(row, COLUMN_INDEX["taper_type"])
+                taper_item.setText(standard_taper_label(taper_item.text()))
+                position_item = table.item(row, COLUMN_INDEX["anchor_position_mm"])
+                equal = anchor and position_item.text() == EQUAL_SEGMENTS
                 self._set_cell_enabled(row, "expansion_length_mm", not taper)
                 for key in TAPER_SETTING_KEYS:
                     self._set_cell_enabled(row, key, taper)
@@ -1386,10 +1413,16 @@ class StandardWindow(MainWindow):
                     enabled = anchor and not (key == "pin_diameter_mm" and is_diamond)
                     enabled = enabled and not (key == "embedment_depth_mm" and not is_diamond)
                     enabled = enabled and not (key == "bolt_exposure_mm" and anchor_type not in WELDED_ANCHOR_TYPES)
-                    self._set_cell_enabled(row, key, enabled)
+                    self._set_cell_enabled(row, key, enabled, editable=not (equal and key == "anchor_spacing_mm"))
                 if taper:
                     self._sync_expansion_length(row)
                 values = self._sheet_values(row)
+                spacing_item = table.item(row, COLUMN_INDEX["anchor_spacing_mm"])
+                layout = equal_segment_values(values) if equal else None
+                for item, value in zip((position_item, spacing_item), layout or (None, None)):
+                    item.setData(AUTOMATIC_PREVIEW_ROLE, f"{value:g}" if value is not None else None)
+                position_item.setToolTip("首个锚固件在第一等份的中心" if equal else "")
+                spacing_item.setToolTip("均分间距 = 模块长度 ÷ 锚固件数量" if equal else "")
                 suggestions = resolve_automatic_values(values, self._row_bases[row].automatic_fallback)
                 for key in AUTOMATIC_FIELDS:
                     item = table.item(row, COLUMN_INDEX[key])
@@ -1399,7 +1432,7 @@ class StandardWindow(MainWindow):
                     item.setData(AUTOMATIC_PREVIEW_ROLE, suggestion)
                     if key == "source_note":
                         item.setToolTip(
-                            (suggestion or "随锚固件参数自动填写") if key in suggestions else item.text()
+                            (suggestion or "随大小头类型和锚固件参数自动填写") if key in suggestions else item.text()
                         )
                     else:
                         item.setToolTip(f"自动计算 · {suggestion or '待填写参数'}" if key in suggestions else "")

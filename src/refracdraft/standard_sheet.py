@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass
-from math import isfinite
+from math import isclose, isfinite
 
 from refracdraft.domain.models import (
-    AnchorParameters, AnchorType, BoardFaceProfile, BoardParameters, GeometryType, ModuleParameters,
+    AnchorParameters, AnchorType, BoardFaceProfile, BoardParameters, GeometryType, LayoutMode, ModuleParameters,
     StructureType, DIAMOND_ANCHOR_TYPES, WELDED_ANCHOR_TYPES, format_bolt_remark,
 )
+from refracdraft.geometry.primitives import board_anchor_top_offset, equal_segment_layout
 from refracdraft.standard import (
     StandardAnchorValues, StandardModuleValues, build_standard_anchor, build_standard_board,
     build_standard_module, standard_anchor_values, standard_module_values,
@@ -28,8 +29,10 @@ PROFILE_COLUMNS = ("编号", "类型", "a", "b", "c", "d", "旋转角度", "镜�
 PIN_DIAMETERS = ("8", "6", "5")
 HOSE_SPECS = ("25", "32")
 AUTOMATIC = "自动"
+EQUAL_SEGMENTS = LayoutMode.EQUAL_SEGMENTS.value
 STANDARD_LINK_VERSION = 2
 TAPER_LABEL_VERSION = 2
+TAPER_LABELS = {GeometryType.FRONT_TAPER: "正常敲", GeometryType.SIDE_TAPER: "侧敲"}
 AUTOMATIC_FIELDS = ("structure_type", "board_material", "anchor_material", "hose_spec", "anchor_length_mm", "source_note")
 EMPTY_SELECTS_AUTOMATIC = ("structure_type", "board_material", "hose_spec")
 OPTIONAL_ANCHOR_FIELDS = ("anchor_length_mm", "anchor_material", "thread_spec", "pin_diameter_mm")
@@ -90,13 +93,13 @@ COLUMN_SPECS = (
     ColumnSpec("taper_enabled", "大小头", "check", width=50, group="taper"),
     ColumnSpec("big_head_mm", "大头", "number", (), 54, "taper"),
     ColumnSpec("small_head_mm", "小头", "number", (), 54, "taper"),
-    ColumnSpec("taper_type", "类型", "enum", ("正敲", "侧敲"), 58, "taper"),
+    ColumnSpec("taper_type", "类型", "enum", tuple(TAPER_LABELS.values()), 70, "taper"),
     ColumnSpec("board_exists", "夹板", "check", width=50, group="board"),
     ColumnSpec("board_material", "夹板型号", "combo", BOARD_TYPES, 64, "board"),
     ColumnSpec("show_upper_board", "上板图", "check", width=62, group="board"),
     ColumnSpec("show_lower_board", "下板图", "check", width=62, group="board"),
     ColumnSpec("anchor_enabled", "锚固件", "check", width=56, group="anchor"),
-    ColumnSpec("anchor_position_mm", "位置", "number", (), 54, "anchor"),
+    ColumnSpec("anchor_position_mm", "位置", "number", (EQUAL_SEGMENTS,), 104, "anchor"),
     ColumnSpec("anchor_spacing_mm", "间距", "number", (), 54, "anchor"),
     ColumnSpec("anchor_count", "锚固数量", "integer", (), 62, "anchor"),
     ColumnSpec(
@@ -114,7 +117,7 @@ COLUMN_SPECS = (
     ColumnSpec("hose_spec", "胶管", "combo", HOSE_SPECS, 54, "anchor"),
     ColumnSpec("embedment_depth_mm", "嵌入深度", "number", (), 62, "anchor"),
     ColumnSpec("bolt_exposure_mm", "螺栓外露长度", "number", (), 96, "anchor"),
-    ColumnSpec("source_note", "备注", options=(AUTOMATIC,), width=116, group="footer"),
+    ColumnSpec("source_note", "备注", options=(AUTOMATIC,), width=228, group="footer"),
 )
 DEFAULT_ROW = {
     "module_id": "M1",
@@ -128,13 +131,13 @@ DEFAULT_ROW = {
     "taper_enabled": False,
     "big_head_mm": "289",
     "small_head_mm": "220",
-    "taper_type": GeometryType.FRONT_TAPER.value,
+    "taper_type": TAPER_LABELS[GeometryType.FRONT_TAPER],
     "board_exists": True,
     "board_material": "9厘",
     "show_upper_board": False,
     "show_lower_board": False,
     "anchor_enabled": False,
-    "anchor_position_mm": "150",
+    "anchor_position_mm": EQUAL_SEGMENTS,
     "anchor_spacing_mm": "300",
     "anchor_count": "1",
     "anchor_type": "M型",
@@ -167,12 +170,14 @@ def _optional_number(value: str, label: str, module_id: str) -> float | None:
 
 def _integer(value: str, label: str, module_id: str, minimum: int = 1) -> int:
     try:
-        parsed = int(float(value.strip()))
+        parsed = float(value.strip())
     except (TypeError, ValueError):
         raise ValueError(f"{module_id or '未编号模块'}: {label}必须是整数") from None
+    if not parsed.is_integer():
+        raise ValueError(f"{module_id or '未编号模块'}: {label}必须是整数")
     if parsed < minimum:
         raise ValueError(f"{module_id or '未编号模块'}: {label}必须至少为 {minimum}")
-    return parsed
+    return int(parsed)
 
 
 def _without_suffix(value: str, *suffixes: str) -> str:
@@ -259,29 +264,61 @@ def _anchor_remark(values: dict[str, str | bool]) -> str:
     return format_bolt_remark(exposure + depth, exposure) if exposure is not None and depth is not None else ""
 
 
+def equal_segment_values(values: dict[str, str | bool]) -> tuple[float, float] | None:
+    length = _input_number(values["length_mm"])
+    count = _input_number(values["anchor_count"])
+    if length is None or count is None or not count.is_integer():
+        return None
+    return equal_segment_layout(length, int(count))
+
+
+def _last_anchor_station(values: dict[str, str | bool], length: float) -> float | None:
+    count = _input_number(values["anchor_count"])
+    if count is None or not count.is_integer():
+        return None
+    if values["anchor_position_mm"] == EQUAL_SEGMENTS:
+        start, spacing = equal_segment_layout(length, int(count))
+    else:
+        start = _input_number(values["anchor_position_mm"])
+        spacing = _input_number(values["anchor_spacing_mm"])
+        if start is None or spacing is None:
+            return None
+    station = start + spacing * (count - 1)
+    return station if station <= length else None
+
+
+def standard_taper_label(value: str) -> str:
+    return TAPER_LABELS[GeometryType.FRONT_TAPER] if value == GeometryType.FRONT_TAPER else value
+
+
 def _automatic_anchor_length(values: dict[str, str | bool], length: float | None) -> str:
     tapered = bool(values["taper_enabled"])
     height = _input_number(values["big_head_mm"] if tapered else values["expansion_length_mm"])
     if height is None:
         return ""
-    front_taper = tapered and values["taper_type"] == GeometryType.FRONT_TAPER.value
-    if front_taper:
-        small = _input_number(values["small_head_mm"])
-        start = _input_number(values["anchor_position_mm"])
-        spacing = _input_number(values["anchor_spacing_mm"])
-        count = _input_number(values["anchor_count"])
-        if (length is None or small is None or small >= height or start is None
-                or spacing is None or count is None or not count.is_integer()):
-            return ""
-        end = start + spacing * (count - 1)
-        if end > length:
-            return ""
-        # The standard editor places the big head at x=0. A common length must fit the shortest section.
-        height -= (height - small) * end / length
-
     anchor_type = str(values["anchor_type"]).strip()
+    pin_length = anchor_type in (AnchorType.M_SHAPE, AnchorType.DIAMOND)
+    front_taper = tapered and standard_taper_label(str(values["taper_type"])) == TAPER_LABELS[GeometryType.FRONT_TAPER]
+    if front_taper or (tapered and pin_length and values["taper_type"] == GeometryType.SIDE_TAPER):
+        small = _input_number(values["small_head_mm"])
+        if front_taper:
+            span = length
+            station = _last_anchor_station(values, length) if length is not None else None
+        else:
+            span = _input_number(values["thickness_mm"])
+            depth = _input_number(values["embedment_depth_mm"])
+            station = board_anchor_top_offset(AnchorType(anchor_type), depth)
+        if span is None or station is None or station > span or small is None or small >= height:
+            return ""
+        # The big head is at station zero. A common front-taper length must fit the last anchor.
+        height -= (height - small) * station / span
+
     if anchor_type == AnchorType.WELDED_DIAMOND:
         return ""
+    if pin_length:
+        limit = height - 50
+        return next((size for size in anchor_length_options(anchor_type)
+                     if int(size) <= limit or isclose(int(size), limit, rel_tol=0, abs_tol=1e-9)), "")
     if anchor_type in INSERT_ANCHOR_LABELS:
         target = round(height - 50, 2)
         if target < 250:
@@ -318,7 +355,10 @@ def resolve_automatic_values(
             if grade is not None else defaults["anchor_material"]
         ),
         "hose_spec": {"M10": "32", "M8": "25"}.get(thread, defaults["hose_spec"]),
-        "source_note": _anchor_remark(values),
+        "source_note": "；".join(filter(None, (
+            standard_taper_label(str(values["taper_type"])) if values["taper_enabled"] else "",
+            _anchor_remark(values),
+        ))),
     }
     if "anchor_length_mm" in fields:
         suggestions["anchor_length_mm"] = _automatic_anchor_length(values, length)
@@ -353,13 +393,16 @@ def row_values_from_models(
         "taper_enabled": module_values.taper_enabled,
         "big_head_mm": f"{module_values.big_head_mm:g}" if module_values.big_head_mm is not None else "289",
         "small_head_mm": f"{module_values.small_head_mm:g}" if module_values.small_head_mm is not None else "220",
-        "taper_type": module_values.taper_type.value,
+        "taper_type": TAPER_LABELS[module_values.taper_type],
         "board_exists": module_values.board_exists,
         "board_material": _without_suffix(module_values.board_material, "夹板"),
         "show_upper_board": board_model.show_upper_board,
         "show_lower_board": board_model.show_lower_board,
         "anchor_enabled": anchor_values.enabled,
-        "anchor_position_mm": f"{anchor_values.position_mm:g}",
+        "anchor_position_mm": (
+            EQUAL_SEGMENTS if not anchor_values.enabled or anchor_values.layout_mode == LayoutMode.EQUAL_SEGMENTS
+            else f"{anchor_values.position_mm:g}"
+        ),
         "anchor_spacing_mm": f"{anchor_values.spacing_mm:g}",
         "anchor_count": str(anchor_values.count),
         "anchor_type": anchor_values.custom_type_label
@@ -432,7 +475,7 @@ def build_standard_row(
             if tapered
             else None
         ),
-        taper_type=_geometry_type(str(values["taper_type"]), module_id) if tapered else GeometryType.FRONT_TAPER,
+        taper_type=standard_taper_geometry(str(values["taper_type"]), module_id) if tapered else GeometryType.FRONT_TAPER,
         board_exists=bool(values["board_exists"]),
         material=str(values["material"]),
         production_quantity=_integer(str(values["production_quantity"]), "模块数量", module_id),
@@ -458,11 +501,12 @@ def build_standard_row(
     )
     return module, board, anchor
 
-def _geometry_type(value: str, module_id: str) -> GeometryType:
-    try:
-        return GeometryType(value)
-    except ValueError:
-        raise ValueError(f"{module_id}: 大小头类型必须是正敲或侧敲") from None
+def standard_taper_geometry(value: str, module_id: str) -> GeometryType:
+    label = standard_taper_label(value)
+    for geometry, taper_label in TAPER_LABELS.items():
+        if label == taper_label:
+            return geometry
+    raise ValueError(f"{module_id}: 大小头类型必须是正常敲或侧敲")
 
 def _structure_type(value: str, module_id: str) -> StructureType:
     label = value.strip()
@@ -519,10 +563,12 @@ def _anchor_values(values: dict[str, str | bool], module_id: str) -> StandardAnc
         if pin_text and anchor_type not in DIAMOND_ANCHOR_TYPES
         else None
     )
+    equal_segments = values["anchor_position_mm"] == EQUAL_SEGMENTS
     return StandardAnchorValues(
         enabled=True,
-        position_mm=_number(str(values["anchor_position_mm"]), "锚固件位置", module_id),
-        spacing_mm=_number(str(values["anchor_spacing_mm"]), "锚固件间距", module_id),
+        position_mm=None if equal_segments else _number(str(values["anchor_position_mm"]), "锚固件位置", module_id),
+        spacing_mm=None if equal_segments else _number(str(values["anchor_spacing_mm"]), "锚固件间距", module_id),
+        layout_mode=LayoutMode.EQUAL_SEGMENTS if equal_segments else LayoutMode.FIXED_SPACING,
         count=_integer(str(values["anchor_count"]), "锚固件数量", module_id),
         anchor_type=anchor_type,
         custom_type_label="" if type_label == "自定义" else type_label,
