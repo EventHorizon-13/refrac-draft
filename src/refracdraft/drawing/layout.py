@@ -619,12 +619,14 @@ def _detail_rows(drawing: ModuleDrawing) -> tuple[str, ...]:
 
 
 def _detail_block_height(drawing: ModuleDrawing) -> float:
-    rows = _detail_rows(drawing)
-    if not rows:
+    rows = len(_detail_rows(drawing))
+    if rows == 0:
         return 0.0
-    text_scale = TAPER_LABEL_SCALE if any(taper_remark_labels(row) for row in rows) else 1.0
-    height = DETAIL_TEXT_SIZE_MM * text_scale + (len(rows) - 1) * DETAIL_LINE_HEIGHT_MM
-    return height * annotation_factor(drawing.scale_denominator) + 1.0
+    # Exact MTEXT spacing keeps the baseline pitch. Allow the final run to grow
+    # within the existing 1 mm end clearance without changing view placement.
+    scale = annotation_factor(drawing.scale_denominator)
+    height = (DETAIL_TEXT_SIZE_MM + (rows - 1) * DETAIL_LINE_HEIGHT_MM) * scale
+    return height + 1.0
 
 
 def _detail_row_width(line: str) -> float:
@@ -637,9 +639,13 @@ def _styled_detail_width(line: str, measure: Callable[[str], float]) -> float:
     return measure(line) + extra
 
 
-def _preferred_detail_width(drawing: ModuleDrawing, measure: Callable[[str], float] | None) -> float:
-    longest = max((_styled_detail_width(line, measure or _detail_row_width) for line in _detail_rows(drawing)),
-                  default=0.0)
+def _preferred_detail_width(
+    drawing: ModuleDrawing, measure: Callable[[str], float] | None, *, include_emphasis: bool = True,
+) -> float:
+    measure = measure or _detail_row_width
+    rows = _detail_rows(drawing)
+    widths = (_styled_detail_width(line, measure) for line in rows) if include_emphasis else map(measure, rows)
+    longest = max(widths, default=0.0)
     return longest * annotation_factor(drawing.scale_denominator) + DETAIL_WIDTH_CLEARANCE_MM
 
 
@@ -663,10 +669,12 @@ def _side_details(drawing: ModuleDrawing) -> bool:
     return view_placement(drawing).detail_on_side
 
 
-def _side_detail_width(drawing: ModuleDrawing, detail_x: float, measure: Callable[[str], float] | None) -> float:
+def _side_detail_width(
+    drawing: ModuleDrawing, detail_x: float, measure: Callable[[str], float] | None, *, include_emphasis: bool = True,
+) -> float:
     available = (PAGE_CONTENT_WIDTH_MM - detail_x
                  - _panel_inner_margin(drawing) - SIDE_DETAIL_RIGHT_MARGIN_MM)
-    return max(1.0, min(_preferred_detail_width(drawing, measure), available))
+    return max(1.0, min(_preferred_detail_width(drawing, measure, include_emphasis=include_emphasis), available))
 
 
 def geometry_width(drawing: ModuleDrawing, measure: Callable[[str], float] | None = None) -> float:
@@ -711,14 +719,17 @@ def module_required_width(
     content_width = geometry_width(drawing, measure)
     margin = _panel_inner_margin(drawing)
     detail_factor = COMPACT_DETAIL_WIDTH_FACTOR if compact else 1.0
+    # The compact pass can use the plain-text footprint. The DXF writer fits the
+    # styled line to that footprint horizontally and preserves its character height.
     detail_x = view_placement(drawing).detail_x
     if detail_x is not None:
-        details = _side_detail_width(drawing, detail_x, measure) * detail_factor
+        details = _side_detail_width(drawing, detail_x, measure, include_emphasis=not compact) * detail_factor
         return max(PANEL_MIN_WIDTH_MM, _drawing_right(drawing) + margin + 0.5,
                    detail_x + details + margin + SIDE_DETAIL_RIGHT_MARGIN_MM)
     geometry_span = _view_right_edge(drawing, content_width) + margin
     text_margins = 2 * PANEL_INNER_MARGIN_MM if _center_details(drawing) else margin + PANEL_INNER_MARGIN_MM
-    text_span = min(PAGE_CONTENT_WIDTH_MM, _preferred_detail_width(drawing, measure) * detail_factor + text_margins) if drawing.details else 0.0
+    detail_width = _preferred_detail_width(drawing, measure, include_emphasis=not compact) * detail_factor
+    text_span = min(PAGE_CONTENT_WIDTH_MM, detail_width + text_margins) if drawing.details else 0.0
     return max(PANEL_MIN_WIDTH_MM, geometry_span, text_span)
 
 
