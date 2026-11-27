@@ -4,7 +4,10 @@ from collections.abc import Callable
 
 from dataclasses import dataclass, replace
 
-from refracdraft.drawing.model import Dimension, DrawingDocument, LeaderNote, ModuleDrawing, PlacedModule, ViewDrawing
+from refracdraft.drawing.model import (
+    TAPER_LABEL_SCALE, Dimension, DrawingDocument, LeaderNote, ModuleDrawing, PlacedModule, ViewDrawing,
+    taper_remark_labels,
+)
 from refracdraft.geometry.primitives import point_in_outline
 
 
@@ -595,7 +598,7 @@ def top_row_width(drawing: ModuleDrawing) -> float:
 
 
 def details_width(drawing: ModuleDrawing) -> float:
-    units = [_text_width(line, 0.47, 0.76) for line in _detail_rows(drawing)]
+    units = [_styled_detail_width(line, _centered_detail_width) for line in _detail_rows(drawing)]
     return min(
         PAGE_CONTENT_WIDTH_MM - PANEL_INNER_MARGIN_MM * 2,
         max(units, default=0.0),
@@ -607,15 +610,21 @@ def _text_width(line: str, ascii_width: float, cjk_width: float) -> float:
                for char in line) * DETAIL_TEXT_SIZE_MM
 
 
+def _centered_detail_width(line: str) -> float:
+    return _text_width(line, 0.47, 0.76)
+
+
 def _detail_rows(drawing: ModuleDrawing) -> tuple[str, ...]:
     return tuple("\n".join(drawing.details).splitlines())
 
 
 def _detail_block_height(drawing: ModuleDrawing) -> float:
-    rows = len(_detail_rows(drawing))
-    if rows == 0:
+    rows = _detail_rows(drawing)
+    if not rows:
         return 0.0
-    return (DETAIL_TEXT_SIZE_MM + (rows - 1) * DETAIL_LINE_HEIGHT_MM) * annotation_factor(drawing.scale_denominator) + 1.0
+    text_scale = TAPER_LABEL_SCALE if any(taper_remark_labels(row) for row in rows) else 1.0
+    height = DETAIL_TEXT_SIZE_MM * text_scale + (len(rows) - 1) * DETAIL_LINE_HEIGHT_MM
+    return height * annotation_factor(drawing.scale_denominator) + 1.0
 
 
 def _detail_row_width(line: str) -> float:
@@ -623,8 +632,14 @@ def _detail_row_width(line: str) -> float:
     return _text_width(line, 0.82, 1.39) * 1.06
 
 
+def _styled_detail_width(line: str, measure: Callable[[str], float]) -> float:
+    extra = sum(measure(label.group()) for label in taper_remark_labels(line)) * (TAPER_LABEL_SCALE - 1)
+    return measure(line) + extra
+
+
 def _preferred_detail_width(drawing: ModuleDrawing, measure: Callable[[str], float] | None) -> float:
-    longest = max(map(measure or _detail_row_width, _detail_rows(drawing)), default=0.0)
+    longest = max((_styled_detail_width(line, measure or _detail_row_width) for line in _detail_rows(drawing)),
+                  default=0.0)
     return longest * annotation_factor(drawing.scale_denominator) + DETAIL_WIDTH_CLEARANCE_MM
 
 
@@ -751,5 +766,5 @@ def detail_lines(placed: PlacedModule) -> tuple[str, ...]:
 def detail_line_width_factor(line: str, available: float, measure: Callable[[str], float] | None = None,
                              text_scale: float = 1.0) -> float:
     usable = max(1.0, available - DETAIL_WIDTH_CLEARANCE_MM)
-    width = (measure or _detail_row_width)(line) * text_scale
+    width = _styled_detail_width(line, measure or _detail_row_width) * text_scale
     return usable / width if width > usable + 1e-6 else 1.0

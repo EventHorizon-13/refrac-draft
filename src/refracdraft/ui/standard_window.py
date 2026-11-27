@@ -8,21 +8,26 @@ import re
 
 import pymupdf
 from PySide6.QtCore import (
-    QByteArray, QEvent, QEventLoop, QPersistentModelIndex, QRect, QRegularExpression, QSettings, QSignalBlocker,
+    QByteArray, QEvent, QEventLoop, QPersistentModelIndex, QPointF, QRect, QRegularExpression, QSettings, QSignalBlocker,
     QStandardPaths, Qt, Signal,
 )
 from PySide6.QtGui import (
     QAction,
     QColor,
     QDoubleValidator,
+    QFont,
     QImage,
     QInputMethodEvent,
     QIntValidator,
     QKeySequence,
     QPainter,
+    QPalette,
     QPen,
     QPixmap,
     QRegularExpressionValidator,
+    QTextCharFormat,
+    QTextLayout,
+    QTextOption,
     QValidator,
 )
 from PySide6.QtWidgets import (
@@ -52,6 +57,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyleOption,
     QStyleOptionButton,
+    QStyleOptionViewItem,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -69,6 +75,7 @@ from refracdraft.domain.models import (
     Project,
 )
 from refracdraft.drawing.generator import DrawingGenerator
+from refracdraft.drawing.model import TAPER_LABEL_PATTERN, TAPER_LABEL_SCALE
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import export_pdf, shx_detail_measure
 from refracdraft.exporters.project import export_complete_project, project_output_paths
@@ -106,6 +113,7 @@ COLUMN_INDEX = {spec.key: index for index, spec in enumerate(COLUMN_SPECS)}
 PROFILE_COLUMN = len(COLUMN_SPECS)
 COLUMN_BY_KEY = {spec.key: spec for spec in COLUMN_SPECS}
 AUTOMATIC_PREVIEW_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+NOTE_ALIGNMENT = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
 ARROW_STEPS = {
     Qt.Key.Key_Left: (0, -1),
     Qt.Key.Key_Right: (0, 1),
@@ -193,7 +201,7 @@ class ParameterDelegate(QStyledItemDelegate):
         if spec.kind == "check":
             return None
         editor = QLineEdit(parent)
-        editor.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        editor.setAlignment(NOTE_ALIGNMENT if spec.key == "source_note" else Qt.AlignmentFlag.AlignCenter)
         editor.setMaxLength(180)
         editor.setAutoFillBackground(True)
         editor.setStyleSheet(
@@ -262,6 +270,68 @@ class ParameterDelegate(QStyledItemDelegate):
             raw = index.data(Qt.ItemDataRole.DisplayRole)
             option.text = f"{suggestion} · {EQUAL_SEGMENTS}" if raw == EQUAL_SEGMENTS else str(suggestion)
             option.font.setItalic(True)
+        if index.column() == COLUMN_INDEX["taper_type"] and TAPER_LABEL_PATTERN.fullmatch(option.text):
+            option.font = self._larger_taper_font(option.font)
+            color = self._taper_color(option)
+            for role in (QPalette.ColorRole.Text, QPalette.ColorRole.HighlightedText):
+                option.palette.setColor(role, color)
+
+    @staticmethod
+    def _larger_taper_font(base: QFont) -> QFont:
+        font = QFont(base)
+        if font.pointSizeF() > 0:
+            font.setPointSizeF(font.pointSizeF() * TAPER_LABEL_SCALE)
+        else:
+            font.setPixelSize(round(font.pixelSize() * TAPER_LABEL_SCALE))
+        return font
+
+    @staticmethod
+    def _taper_color(option: QStyleOptionViewItem) -> QColor:
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        dark = option.palette.base().color().lightness() < 128
+        return QColor("#ffb0b0" if selected or dark else "#be1e2d")
+
+    def _paint_note(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
+        styled = QStyleOptionViewItem(option)
+        self.initStyleOption(styled, index)
+        text = " ".join(styled.text.splitlines())
+        labels = tuple(TAPER_LABEL_PATTERN.finditer(text))
+        if not labels:
+            super().paint(painter, option, index)
+            return
+        widget = self.parent()
+        style = widget.style()
+        rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, styled, widget)
+        rect.setRight(min(rect.right(), _preset_button_rect(styled.rect).left() - 2))
+        rect.adjust(3, 0, 0, 0)
+        styled.text = ""
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, styled, painter, widget)
+        layout = QTextLayout(text, styled.font)
+        text_option = QTextOption()
+        text_option.setWrapMode(QTextOption.WrapMode.NoWrap)
+        layout.setTextOption(text_option)
+        emphasis = QTextCharFormat()
+        emphasis.setFont(self._larger_taper_font(styled.font))
+        emphasis.setForeground(self._taper_color(styled))
+        formats = []
+        for label in labels:
+            run = QTextLayout.FormatRange()
+            run.start = len(text[:label.start()].encode("utf-16-le")) // 2
+            run.length = len(label.group())
+            run.format = emphasis
+            formats.append(run)
+        layout.setFormats(formats)
+        layout.beginLayout()
+        line = layout.createLine()
+        line.setLineWidth(rect.width())
+        layout.endLayout()
+        selected = bool(styled.state & QStyle.StateFlag.State_Selected)
+        role = QPalette.ColorRole.HighlightedText if selected else QPalette.ColorRole.Text
+        painter.save()
+        painter.setClipRect(rect, Qt.ClipOperation.IntersectClip)
+        painter.setPen(styled.palette.color(role))
+        layout.draw(painter, QPointF(rect.left(), rect.top() + (rect.height() - line.height()) / 2))
+        painter.restore()
 
     def updateEditorGeometry(self, editor, option, index) -> None:
         editor.setGeometry(option.rect)
@@ -306,7 +376,10 @@ class ParameterDelegate(QStyledItemDelegate):
             )
             painter.restore()
             return
-        super().paint(painter, option, index)
+        if spec.key == "source_note":
+            self._paint_note(painter, option, index)
+        else:
+            super().paint(painter, option, index)
         if spec.options:
             button = QStyleOption()
             button.initFrom(self.parent())
@@ -1165,7 +1238,7 @@ class StandardWindow(MainWindow):
                     | Qt.ItemFlag.ItemIsEnabled
                     | Qt.ItemFlag.ItemIsEditable
                 )
-                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item.setTextAlignment(NOTE_ALIGNMENT if spec.key == "source_note" else Qt.AlignmentFlag.AlignCenter)
             table.setItem(row, column, item)
         button = QPushButton()
         button.setObjectName("boardFaceProfileButton")

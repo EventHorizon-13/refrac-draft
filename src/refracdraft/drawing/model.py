@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from dataclasses import dataclass, field
+import re
 
 from refracdraft.geometry.primitives import Polyline
 
@@ -11,6 +12,12 @@ LAYER_MARK_ACI = 153
 LAYER_MARK_LINEWEIGHT = 18
 LEADER_ACI = 32
 INSERT_ANCHOR_ACI = 203
+TAPER_LABEL_PATTERN = re.compile(r"正常敲|正敲|侧敲")
+TAPER_LABEL_SCALE = 1.2
+
+
+def taper_remark_labels(line: str) -> tuple[re.Match[str], ...]:
+    return tuple(TAPER_LABEL_PATTERN.finditer(line)) if line.startswith("8、") else ()
 
 
 def linetype_role(value: str | None) -> str:

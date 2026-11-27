@@ -33,7 +33,8 @@ from refracdraft.drawing.layout import (
     view_placement,
 )
 from refracdraft.drawing.model import (
-    LAYER_MARK_ACI, LAYER_MARK_LINEWEIGHT, LEADER_ACI, DrawingDocument, ViewDrawing, linetype_role,
+    LAYER_MARK_ACI, LAYER_MARK_LINEWEIGHT, LEADER_ACI, TAPER_LABEL_SCALE, DrawingDocument, ViewDrawing, linetype_role,
+    taper_remark_labels,
 )
 
 
@@ -70,17 +71,28 @@ DIMENSION_FALLBACK = {
 }
 
 
+def _escape_mtext(text: str) -> str:
+    return text.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
+
+
 def _detail_mtext(
     lines: tuple[str, ...], available_width: float, measure: Callable[[str], float] | None = None,
     text_scale: float = 1.0,
 ) -> str:
     paragraphs = []
     for line in lines:
-        escaped = line.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
+        parts = []
+        end = 0
+        for label in taper_remark_labels(line):
+            parts.append(_escape_mtext(line[end:label.start()]))
+            parts.append(rf"{{\C1;\H{TAPER_LABEL_SCALE:g}x;{label.group()}}}")
+            end = label.end()
+        parts.append(_escape_mtext(line[end:]))
+        paragraph = "".join(parts)
         factor = detail_line_width_factor(line, available_width, measure, text_scale)
         if factor < 1.0:
-            escaped = rf"{{\W{factor:.6f};{escaped}}}"
-        paragraphs.append(escaped)
+            paragraph = rf"{{\W{factor:.6f};{paragraph}}}"
+        paragraphs.append(paragraph)
     return r"\P".join(paragraphs)
 
 
