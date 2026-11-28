@@ -8,11 +8,12 @@ from typing import Any
 from openpyxl import load_workbook
 
 from refracdraft.domain.models import (
-    AnchorParameters, BoardFaceFeature, BoardFaceProfile, BoardParameters, CutFace, GeometryType,
+    AnchorParameters, BoardFaceFeature, BoardFaceProfile, BoardParameters, CutFace, GeometryType, LayoutMode,
     ModuleParameters, Project,
 )
 from refracdraft.standard_sheet import (
-    AUTOMATIC, AUTOMATIC_FALLBACK_KEYS, AUTOMATIC_SHEET, COLUMN_SPECS, DEFAULT_ROW, PROFILE_COLUMNS,
+    AUTOMATIC, AUTOMATIC_FALLBACK_KEYS, AUTOMATIC_SHEET, COLUMN_SPECS, DEFAULT_ROW, EXCEL_EMPTY_FIELDS,
+    EXCEL_KEEP_EMPTY, PROFILE_COLUMNS,
     PROFILE_SHEET, STANDARD_LINK_VERSION, automatic_fields, build_standard_row, legacy_automatic_fields,
     legacy_source_note,
 )
@@ -80,17 +81,16 @@ FIELD_ALIASES = {
 }
 
 
-def _rows(ws) -> list[dict[str, Any]]:
-    values = list(ws.iter_rows(values_only=True))
-    if not values:
-        return []
-    headers = [str(v).strip() if v is not None else "" for v in values[0]]
-    result = []
-    for row in values[1:]:
-        if not any(v is not None for v in row):
-            continue
-        result.append({headers[i]: row[i] for i in range(min(len(headers), len(row))) if headers[i]})
-    return result
+def _is_blank(value: Any) -> bool:
+    return value is None or isinstance(value, str) and not value.strip()
+
+
+def _rows(ws):
+    rows = ws.iter_rows(values_only=True)
+    headers = [str(value).strip() if value is not None else "" for value in next(rows, ())]
+    for number, row in enumerate(rows, 2):
+        if any(not _is_blank(value) for value in row):
+            yield number, {header: value for header, value in zip(headers, row) if header}
 
 
 def _number(value: Any) -> Any:
@@ -164,13 +164,15 @@ def _normalize_row(row: dict[str, Any], group: str) -> dict[str, Any]:
     reverse = {alias: field for field, values in aliases.items() for alias in values}
     normalized: dict[str, Any] = {}
     for key, value in row.items():
-        if value is None or value == "":
+        if _is_blank(value):
             continue
         key_clean = str(key).strip()
         field = key_clean if key_clean in aliases else reverse.get(key_clean)
         if not field:
             continue
-        if field in {"exists", "show_upper_board", "show_lower_board", "dimension_horizontal", "dimension_vertical"}:
+        if field == "module_id":
+            value = str(value).strip()
+        elif field in {"exists", "show_upper_board", "show_lower_board", "dimension_horizontal", "dimension_vertical"}:
             value = _bool(value)
         elif field in {"front_width_mm", "front_height_mm", "expansion_length_mm", "front_left_height_mm", "front_right_height_mm",
                        "side_length_mm", "side_left_height_mm", "side_right_height_mm", "board_face_width_mm",
@@ -200,7 +202,7 @@ def _normalize_row(row: dict[str, Any], group: str) -> dict[str, Any]:
 
 def _profiles(ws) -> dict[str, BoardFaceProfile]:
     features: dict[str, list[BoardFaceFeature]] = {}
-    for number, row in enumerate(_rows(ws), start=2):
+    for number, row in _rows(ws):
         try:
             module_id, kind, a, b, c, d, angle, mirror, depth, cut_start, face = (row.get(key) for key in PROFILE_COLUMNS)
             if module_id is None or not str(module_id).strip():
@@ -222,39 +224,49 @@ def _import_standard_sheet(
     fallbacks: dict[str, dict[str, str | bool]] | None, legacy_notes: bool,
     legacy_taper_labels: bool = False,
 ) -> Project:
-    aliases = {"上夹板": "上板图", "下夹板": "下板图"}
+    aliases = {"模块编号": "编号", "上夹板": "上板图", "下夹板": "下板图"}
     columns = {aliases.get(label, label): index for index, label in enumerate(headers)}
     expected = {spec.label for spec in COLUMN_SPECS}
-    optional = {"螺栓外露长度", "上板图", "下板图"}
-    if len(columns) != len(headers) or not (expected - optional <= columns.keys() <= expected):
-        raise ValueError("「标准版」表头不完整或有重复列，请使用程序附带的示例")
+    if "编号" not in columns or len(columns) != len(headers) or not columns.keys() <= expected:
+        raise ValueError("「标准版」表头须包含编号，且不得有未知或重复的列")
     modules = []
     boards = []
     anchors = []
     auto_fields = {}
     for number, cells in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-        if not any(value is not None and value != "" for value in cells):
+        if not any(not _is_blank(value) for value in cells):
             continue
+        if _is_blank(cells[columns["编号"]]):
+            raise ValueError(f"Excel 第 {number} 行：模块编号不能为空")
         values = DEFAULT_ROW.copy()
+        supplied = set()
+        cleared = set()
         for spec in COLUMN_SPECS:
             if spec.label not in columns:
                 continue
             value = cells[columns[spec.label]]
+            if _is_blank(value):
+                continue
+            supplied.add(spec.key)
             if spec.kind == "check":
-                parsed = False if value is None else _bool(value)
+                parsed = _bool(value)
                 if not isinstance(parsed, bool):
                     raise ValueError(f"Excel 第 {number} 行「{spec.label}」应填 TRUE/FALSE 或是/否")
                 values[spec.key] = parsed
             else:
-                if spec.key == "anchor_position_mm" and value is None:
-                    value = "150"  # Earlier workbooks used a 150 mm default for a blank position.
-                values[spec.key] = "" if value is None else str(value).strip()
+                text = str(value).strip()
+                if spec.key in EXCEL_EMPTY_FIELDS and text == EXCEL_KEEP_EMPTY:
+                    cleared.add(spec.key)
+                    text = ""
+                values[spec.key] = text
         if legacy_taper_labels and values["taper_enabled"]:
             values["taper_type"] = {"正敲": "侧敲", "侧敲": "正敲"}.get(values["taper_type"], values["taper_type"])
         fallback = values.copy() if fallbacks is None else fallbacks.get(values["module_id"], {})
         if fallbacks is None:
-            values.update(dict.fromkeys(legacy_automatic_fields(values), AUTOMATIC))
-        if legacy_notes:
+            values.update(dict.fromkeys(
+                (key for key in legacy_automatic_fields(values) if key in supplied and key not in cleared), AUTOMATIC
+            ))
+        if legacy_notes and "source_note" not in cleared:
             values["source_note"] = legacy_source_note(values)
         try:
             module, board, anchor = build_standard_row(
@@ -275,20 +287,53 @@ def _import_standard_sheet(
                    standard_link_version=STANDARD_LINK_VERSION)
 
 
+def _legacy_defaults(row: dict[str, Any], group: str) -> dict[str, Any]:
+    if group == "modules":
+        row = ModuleParameters.preserve_saved_taper_geometry(row)
+        row.setdefault("front_width_mm", float(DEFAULT_ROW["length_mm"]))
+        row.setdefault("front_height_mm", row.get("expansion_length_mm", float(DEFAULT_ROW["expansion_length_mm"])))
+        row.setdefault("board_face_width_mm", row["front_width_mm"])
+        row.setdefault("board_face_height_mm", float(DEFAULT_ROW["thickness_mm"]))
+        if row.get("geometry_type") == GeometryType.FRONT_TAPER:
+            row.setdefault("front_left_height_mm", float(DEFAULT_ROW["big_head_mm"]))
+            row.setdefault("front_right_height_mm", float(DEFAULT_ROW["small_head_mm"]))
+        elif row.get("geometry_type") == GeometryType.SIDE_TAPER:
+            row.setdefault("side_length_mm", row["board_face_height_mm"])
+            row.setdefault("side_left_height_mm", float(DEFAULT_ROW["big_head_mm"]))
+            row.setdefault("side_right_height_mm", float(DEFAULT_ROW["small_head_mm"]))
+    elif group == "anchors":
+        row.setdefault("exists", len(row) > 1)
+        positions = row.get("positions")
+        if isinstance(positions, list) and positions:
+            row.setdefault("count", len(positions))
+        row.setdefault("layout_mode", LayoutMode.EXPLICIT if positions else
+                       LayoutMode.FIXED_SPACING if "spacing_mm" in row else LayoutMode.EQUAL_SEGMENTS)
+        if row["layout_mode"] == LayoutMode.FIXED_SPACING:
+            row.setdefault("spacing_mm", float(DEFAULT_ROW["anchor_spacing_mm"]))
+    return row
+
+
 def _import_legacy_sheets(wb) -> Project:
-    found: dict[str, list[dict[str, Any]]] = {"modules": [], "boards": [], "anchors": []}
+    found = {"modules": [], "boards": [], "anchors": []}
+    models = {"modules": ModuleParameters, "boards": BoardParameters, "anchors": AnchorParameters}
     for ws in wb.worksheets:
         name = ws.title.strip().lower()
         for group, aliases in SHEET_ALIASES.items():
             if name in aliases:
-                found[group] = [_normalize_row(row, group) for row in _rows(ws)]
+                rows = []
+                for number, raw in _rows(ws):
+                    try:
+                        row = _normalize_row(raw, group)
+                        if "module_id" not in row:
+                            raise ValueError("模块编号不能为空")
+                        rows.append(models[group].model_validate(_legacy_defaults(row, group)))
+                    except ValueError as exc:
+                        raise ValueError(f"「{ws.title}」第 {number} 行：{exc}") from exc
+                found[group] = rows
                 break
     if not found["modules"]:
         raise ValueError("Excel 中未找到「模块参数」工作表")
-    modules = [ModuleParameters.model_validate(row) for row in found["modules"]]
-    boards = [BoardParameters.model_validate(row) for row in found["boards"]]
-    anchors = [AnchorParameters.model_validate(row) for row in found["anchors"]]
-    return Project(modules=modules, boards=boards, anchors=anchors)
+    return Project(**found)
 
 
 def import_project_xlsx(path: str | Path) -> Project:

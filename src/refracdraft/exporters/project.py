@@ -13,7 +13,8 @@ from refracdraft.drawing.model import DrawingDocument
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import export_pdf
 from refracdraft.standard_sheet import (
-    AUTOMATIC, AUTOMATIC_FALLBACK_KEYS, AUTOMATIC_FIELDS, AUTOMATIC_SHEET, COLUMN_SPECS, PROFILE_COLUMNS, PROFILE_SHEET,
+    AUTOMATIC, AUTOMATIC_FALLBACK_KEYS, AUTOMATIC_FIELDS, AUTOMATIC_SHEET, COLUMN_SPECS, EXCEL_EMPTY_FIELDS,
+    EXCEL_KEEP_EMPTY, PROFILE_COLUMNS, PROFILE_SHEET,
     STANDARD_LINK_VERSION, TAPER_LABEL_VERSION, row_values_from_models,
 )
 
@@ -37,7 +38,8 @@ def export_standard_excel(project: Project, path: Path) -> None:
                 cell.data_type = "s"
         active = project.standard_auto_fields.get(module.module_id, ())
         row.update(dict.fromkeys((key for key in AUTOMATIC_FIELDS if key in active), AUTOMATIC))
-        ws.append([row[spec.key] for spec in COLUMN_SPECS])
+        ws.append([EXCEL_KEEP_EMPTY if spec.key in EXCEL_EMPTY_FIELDS and row[spec.key] == "" else row[spec.key]
+                   for spec in COLUMN_SPECS])
         for cell in ws[ws.max_row]:
             if cell.data_type == "f":
                 cell.data_type = "s"

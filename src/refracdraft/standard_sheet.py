@@ -36,6 +36,9 @@ TAPER_LABELS = {GeometryType.FRONT_TAPER: "正常敲", GeometryType.SIDE_TAPER: 
 AUTOMATIC_FIELDS = ("structure_type", "board_material", "anchor_material", "hose_spec", "anchor_length_mm", "source_note")
 EMPTY_SELECTS_AUTOMATIC = ("structure_type", "board_material", "hose_spec")
 OPTIONAL_ANCHOR_FIELDS = ("anchor_length_mm", "anchor_material", "thread_spec", "pin_diameter_mm")
+EXCEL_KEEP_EMPTY = "留空"
+EXCEL_EMPTY_FIELDS = frozenset((*OPTIONAL_ANCHOR_FIELDS, "source_note", "material", "density_kg_m3",
+                                "embedment_depth_mm"))
 M_ANCHOR_LENGTHS = (240, 220, 200, 180, 150, 120)
 DIAMOND_ANCHOR_LENGTHS = (230, 200, 180, 150, 120)
 INSERT_ANCHOR_LENGTHS = (450, 400, 350, 250)

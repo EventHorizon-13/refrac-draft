@@ -810,8 +810,64 @@ def test_legacy_excel_resolves_associations_and_keeps_custom_values(tmp_path):
     assert result.modules[0].structure_type == StructureType.HALF_FOLDED
     assert result.boards[0].thickness_mm == 8
     anchor = result.anchors[0]
-    assert (anchor.material, anchor.hose_spec, anchor.length_mm, anchor.edge_offset_mm) == ("310", "25胶管", 233.5, 150)
+    assert (anchor.material, anchor.hose_spec, anchor.length_mm) == ("310", "25胶管", 233.5)
+    assert anchor.layout_mode == LayoutMode.EQUAL_SEGMENTS
     assert anchor_length_options("菱形") == ("230", "200", "180", "150", "120")
+
+
+def test_standard_excel_blanks_use_new_module_defaults(tmp_path):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "标准版"
+    sheet.append([spec.label for spec in COLUMN_SPECS])
+    sheet.append([None, "   "])
+    sheet.append([" M20 "])
+    provided = {"module_id": "M21", "length_mm": 480, "board_exists": False, "anchor_enabled": True}
+    sheet.append([provided.get(spec.key) for spec in COLUMN_SPECS])
+    path = tmp_path / "defaults.xlsx"
+    workbook.save(path)
+
+    project = import_project_xlsx(path)
+    expected = [
+        build_standard_row(dict(DEFAULT_ROW, module_id="M20")),
+        build_standard_row(dict(DEFAULT_ROW, **provided)),
+    ]
+    assert list(zip(project.modules, project.boards, project.anchors)) == expected
+    assert [module.module_id for module in project.modules] == ["M20", "M21"]
+    assert not project.boards[1].exists
+    assert project.anchors[1].layout_mode == LayoutMode.EQUAL_SEGMENTS
+
+
+@pytest.mark.parametrize("sheet_name", ["标准版", "模块参数"])
+def test_excel_skips_wholly_blank_rows_but_requires_module_id(tmp_path, sheet_name):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = sheet_name
+    sheet.append(["编号", "长度"])
+    sheet.append(["M1"])
+    sheet.append([None, "   "])
+    path = tmp_path / "sparse.xlsx"
+    workbook.save(path)
+    module, = import_project_xlsx(path).modules
+    assert module.module_id == "M1"
+    assert (module.front_width_mm, module.front_height_mm, module.board_face_height_mm) == (300, 300, 230)
+
+    sheet.append([" ", 300])
+    workbook.save(path)
+    with pytest.raises(ValueError, match=r"第 4 行：模块编号不能为空"):
+        import_project_xlsx(path)
+
+
+def test_standard_excel_still_validates_explicit_nonblank_values(tmp_path):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "标准版"
+    sheet.append(["编号", "数量"])
+    sheet.append(["M1", 0])
+    path = tmp_path / "invalid.xlsx"
+    workbook.save(path)
+    with pytest.raises(ValueError, match=r"第 2 行.*数量"):
+        import_project_xlsx(path)
 
 
 def test_measured_details_pack_the_450mm_pair_without_compressing_text(tmp_path):
