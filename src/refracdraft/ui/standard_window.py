@@ -9,7 +9,7 @@ import re
 import pymupdf
 from PySide6.QtCore import (
     QByteArray, QEvent, QEventLoop, QPersistentModelIndex, QPointF, QRect, QRegularExpression, QSettings, QSignalBlocker,
-    QStandardPaths, Qt, Signal,
+    QStandardPaths, QTimer, Qt, Signal,
 )
 from PySide6.QtGui import (
     QAction,
@@ -25,6 +25,7 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
     QRegularExpressionValidator,
+    QShortcut,
     QTextCharFormat,
     QTextLayout,
     QTextOption,
@@ -121,6 +122,7 @@ ARROW_STEPS = {
     Qt.Key.Key_Down: (1, 0),
 }
 TAPER_SETTING_KEYS = ("big_head_mm", "small_head_mm", "taper_type")
+BOARD_SETTING_KEYS = ("board_material", "show_upper_board", "show_lower_board")
 ANCHOR_SETTING_KEYS = (
     "anchor_position_mm",
     "anchor_spacing_mm",
@@ -740,6 +742,26 @@ class ParameterTable(QTableWidget):
                 return
         super().keyPressEvent(event)
 
+    def wheelEvent(self, event) -> None:
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            pixel_delta = event.pixelDelta().y() or event.pixelDelta().x()
+            angle_delta = event.angleDelta().y() or event.angleDelta().x()
+            if pixel_delta:
+                steps = max(1, round(abs(pixel_delta) / 20))
+                direction = 1 if pixel_delta > 0 else -1
+            elif angle_delta:
+                lines = max(1, QApplication.wheelScrollLines())
+                steps = max(1, round(abs(angle_delta) / 120 * lines))
+                direction = 1 if angle_delta > 0 else -1
+            else:
+                event.ignore()
+                return
+            bar = self.horizontalScrollBar()
+            bar.setValue(bar.value() - direction * steps * bar.singleStep())
+            event.accept()
+            return
+        super().wheelEvent(event)
+
     def inputMethodEvent(self, event: QInputMethodEvent) -> None:
         index = self.currentIndex()
         editable = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsEditable
@@ -829,6 +851,8 @@ class StandardWindow(MainWindow):
     def __init__(self):
         self._preview_pdf: tuple[str | None, bytes] | None = None
         self._drawing_dirty = False
+        self._full_window_active = False
+        self._full_window_layout_state: dict[str, object] | None = None
         self._settings = QSettings("EventHorizon", "RefracDraft Standard")
         self._history_ready = False
         self._history_restoring = False
@@ -836,6 +860,10 @@ class StandardWindow(MainWindow):
         self._redo_stack: list[TableState] = []
         self._history_state: TableState | None = None
         super().__init__()
+        self._exit_full_window_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        self._exit_full_window_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self._exit_full_window_shortcut.activated.connect(self._exit_preview_full_window)
+        self._exit_full_window_shortcut.setEnabled(False)
         self._history_ready = True
         self._reset_history()
         geometry = self._settings.value("window/geometry", QByteArray())
@@ -852,7 +880,7 @@ class StandardWindow(MainWindow):
         self._row_bases: list[RowBase] = []
         self._updating_table = False
 
-        toolbar = QToolBar("主工具栏")
+        toolbar = self.main_toolbar = QToolBar("主工具栏")
         self.addToolBar(toolbar)
         for label, callback, shortcut in (
             ("新建", self.new_project, "Ctrl+N"),
@@ -865,10 +893,6 @@ class StandardWindow(MainWindow):
             action.triggered.connect(callback)
             toolbar.addAction(action)
         toolbar.addSeparator()
-        generate_action = QAction("预览", self)
-        generate_action.setShortcut(QKeySequence("F5"))
-        generate_action.triggered.connect(self.generate)
-        toolbar.addAction(generate_action)
         self.undo_action = QAction("撤销", self)
         self.undo_action.setShortcut(QKeySequence("Ctrl+Z"))
         self.undo_action.triggered.connect(self.undo)
@@ -887,9 +911,9 @@ class StandardWindow(MainWindow):
         about.triggered.connect(self._show_about)
         toolbar.addAction(about)
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter = self.main_splitter = QSplitter(Qt.Orientation.Vertical)
 
-        parameter_panel = QWidget()
+        parameter_panel = self.parameter_panel = QWidget()
         parameter_layout = QVBoxLayout(parameter_panel)
         parameter_layout.setContentsMargins(8, 8, 8, 8)
         header = QHBoxLayout()
@@ -912,7 +936,7 @@ class StandardWindow(MainWindow):
         self.tables = {"modules": self.parameter_table}
         table = self.parameter_table
         table.setObjectName("moduleParameterTable")
-        table.setHorizontalHeaderLabels([spec.label for spec in COLUMN_SPECS] + ["夹板面轮廓"])
+        table.setHorizontalHeaderLabels([spec.label for spec in COLUMN_SPECS] + ["异形"])
         table.setColumnWidth(PROFILE_COLUMN, 111)
         table.horizontalHeader().moveSection(PROFILE_COLUMN, COLUMN_INDEX["thickness_mm"] + 1)
         table.setItemDelegate(ParameterDelegate(table))
@@ -941,7 +965,7 @@ class StandardWindow(MainWindow):
         table.rowsRequired.connect(self._ensure_row_count)
         parameter_layout.addWidget(table)
 
-        preview_panel = QWidget()
+        preview_panel = self.preview_panel = QWidget()
         preview_layout = QVBoxLayout(preview_panel)
         preview_layout.setContentsMargins(8, 8, 8, 8)
         preview_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -949,7 +973,7 @@ class StandardWindow(MainWindow):
         preview_splitter.setChildrenCollapsible(False)
         preview_splitter.setHandleWidth(7)
 
-        output_panel = QFrame()
+        output_panel = self.output_panel = QFrame()
         output_panel.setObjectName("outputPanel")
         output_panel.setMinimumWidth(245)
         output_layout = QVBoxLayout(output_panel)
@@ -990,6 +1014,8 @@ class StandardWindow(MainWindow):
 
         self.preview_button = QPushButton("预览")
         self.preview_button.setProperty("primary", True)
+        self.preview_button.setShortcut(QKeySequence("F5"))
+        self.preview_button.setToolTip("生成或更新图纸预览 (F5)")
         self.preview_button.clicked.connect(self.generate)
         output_layout.addWidget(self.preview_button)
 
@@ -1006,7 +1032,7 @@ class StandardWindow(MainWindow):
         self.output_project_button.clicked.connect(self.export_project_file)
         output_layout.addWidget(self.output_project_button)
 
-        preview_canvas = QWidget()
+        preview_canvas = self.preview_canvas = QWidget()
         preview_canvas.setMinimumWidth(240)
         canvas_layout = QGridLayout(preview_canvas)
         canvas_layout.setContentsMargins(0, 0, 0, 0)
@@ -1033,8 +1059,22 @@ class StandardWindow(MainWindow):
         self.page_spin.setMaximum(1)
         self.page_spin.valueChanged.connect(self._show_selected_page)
         page_row.addWidget(self.page_spin)
+        preview_tools = QWidget()
+        preview_tools.setObjectName("previewTools")
+        tools_layout = QHBoxLayout(preview_tools)
+        tools_layout.setContentsMargins(0, 0, 0, 0)
+        tools_layout.setSpacing(6)
+        tools_layout.addWidget(page_controls)
+        self.full_window_button = QPushButton("全窗口")
+        self.full_window_button.setObjectName("previewFullWindowButton")
+        self.full_window_button.setMinimumWidth(90)
+        self.full_window_button.setToolTip("在当前窗口内铺满图纸预览 (F11)")
+        self.full_window_button.setShortcut(QKeySequence("F11"))
+        self.full_window_button.setEnabled(False)
+        self.full_window_button.clicked.connect(self._toggle_preview_full_window)
+        tools_layout.addWidget(self.full_window_button)
         canvas_layout.addWidget(
-            page_controls, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight
+            preview_tools, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight
         )
         page_controls.hide()
 
@@ -1090,6 +1130,11 @@ class StandardWindow(MainWindow):
             "QPushButton[primary='true'] { background: #2f6fde; color: white;"
             " border: 1px solid #245bb8; border-radius: 4px; padding: 6px 10px; }"
             "QPushButton[primary='true']:hover { background: #3b7bea; }"
+            "QPushButton#previewFullWindowButton {"
+            " background: palette(window); color: palette(window-text);"
+            " border: 1px solid palette(mid); border-radius: 4px; padding: 5px 10px; }"
+            "QPushButton#previewFullWindowButton:hover { background: palette(alternate-base); }"
+            "QPushButton#previewFullWindowButton:pressed { background: palette(mid); }"
             "QLabel[role='fieldLabel'] { font-size: 11px; color: palette(mid); }"
         )
 
@@ -1102,6 +1147,75 @@ class StandardWindow(MainWindow):
         if visible:
             self.show()
         self._settings.setValue("window/stay_on_top", enabled)
+
+    def _update_full_window_button(self) -> None:
+        if not hasattr(self, "full_window_button"):
+            return
+        ready = bool(self.drawing_document) and not self._drawing_dirty
+        self.full_window_button.setEnabled(ready or self._full_window_active)
+        self.full_window_button.setText("还原窗口" if self._full_window_active else "全窗口")
+        self.full_window_button.setToolTip(
+            "还原参数区和输出设置 (F11 / Esc)"
+            if self._full_window_active
+            else "在当前窗口内铺满图纸预览 (F11)"
+        )
+
+    def _mark_preview_stale(self) -> None:
+        self._drawing_dirty = True
+        self._update_full_window_button()
+        if self._full_window_active:
+            self._exit_preview_full_window()
+
+    def _toggle_preview_full_window(self) -> None:
+        if self._full_window_active:
+            self._exit_preview_full_window()
+        elif bool(self.drawing_document) and not self._drawing_dirty:
+            self._enter_preview_full_window()
+        else:
+            self.statusBar().showMessage("请先生成图纸预览，再切换到全窗口。")
+
+    def _enter_preview_full_window(self) -> None:
+        if self._full_window_active:
+            return
+        self._full_window_layout_state = {
+            "toolbar": self.main_toolbar.isVisible(),
+            "status": self.statusBar().isVisible(),
+            "parameter": self.parameter_panel.isVisible(),
+            "output": self.output_panel.isVisible(),
+            "main_splitter": self.main_splitter.saveState(),
+            "output_splitter": self.output_splitter.saveState(),
+        }
+        self._full_window_active = True
+        self.main_toolbar.hide()
+        self.statusBar().hide()
+        self.parameter_panel.hide()
+        self.output_panel.hide()
+        self.main_splitter.setSizes([0, 1])
+        self.output_splitter.setSizes([0, 1])
+        self._exit_full_window_shortcut.setEnabled(True)
+        self._update_full_window_button()
+        self.preview.setFocus()
+        QTimer.singleShot(0, self.preview.fit_current)
+
+    def _exit_preview_full_window(self) -> None:
+        if not self._full_window_active:
+            return
+        state = self._full_window_layout_state or {}
+        self._full_window_active = False
+        self._exit_full_window_shortcut.setEnabled(False)
+        self.parameter_panel.setVisible(bool(state.get("parameter", True)))
+        self.output_panel.setVisible(bool(state.get("output", True)))
+        self.main_toolbar.setVisible(bool(state.get("toolbar", True)))
+        self.statusBar().setVisible(bool(state.get("status", True)))
+        main_splitter_state = state.get("main_splitter")
+        if isinstance(main_splitter_state, QByteArray):
+            self.main_splitter.restoreState(main_splitter_state)
+        output_splitter_state = state.get("output_splitter")
+        if isinstance(output_splitter_state, QByteArray):
+            self.output_splitter.restoreState(output_splitter_state)
+        self._full_window_layout_state = None
+        self._update_full_window_button()
+        QTimer.singleShot(0, self.preview.fit_current)
 
     def _show_about(self) -> None:
         dialog = AboutDialog(self)
@@ -1137,10 +1251,11 @@ class StandardWindow(MainWindow):
 
     def _filename_label_changed(self, *_args) -> None:
         if self.drawing_document and self.drawing_document.filename_label != self._filename_label():
-            self._drawing_dirty = True
-            self._preview_pdf = None
+            self._mark_preview_stale()
 
     def closeEvent(self, event) -> None:
+        if self._full_window_active:
+            self._exit_preview_full_window()
         self._save_output_settings()
         self._settings.setValue("window/geometry", self.saveGeometry())
         self._settings.setValue("window/output_splitter", self.output_splitter.saveState())
@@ -1249,7 +1364,7 @@ class StandardWindow(MainWindow):
 
     @staticmethod
     def _set_profile_button(button: QPushButton, profile: BoardFaceProfile | None) -> None:
-        button.setText("异形模块 ✓" if profile is not None else "异形模块…")
+        button.setText("异形 ✓" if profile is not None else "非异形")
         button.setToolTip("编辑夹板面、正面和侧面的切口")
 
     def _edit_board_face(self, row: int, button: QPushButton) -> None:
@@ -1441,9 +1556,11 @@ class StandardWindow(MainWindow):
     def _update_conditional_states(self) -> None:
         table = self.parameter_table
         if table.rowCount() == 0:
-            for key in ANCHOR_SETTING_KEYS:
+            for key in (*TAPER_SETTING_KEYS, *BOARD_SETTING_KEYS, *ANCHOR_SETTING_KEYS):
                 table.setColumnHidden(COLUMN_INDEX[key], True)
             return
+        any_taper = any(self._cell_bool(row, "taper_enabled") for row in range(table.rowCount()))
+        any_board = any(self._cell_bool(row, "board_exists") for row in range(table.rowCount()))
         any_anchor = any(self._cell_bool(row, "anchor_enabled") for row in range(table.rowCount()))
         any_diamond = any(
             self._cell_bool(row, "anchor_enabled") and self._cell_text(row, "anchor_type") in DIAMOND_ANCHOR_TYPES
@@ -1457,6 +1574,10 @@ class StandardWindow(MainWindow):
             self._cell_bool(row, "anchor_enabled") and self._cell_text(row, "anchor_type") not in DIAMOND_ANCHOR_TYPES
             for row in range(table.rowCount())
         )
+        for key in TAPER_SETTING_KEYS:
+            table.setColumnHidden(COLUMN_INDEX[key], not any_taper)
+        for key in BOARD_SETTING_KEYS:
+            table.setColumnHidden(COLUMN_INDEX[key], not any_board)
         for key in ANCHOR_SETTING_KEYS:
             table.setColumnHidden(COLUMN_INDEX[key], not any_anchor)
         table.setColumnHidden(COLUMN_INDEX["embedment_depth_mm"], not any_diamond)
@@ -1534,7 +1655,7 @@ class StandardWindow(MainWindow):
             return
         if current == self._history_state:
             return
-        self._drawing_dirty = True
+        self._mark_preview_stale()
         self._undo_stack.append(self._history_state)
         if len(self._undo_stack) > 100:
             self._undo_stack.pop(0)
@@ -1568,7 +1689,7 @@ class StandardWindow(MainWindow):
         self._update_row_count()
         self._update_conditional_states()
         self._history_state = state
-        self._drawing_dirty = True
+        self._mark_preview_stale()
         self._refresh_history_actions()
 
     def undo(self) -> None:
@@ -1704,6 +1825,7 @@ class StandardWindow(MainWindow):
         ensure_standard_project(self.project)
         self.drawing_document = None
         self._preview_pdf = None
+        self._mark_preview_stale()
         self.page_controls.hide()
         self._clear_rows()
         for module in self.project.modules:
@@ -1722,6 +1844,7 @@ class StandardWindow(MainWindow):
         self.project = Project()
         self.drawing_document = None
         self._preview_pdf = None
+        self._mark_preview_stale()
         self.preview.scene().clear()
         self.page_spin.setMaximum(1)
         self.page_controls.hide()
@@ -1793,6 +1916,7 @@ class StandardWindow(MainWindow):
                 self._preview_pdf = None
                 self._show_selected_page(1)
                 warnings.append(f"暂用绘图预览，PDF 预览生成失败：{exc}")
+            self._update_full_window_button()
             progress.finish("图纸已生成")
             self.statusBar().showMessage("图纸已生成" + ("；" + "；".join(warnings) if warnings else ""))
         except Exception as exc:

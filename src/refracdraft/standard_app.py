@@ -99,8 +99,8 @@ def _smoke_test_welded_output(window) -> None:
 def main() -> None:
     from pathlib import Path
 
-    from PySide6.QtCore import QEvent, QPointF, QTimer, Qt
-    from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QInputMethodEvent, QKeyEvent, QMouseEvent
+    from PySide6.QtCore import QEvent, QPoint, QPointF, QTimer, Qt
+    from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QInputMethodEvent, QKeyEvent, QMouseEvent, QWheelEvent
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QWidget
 
@@ -172,12 +172,56 @@ def main() -> None:
                     raise ValueError("置顶按钮未在保持窗口可见的同时切换置顶")
             window.activateWindow()
             app.processEvents()
+            if any(action.text() == "预览" for action in window.main_toolbar.actions()):
+                raise ValueError("主工具栏仍有重复的预览按钮")
+            normal_size = window.size()
+            window.full_window_button.click()
+            app.processEvents()
+            if (not window._full_window_active or not window.parameter_panel.isHidden()
+                or not window.output_panel.isHidden() or not window.main_toolbar.isHidden()
+                or window.isFullScreen() or window.size() != normal_size):
+                raise ValueError("全窗口预览未在保留窗口大小的同时收起编辑面板")
+            QTest.keyClick(window.preview, Qt.Key.Key_Escape)
+            app.processEvents()
+            if (window._full_window_active or window.parameter_panel.isHidden()
+                or window.output_panel.isHidden() or window.main_toolbar.isHidden()
+                or window.size() != normal_size):
+                raise ValueError("Esc 未还原预览窗口布局")
             window.grab().save("RefracDraft-Standard-ui.png")
             trace.write_text("editor populated\n", encoding="utf-8")
             if len(window.rows) != 1:
                 raise ValueError("B2 示例未生成单个模块行")
             row = window.rows[0]
             table = window.parameter_table
+            window.resize(900, 700)
+            app.processEvents()
+            scroll_bar = table.horizontalScrollBar()
+            position = table.viewport().rect().center()
+            scroll_bar.setValue(0)
+            QApplication.sendEvent(table.viewport(), QWheelEvent(
+                QPointF(position), QPointF(table.viewport().mapToGlobal(position)),
+                QPoint(), QPoint(0, -120), Qt.MouseButton.NoButton,
+                Qt.KeyboardModifier.ShiftModifier, Qt.ScrollPhase.NoScrollPhase, False,
+            ))
+            if scroll_bar.value() <= 0:
+                raise ValueError("Shift+滚轮未横向滚动参数表")
+            scroll_bar.setValue(0)
+            window.resize(normal_size)
+            app.processEvents()
+            for toggle, fields in (
+                ("taper_enabled", ("big_head_mm", "small_head_mm", "taper_type")),
+                ("board_exists", ("board_material", "show_upper_board", "show_lower_board")),
+            ):
+                checkbox = table.item(row, COLUMN_INDEX[toggle])
+                original_state = checkbox.checkState()
+                columns = [COLUMN_INDEX[field] for field in fields]
+                checkbox.setCheckState(Qt.CheckState.Unchecked)
+                if not all(table.isColumnHidden(column) for column in columns):
+                    raise ValueError(f"{toggle} 未勾选时仍显示附加列")
+                checkbox.setCheckState(Qt.CheckState.Checked)
+                if any(table.isColumnHidden(column) for column in columns):
+                    raise ValueError(f"{toggle} 勾选后没有恢复附加列")
+                checkbox.setCheckState(original_state)
             if window._cell_text(row, "module_id") != "B2":
                 raise ValueError("模块编号未载入")
             if (
@@ -282,8 +326,9 @@ def main() -> None:
             trace.write_text("undo/redo passed\n", encoding="utf-8")
 
             profile_button = table.cellWidget(row, PROFILE_COLUMN)
-            if profile_button is None:
-                raise ValueError("参数行缺少异形模块按钮")
+            if (table.horizontalHeaderItem(PROFILE_COLUMN).text() != "异形"
+                or profile_button is None or profile_button.text() != "非异形"):
+                raise ValueError("异形列未正确显示普通模块")
             dialog_errors = []
 
             def edit_board_profile():
@@ -346,6 +391,8 @@ def main() -> None:
             profile_button.click()
             if dialog_errors:
                 raise dialog_errors[0]
+            if profile_button.text() != "异形 ✓":
+                raise ValueError("异形列未反映切口编辑结果")
             edited = window._collect_project()
             profile = edited.modules[0].board_face_outline
             if (

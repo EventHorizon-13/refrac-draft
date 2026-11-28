@@ -186,6 +186,11 @@ class DrawingPreview(QGraphicsView):
         scene.setSceneRect(item.boundingRect())
         self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
+    def fit_current(self) -> None:
+        scene = self.scene()
+        if scene is not None and not scene.sceneRect().isEmpty():
+            self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
     def _add_text(self, scene, text, x, y, size, color):
         item = scene.addText(text)
         item.setDefaultTextColor(QColor(color))
