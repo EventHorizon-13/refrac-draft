@@ -1,5 +1,8 @@
 from dataclasses import replace
+import json
 from pathlib import Path
+from threading import Event
+from types import SimpleNamespace
 
 import pytest
 import ezdxf
@@ -7,7 +10,7 @@ import pymupdf
 from openpyxl import Workbook, load_workbook
 
 from refracdraft.drawing.generator import DrawingGenerator, _anchor_positions, _balanced_page_groups, _details
-from refracdraft.drawing.model import DrawingDocument
+from refracdraft.drawing.model import DrawingDocument, SheetPage
 from refracdraft.drawing.layout import (
     DETAIL_LINE_SPACING,
     DETAIL_TEXT_SIZE_MM,
@@ -30,6 +33,7 @@ from refracdraft.drawing.layout import (
     detail_lines,
     detail_vertical_anchor,
     details_width,
+    page_model_origins,
     view_bounds,
     view_placement,
 )
@@ -49,6 +53,8 @@ from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import (
     PDF_FONT_CANDIDATES,
+    ShxFontInfo,
+    _export_pdf_with_shx,
     _find_pdf_font,
     _fix_shx_page_scale,
     _render_fallback_pages,
@@ -1157,6 +1163,62 @@ def test_shx_dxf_retains_label_direction_on_first_and_translated_pages(tmp_path)
             assert label.get_rotation() == pytest.approx(dim.dxf.angle)
             if dim.dxf.angle == 90:
                 assert label.dxf.hasattr("text_direction")
+
+
+def test_shx_reuses_bounds_and_starts_rendering_before_preparing_all_pages(monkeypatch, tmp_path):
+    drawing = DrawingDocument("进度测试", (SheetPage(1, (), 0), SheetPage(2, (), 0, 20)))
+    dxf = ezdxf.new()
+    for origin in page_model_origins(drawing):
+        dxf.modelspace().add_line((0, origin + 10), (100, origin + 10))
+    source = tmp_path / "source.dxf"
+    dxf.saveas(source)
+    font = tmp_path / "sample.shx"
+    font.write_bytes(b"test")
+    first_started = Event()
+    rendered = []
+    plotted_pages = {}
+    for number in (1, 2):
+        with pymupdf.open() as pdf:
+            pdf.new_page(width=100 + number, height=100)
+            plotted_pages[number] = pdf.tobytes()
+
+    from refracdraft.exporters import pdf as exporter
+
+    original_extents = exporter.ezdxf_bbox.extents
+    measured = []
+
+    def count_extents(entities):
+        measured.extend(entity.dxf.handle for entity in entities)
+        return original_extents(entities)
+
+    def run_renderer(command, **_kwargs):
+        manifest = json.loads(Path(command[-1]).read_text(encoding="utf-8"))
+        output = Path(manifest["output"])
+        number = int(output.stem.removeprefix("page-"))
+        if number == 1:
+            first_started.set()
+        plot = ezdxf.readfile(manifest["inputs"][0])
+        line, = plot.modelspace().query("LINE")
+        assert line.dxf.start.y == pytest.approx(10)
+        output.write_bytes(plotted_pages[number])
+        return SimpleNamespace(returncode=0)
+
+    def progress(message):
+        if "第 2/2 页" in message:
+            assert first_started.wait(timeout=3)
+
+    monkeypatch.setattr(exporter.ezdxf_bbox, "extents", count_extents)
+    monkeypatch.setattr(exporter.subprocess, "run", run_renderer)
+    monkeypatch.setattr(exporter, "_fix_shx_page_scale", lambda *_args: None)
+    output = _export_pdf_with_shx(
+        drawing, tmp_path / "output.pdf", source, tmp_path, (source, source, tmp_path),
+        ShxFontInfo(font.name, font, False), None, None, progress, 2,
+        lambda done, total: rendered.append((done, total)),
+    )
+    assert len(measured) == len(set(measured)) == 2
+    assert rendered == [(0, 2), (1, 2), (2, 2)]
+    with pymupdf.open(output) as pdf:
+        assert [page.rect.width for page in pdf] == [101, 102]
 
 
 def test_pdf_prefers_bundled_song_font_to_system_font(monkeypatch):

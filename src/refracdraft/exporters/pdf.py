@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass
 import json
 from multiprocessing import get_context
@@ -275,14 +275,29 @@ def _single_page_dxf(
     doc = ezdxf.readfile(source_dxf)
     if page_y is None:
         page_y = -page_index * PAGE_STRIDE_MM * denominator
+    return _write_shx_page_dxf(doc, target, has_bigfont, denominator, page_y, _dxf_vertical_bounds(doc))
+
+
+def _dxf_vertical_bounds(doc) -> dict[str, tuple[float, float]]:
+    bounds = {}
+    for entity in doc.modelspace():
+        try:
+            extents = ezdxf_bbox.extents([entity])
+            bounds[entity.dxf.handle] = (extents.extmin.y, extents.extmax.y)
+        except Exception:
+            continue
+    return bounds
+
+
+def _write_shx_page_dxf(
+    doc, target: Path, has_bigfont: bool, denominator: int, page_y: float,
+    bounds: dict[str, tuple[float, float]],
+) -> Path:
     page_top = page_y + PAGE_HEIGHT_MM * denominator
     msp = doc.modelspace()
     for entity in list(msp):
-        try:
-            extents = ezdxf_bbox.extents([entity])
-        except Exception:
-            continue
-        if extents.extmax.y < page_y - 1.0 or extents.extmin.y > page_top + 1.0:
+        extent = bounds.get(entity.dxf.handle)
+        if extent is not None and (extent[1] < page_y - 1.0 or extent[0] > page_top + 1.0):
             msp.delete_entity(entity)
     if page_y:
         for entity in list(msp):
@@ -345,35 +360,41 @@ def _export_pdf_with_shx(
     if bigfont is not None:
         shutil.copyfile(bigfont.path, staged_fonts / "gbcbig.shx")
 
-    progress("正在准备各页 PDF 渲染任务…")
-    jobs = []
-    for page_index, page_y in enumerate(page_model_origins(document)):
-        denominator = document.pages[page_index].scale_denominator
-        page_dxf = _single_page_dxf(
-            source_dxf,
-            page_index,
-            temp_dir / f"page-{page_index + 1}.dxf",
-            bigfont is not None,
-            denominator,
-            page_y,
-        )
-        page_pdf = temp_dir / f"page-{page_index + 1}.pdf"
-        manifest_path = temp_dir / f"page-{page_index + 1}.json"
-        manifest = {
-            "inputs": [str(page_dxf)],
-            "output": str(page_pdf),
-            "fontDirectory": str(staged_fonts),
-            "builtInFont": str(built_in_font) if built_in_font else "",
-            "fitBox": {
-                "min": {"x": 0.0, "y": 0.0},
-                "max": {
-                    "x": PAGE_WIDTH_MM * denominator,
-                    "y": PAGE_HEIGHT_MM * denominator,
+    origins = page_model_origins(document)
+    page_count = len(origins)
+
+    def prepare_pages():
+        if not origins:
+            return
+        progress("正在分析 DXF 图元范围…")
+        page_doc = ezdxf.readfile(source_dxf)
+        bounds = _dxf_vertical_bounds(page_doc)
+        for number, (page, page_y) in enumerate(zip(document.pages, origins), 1):
+            progress(f"正在准备第 {number}/{page_count} 页 DXF…")
+            if number > 1:
+                page_doc = ezdxf.readfile(source_dxf)
+            denominator = page.scale_denominator
+            page_dxf = _write_shx_page_dxf(
+                page_doc, temp_dir / f"page-{number}.dxf", bigfont is not None,
+                denominator, page_y, bounds,
+            )
+            page_pdf = temp_dir / f"page-{number}.pdf"
+            manifest_path = temp_dir / f"page-{number}.json"
+            manifest = {
+                "inputs": [str(page_dxf)],
+                "output": str(page_pdf),
+                "fontDirectory": str(staged_fonts),
+                "builtInFont": str(built_in_font) if built_in_font else "",
+                "fitBox": {
+                    "min": {"x": 0.0, "y": 0.0},
+                    "max": {
+                        "x": PAGE_WIDTH_MM * denominator,
+                        "y": PAGE_HEIGHT_MM * denominator,
+                    },
                 },
-            },
-        }
-        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
-        jobs.append((manifest_path, page_pdf, denominator))
+            }
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            yield manifest_path, page_pdf, denominator
 
     def render(job):
         manifest_path, page_pdf, _denominator = job
@@ -393,16 +414,36 @@ def _export_pdf_with_shx(
             raise RuntimeError(f"PDF 渲染器执行失败：{detail or '未知错误'}")
         if not page_pdf.is_file() or page_pdf.stat().st_size < 8:
             raise RuntimeError("PDF 渲染器没有生成有效文件")
-    page_progress(0, len(jobs))
-    if workers > 1 and len(jobs) > 1:
-        with ThreadPoolExecutor(max_workers=min(workers, len(jobs))) as pool:
-            for completed, future in enumerate(as_completed([pool.submit(render, job) for job in jobs]), 1):
+
+    jobs = []
+    completed = 0
+    if workers > 1 and page_count > 1:
+        with ThreadPoolExecutor(max_workers=min(workers, page_count)) as pool:
+            pending = set()
+            for job in prepare_pages():
+                if not jobs:
+                    page_progress(0, page_count)
+                if pending:
+                    done, pending = wait(
+                        pending, timeout=None if len(pending) >= workers else 0, return_when=FIRST_COMPLETED
+                    )
+                    for future in done:
+                        future.result()
+                        completed += 1
+                        page_progress(completed, page_count)
+                jobs.append(job)
+                pending.add(pool.submit(render, job))
+            for future in as_completed(pending):
                 future.result()
-                page_progress(completed, len(jobs))
+                completed += 1
+                page_progress(completed, page_count)
     else:
-        for completed, job in enumerate(jobs, 1):
+        for completed, job in enumerate(prepare_pages(), 1):
+            if not jobs:
+                page_progress(0, page_count)
+            jobs.append(job)
             render(job)
-            page_progress(completed, len(jobs))
+            page_progress(completed, page_count)
 
     progress("正在合并并保存 PDF…")
     temporary_pdf = temp_dir / "rendered-shx.pdf"
