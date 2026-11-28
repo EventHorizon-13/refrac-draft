@@ -2116,7 +2116,7 @@ class StandardWindow(MainWindow):
                 warnings.append(warning)
             progress.finish("图纸已生成")
             summary = f"图纸已生成 · 复用 {reused}/{module_count} 个模块" if reused else "图纸已生成"
-            if reused_pages:
+            if pdf_bytes is not None:
                 summary += f" · 复用 {reused_pages}/{len(self.drawing_document.pages)} 页 PDF"
             self.statusBar().showMessage(summary + ("；" + "；".join(warnings) if warnings else ""))
         except Exception as exc:
@@ -2219,7 +2219,7 @@ class StandardWindow(MainWindow):
         reference = self.reference_dxf
         return _run_background(progress, lambda report, report_pages: export_pdf(
             drawing, path, reference_dxf=reference, font_directory=font_directory,
-            progress=report, workers=2, page_progress=report_pages,
+            progress=report, workers=2, page_progress=report_pages, page_cache=self._pdf_page_cache,
         ))
 
     def export_dxf_file(self) -> None:
@@ -2306,9 +2306,11 @@ class StandardWindow(MainWindow):
             def work(report, report_pages):
                 generator = self._get_drawing_generator(reference)
                 drawing = generator.generate(project, measure_detail=shx_detail_measure(font_directory))
+                library = generator.reference_library
                 export_complete_project(
                     project, replace(drawing, filename_label=label), path, reference_dxf=reference,
                     font_directory=font_directory, progress=report, pdf_workers=2, pdf_page_progress=report_pages,
+                    pdf_page_cache=self._pdf_page_cache, reference_document=library.doc if library else None,
                 )
 
             _run_background(progress, work)

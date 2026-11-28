@@ -871,6 +871,24 @@ def test_standard_excel_still_validates_explicit_nonblank_values(tmp_path):
         import_project_xlsx(path)
 
 
+def test_standard_excel_reports_missing_formula_results_or_formula_errors(tmp_path):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "标准版"
+    sheet.append(["编号", "长度"])
+    sheet.append(['="M1"', "=150+150"])
+    path = tmp_path / "formulas.xlsx"
+    workbook.save(path)
+    with pytest.raises(ValueError, match="包含公式.*重新计算并保存"):
+        import_project_xlsx(path)
+
+    sheet["A2"] = "M1"
+    sheet["B2"] = "#VALUE!"
+    workbook.save(path)
+    with pytest.raises(ValueError, match=r"B2.*#VALUE!"):
+        import_project_xlsx(path)
+
+
 def test_measured_details_pack_the_450mm_pair_without_compressing_text(tmp_path):
     rows = [build_standard_row(
         dict(DEFAULT_ROW, module_id=f"M{index}", length_mm=str(length), thickness_mm="450",
@@ -1084,11 +1102,13 @@ def test_complete_project_outputs_four_files_and_rolls_back_on_publish_failure(t
     base = tmp_path / "项目.v2"
     paths = exporter.project_output_paths(base)
 
-    def dxf(_drawing, path, _reference):
+    def dxf(_drawing, path, _reference, *, reference_document):
+        assert reference_document is None
         path.write_bytes(b"DXF")
 
     def pdf(_drawing, path, *, dxf_path, **kwargs):
         assert dxf_path.read_bytes() == b"DXF"
+        assert kwargs["generated_dxf"]
         path.write_bytes(b"PDF")
 
     monkeypatch.setattr(exporter, "export_dxf", dxf)
@@ -1312,7 +1332,7 @@ def test_shx_reuses_bounds_and_starts_rendering_before_preparing_all_pages(monke
         return SimpleNamespace(returncode=0)
 
     def progress(message):
-        if "第 2/2 页" in message:
+        if "第 2 页 DXF" in message:
             assert first_started.wait(timeout=3)
 
     monkeypatch.setattr(exporter.ezdxf_bbox, "extents", count_extents)
@@ -1428,6 +1448,25 @@ def test_preview_pdf_cache_renders_only_changed_pages_when_pagination_matches(mo
     export_pdf(shuffled, path, page_cache=cache)
     assert rendered == [0, 1]
     assert cache.reused_page_count == 0
+
+    third = build_standard_module(None, StandardModuleValues("C", 4600, 300, 230))
+    three_pages = DrawingGenerator().generate(Project(modules=[changed, second, third]))
+    export_pdf(three_pages, path, page_cache=cache)
+    rendered.clear()
+    reordered = DrawingGenerator().generate(Project(modules=[changed, third, second]))
+    assert len(reordered.pages) == len(three_pages.pages) == 3
+    export_pdf(reordered, path, page_cache=cache)
+    assert rendered == [1, 2]
+    assert cache.reused_page_indices == (0,)
+
+    generated = tmp_path / "generated.dxf"
+    generated.touch()
+    rendered.clear()
+    export_pdf(reordered, path, dxf_path=generated, generated_dxf=True, page_cache=cache)
+    assert rendered == []
+    assert cache.reused_page_count == 3
+    export_pdf(reordered, path, dxf_path=generated, page_cache=cache)
+    assert rendered == [0, 1, 2]
 
 
 def test_shx_single_page_built_at_origin_preserves_page_number_dimensions_and_rotation(tmp_path):

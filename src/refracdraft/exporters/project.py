@@ -6,12 +6,13 @@ from pathlib import Path
 from shutil import copy2
 from tempfile import TemporaryDirectory
 
+from ezdxf.document import Drawing
 from openpyxl import Workbook
 
 from refracdraft.domain.models import BoardFaceProfile, Project
 from refracdraft.drawing.model import DrawingDocument
 from refracdraft.exporters.dxf import export_dxf
-from refracdraft.exporters.pdf import export_pdf
+from refracdraft.exporters.pdf import PdfPageCache, export_pdf
 from refracdraft.standard_sheet import (
     AUTOMATIC, AUTOMATIC_FALLBACK_KEYS, AUTOMATIC_FIELDS, AUTOMATIC_SHEET, COLUMN_SPECS, EXCEL_EMPTY_FIELDS,
     EXCEL_KEEP_EMPTY, PROFILE_COLUMNS, PROFILE_SHEET,
@@ -74,6 +75,8 @@ def export_complete_project(
     progress: Callable[[str], None],
     pdf_workers: int = 1,
     pdf_page_progress: Callable[[int, int], None] | None = None,
+    pdf_page_cache: PdfPageCache | None = None,
+    reference_document: Drawing | None = None,
 ) -> None:
     targets = project_output_paths(base_path)
     base_path.parent.mkdir(parents=True, exist_ok=True)
@@ -88,10 +91,11 @@ def export_complete_project(
             excluded.add("standard_link_version")
         files["json"].write_text(project.model_dump_json(indent=2, exclude=excluded), encoding="utf-8")
         export_standard_excel(project, files["xlsx"])
-        progress("正在生成 DXF…")
-        export_dxf(drawing, files["dxf"], reference_dxf)
-        export_pdf(drawing, files["pdf"], dxf_path=files["dxf"], font_directory=font_directory,
-                   progress=progress, workers=pdf_workers, page_progress=pdf_page_progress)
+        progress("正在写入完整的可编辑 DXF…")
+        export_dxf(drawing, files["dxf"], reference_dxf, reference_document=reference_document)
+        export_pdf(drawing, files["pdf"], dxf_path=files["dxf"], reference_dxf=reference_dxf,
+                   font_directory=font_directory, progress=progress, workers=pdf_workers,
+                   page_progress=pdf_page_progress, page_cache=pdf_page_cache, generated_dxf=True)
         progress("正在保存四个项目文件…")
         backup_dir = stage / "previous"
         backup_dir.mkdir()

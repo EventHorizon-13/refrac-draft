@@ -228,11 +228,12 @@ class PdfPageCache:
         return len(self.reused_page_indices)
 
 
-def _pdf_page_keys(document: DrawingDocument) -> tuple[tuple[SheetPage, tuple], ...]:
+def _pdf_page_keys(document: DrawingDocument) -> tuple[tuple[SheetPage, tuple, float], ...]:
     return tuple((
         replace(page, modules=tuple(replace(placed, measure_detail=None) for placed in page.modules)),
         tuple(tuple(detail_lines(placed)) for placed in page.modules),
-    ) for page in document.pages)
+        origin,
+    ) for page, origin in zip(document.pages, page_model_origins(document)))
 
 
 def _render_input_stamp(path: Path | None):
@@ -243,14 +244,10 @@ def _render_input_stamp(path: Path | None):
 
 
 def _pdf_cache_context(document, reference, font, font_directory, main_shx, bigfont_shx, exporter):
-    layout = tuple(
-        (page.page_number, page.scale_denominator, tuple(placed.drawing.module_id for placed in page.modules))
-        for page in document.pages
-    )
     external_fonts = _fonts_in_directory(font_directory) if font_directory else ()
     files = (reference, font, main_shx.path if main_shx else None, bigfont_shx.path if bigfont_shx else None)
     renderer = exporter[:2] if main_shx and exporter else ()
-    return (document.project_name, document.filename_label, layout, font_directory,
+    return (document.project_name, document.filename_label, len(document.pages), font_directory,
             tuple(_render_input_stamp(path) for path in (*files, *external_fonts, *renderer)))
 
 
@@ -421,7 +418,7 @@ def _export_pdf_with_shx(
             bounds = None
         for offset, index in enumerate(missing):
             number = index + 1
-            progress(f"正在准备第 {number}/{page_count} 页 DXF…")
+            progress(f"正在准备第 {number} 页 DXF（待渲染页 {offset + 1}/{len(missing)}）…")
             if offset:
                 page_doc = ezdxf.readfile(source_dxf)
             denominator = document.pages[index].scale_denominator
@@ -675,6 +672,7 @@ def export_pdf(
     workers: int = 1,
     page_cache: PdfPageCache | None = None,
     reference_document: ezdxf.document.Drawing | None = None,
+    generated_dxf: bool = False,
 ) -> Path:
     """Render a PDF from the same DXF that is exported to the customer.
 
@@ -702,7 +700,9 @@ def export_pdf(
     if main_shx is not None and exporter is None:
         raise RuntimeError("PDF SHX 渲染器未随程序打包，请完整解压便携版后重试。")
 
-    reference = _reference_dxf_path(reference_dxf) if source_dxf is None else None
+    reference = _reference_dxf_path(reference_dxf) if source_dxf is None else (
+        Path(reference_dxf) if generated_dxf and reference_dxf and Path(reference_dxf).is_file() else None
+    )
     context = None
     keys = ()
     reused = {}
@@ -710,7 +710,7 @@ def export_pdf(
     saved_bytes = 0
     if page_cache is not None:
         page_cache.reused_page_indices = ()
-    if page_cache is not None and source_dxf is None:
+    if page_cache is not None and (source_dxf is None or generated_dxf):
         try:
             context = _pdf_cache_context(
                 document, reference, selected_font_path, external_font_directory, main_shx, bigfont_shx, exporter
@@ -737,7 +737,7 @@ def export_pdf(
 
     page_count = len(document.pages)
     missing_pages = tuple(index for index in range(page_count) if index not in reused)
-    if reused:
+    if page_cache is not None:
         report(f"复用 {len(reused)} 页 PDF，待渲染 {page_count - len(reused)} 页…")
 
     with TemporaryDirectory(prefix="refracdraft-pdf-", dir=output_path.parent) as temp_dir:

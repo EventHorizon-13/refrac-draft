@@ -85,6 +85,18 @@ def _is_blank(value: Any) -> bool:
     return value is None or isinstance(value, str) and not value.strip()
 
 
+class _NoStandardRows(ValueError):
+    pass
+
+
+def _has_body_formulas(path: str | Path, sheet_name: str) -> bool:
+    wb = load_workbook(path, data_only=False, read_only=True)
+    try:
+        return any(cell.data_type == "f" for row in wb[sheet_name].iter_rows(min_row=2) for cell in row)
+    finally:
+        wb.close()
+
+
 def _rows(ws):
     rows = ws.iter_rows(values_only=True)
     headers = [str(value).strip() if value is not None else "" for value in next(rows, ())]
@@ -233,9 +245,16 @@ def _import_standard_sheet(
     boards = []
     anchors = []
     auto_fields = {}
-    for number, cells in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+    for number, row in enumerate(ws.iter_rows(min_row=2, max_col=len(headers)), start=2):
+        cells = tuple(cell.value for cell in row)
         if not any(not _is_blank(value) for value in cells):
             continue
+        for index in columns.values():
+            if row[index].data_type == "e":
+                raise ValueError(
+                    f"「标准版」{row[index].coordinate} 的公式结果为 {cells[index]}。"
+                    "请在 Excel 或 WPS 修正并重新计算、保存后再导入。"
+                )
         if _is_blank(cells[columns["编号"]]):
             raise ValueError(f"Excel 第 {number} 行：模块编号不能为空")
         values = DEFAULT_ROW.copy()
@@ -279,7 +298,7 @@ def _import_standard_sheet(
         anchors.append(anchor)
         auto_fields[module.module_id] = automatic_fields(values)
     if not modules:
-        raise ValueError("「标准版」工作表没有模块数据")
+        raise _NoStandardRows("「标准版」工作表没有模块数据")
     missing = profiles.keys() - {module.module_id for module in modules}
     if missing:
         raise ValueError(f"「{PROFILE_SHEET}」包含未知模块：{'，'.join(sorted(missing))}")
@@ -360,7 +379,16 @@ def import_project_xlsx(path: str | Path) -> Project:
                                       if value is not None}
                         for row in automatic_sheet.iter_rows(min_row=2, values_only=True) if row and row[0] is not None
                     }
-                return _import_standard_sheet(ws, headers, profiles, fallbacks, legacy_notes, legacy_taper_labels)
+                try:
+                    return _import_standard_sheet(ws, headers, profiles, fallbacks, legacy_notes, legacy_taper_labels)
+                except _NoStandardRows as exc:
+                    if _has_body_formulas(path, ws.title):
+                        raise ValueError(
+                            f"「{ws.title}」包含公式，但没有可导入的计算结果。"
+                            "请在 Excel 或 WPS 确认编号和尺寸已显示，重新计算并保存后再导入；"
+                            "若仍有 #VALUE! 等错误，请先修正公式。"
+                        ) from exc
+                    raise
         return _import_legacy_sheets(wb)
     finally:
         wb.close()
