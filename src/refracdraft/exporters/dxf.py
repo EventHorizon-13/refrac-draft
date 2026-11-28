@@ -274,17 +274,19 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
     ).set_placement(label_point, align=alignment)
 
 
-def export_dxf(
-    document: DrawingDocument, output_path: str | Path, reference_dxf: str | Path | None = None,
+def build_dxf_document(
+    document: DrawingDocument, reference_dxf: str | Path | None = None,
     *, page_indices: Collection[int] | None = None,
     reference_document: ezdxf.document.Drawing | None = None,
-) -> Path:
-    output_path = Path(output_path)
+    page_at_origin: bool = False,
+) -> ezdxf.document.Drawing:
     origins = page_model_origins(document)
     indices = range(len(document.pages)) if page_indices is None else sorted(set(page_indices))
     if any(index < 0 or index >= len(document.pages) for index in indices):
         raise IndexError("DXF 页索引超出图纸范围")
-    pages = [(document.pages[index], origins[index]) for index in indices]
+    if page_at_origin and len(indices) != 1:
+        raise ValueError("只有单页 DXF 可以在原点生成")
+    pages = [(document.pages[index], 0.0 if page_at_origin else origins[index]) for index in indices]
     doc = ezdxf.new("R2018")
     doc.units = ezdxf.units.MM
     doc.header["$MEASUREMENT"] = 1
@@ -392,6 +394,18 @@ def export_dxf(
                     },
                 )
 
+    return doc
+
+
+def export_dxf(
+    document: DrawingDocument, output_path: str | Path, reference_dxf: str | Path | None = None,
+    *, page_indices: Collection[int] | None = None,
+    reference_document: ezdxf.document.Drawing | None = None,
+) -> Path:
+    doc = build_dxf_document(
+        document, reference_dxf, page_indices=page_indices, reference_document=reference_document,
+    )
+    output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     doc.saveas(output_path)
     return output_path

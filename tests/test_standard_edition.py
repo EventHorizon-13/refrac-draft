@@ -50,7 +50,7 @@ from refracdraft.domain.models import (
 )
 from refracdraft.importers.excel import _normalize_row, import_project_xlsx
 from refracdraft.reference.library import ReferenceLibrary
-from refracdraft.exporters.dxf import export_dxf
+from refracdraft.exporters.dxf import build_dxf_document, export_dxf
 from refracdraft.exporters.pdf import (
     PDF_FONT_CANDIDATES,
     PdfPageCache,
@@ -61,6 +61,7 @@ from refracdraft.exporters.pdf import (
     _render_fallback_pages,
     _render_page,
     _single_page_dxf,
+    _write_shx_page_dxf,
     export_pdf,
 )
 from refracdraft.exporters.project import export_standard_excel
@@ -1375,10 +1376,14 @@ def test_preview_pdf_cache_renders_only_changed_pages_when_pagination_matches(mo
     cache = PdfPageCache()
     rendered = []
     dxf_writes = []
+    memory_pages = []
     font = tmp_path / "preview-font.otf"
     font.write_bytes(b"first version")
 
-    def render(_source_dxf, _font, _font_directory, pages, _workers, report, _scratch):
+    def render(source_dxf, _font, _font_directory, pages, _workers, report, _scratch):
+        if not isinstance(source_dxf, Path):
+            memory_pages.extend(index for index, _scale, _origin in pages)
+            assert len(source_dxf.modelspace().query("DIMENSION")) > 0
         report(0, len(pages))
         for count, (index, _scale, _origin) in enumerate(pages, 1):
             rendered.append(index)
@@ -1403,6 +1408,7 @@ def test_preview_pdf_cache_renders_only_changed_pages_when_pagination_matches(mo
     revised = DrawingGenerator().generate(Project(modules=[changed, second]))
     export_pdf(revised, path, page_cache=cache)
     assert rendered == [0]
+    assert memory_pages == [0]
     assert cache.reused_page_count == 1
     with pymupdf.open(path) as pdf:
         assert [page.rect.width for page in pdf] == [100, 101]
@@ -1410,7 +1416,7 @@ def test_preview_pdf_cache_renders_only_changed_pages_when_pagination_matches(mo
     rendered.clear()
     export_pdf(revised, path, page_cache=cache)
     assert rendered == []
-    assert dxf_writes == [None, (0,)]
+    assert dxf_writes == [None]
     assert cache.reused_page_count == 2
 
     font.write_bytes(b"changed")
@@ -1422,6 +1428,27 @@ def test_preview_pdf_cache_renders_only_changed_pages_when_pagination_matches(mo
     export_pdf(shuffled, path, page_cache=cache)
     assert rendered == [0, 1]
     assert cache.reused_page_count == 0
+
+
+def test_shx_single_page_built_at_origin_preserves_page_number_dimensions_and_rotation(tmp_path):
+    first = build_standard_module(None, StandardModuleValues("PAGE1", 300, 300, 230))
+    second = build_standard_module(None, StandardModuleValues("PAGE2", 4700, 300, 230))
+    drawing = DrawingGenerator().generate(Project(modules=[first, second]))
+    source = build_dxf_document(drawing, page_indices=(1,), page_at_origin=True)
+    path = _write_shx_page_dxf(source, tmp_path / "page-2.dxf", True, 20, 0.0, None)
+
+    modelspace = ezdxf.readfile(path).modelspace()
+    labels = {text.dxf.text for text in modelspace.query("TEXT")}
+    assert {"第2页 共2页", "PAGE2"} <= labels
+    assert "PAGE1" not in labels
+    frame, = modelspace.query('LWPOLYLINE[layer=="FRAME"]')
+    assert min(point[1] for point in frame.get_points()) == 0
+    dimensions = modelspace.query("DIMENSION")
+    assert any(dim.dxf.dimstyle == "_20" and dim.get_measurement() == 4700 for dim in dimensions)
+    for dim in dimensions:
+        if dim.dxf.angle == 90:
+            label, = dim.get_geometry_block().query("MTEXT")
+            assert label.dxf.hasattr("text_direction")
 
 
 def test_partial_dxf_writes_only_selected_page_at_original_origin_and_scale(tmp_path):

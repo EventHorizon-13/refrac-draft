@@ -27,7 +27,7 @@ from refracdraft.drawing.layout import (
     DETAIL_TEXT_SIZE_MM, PAGE_WIDTH_MM, PAGE_HEIGHT_MM, PAGE_STRIDE_MM, detail_lines, page_model_origins,
 )
 from refracdraft.drawing.model import DrawingDocument, SheetPage
-from refracdraft.exporters.dxf import export_dxf
+from refracdraft.exporters.dxf import build_dxf_document, export_dxf
 from refracdraft.resources import resource_path
 
 
@@ -332,14 +332,15 @@ def _dxf_vertical_bounds(doc) -> dict[str, tuple[float, float]]:
 
 def _write_shx_page_dxf(
     doc, target: Path, has_bigfont: bool, denominator: int, page_y: float,
-    bounds: dict[str, tuple[float, float]],
+    bounds: dict[str, tuple[float, float]] | None,
 ) -> Path:
     page_top = page_y + PAGE_HEIGHT_MM * denominator
     msp = doc.modelspace()
-    for entity in list(msp):
-        extent = bounds.get(entity.dxf.handle)
-        if extent is not None and (extent[1] < page_y - 1.0 or extent[0] > page_top + 1.0):
-            msp.delete_entity(entity)
+    if bounds is not None:
+        for entity in list(msp):
+            extent = bounds.get(entity.dxf.handle)
+            if extent is not None and (extent[1] < page_y - 1.0 or extent[0] > page_top + 1.0):
+                msp.delete_entity(entity)
     if page_y:
         for entity in list(msp):
             entity.translate(0.0, -page_y, 0.0)
@@ -384,7 +385,7 @@ def _fix_shx_page_scale(page: pymupdf.Page, denominator: int = MODEL_SCALE) -> N
 def _export_pdf_with_shx(
     document: DrawingDocument,
     output_path: Path,
-    source_dxf: Path | None,
+    source_dxf: Path | ezdxf.document.Drawing | None,
     temp_dir: Path,
     exporter: tuple[Path, Path, Path],
     main_font: ShxFontInfo,
@@ -411,9 +412,13 @@ def _export_pdf_with_shx(
         shutil.copyfile(main_font.path, staged_fonts / "gbenor.shx")
         if bigfont is not None:
             shutil.copyfile(bigfont.path, staged_fonts / "gbcbig.shx")
-        progress("正在分析 DXF 图元范围…")
-        page_doc = ezdxf.readfile(source_dxf)
-        bounds = _dxf_vertical_bounds(page_doc)
+        if isinstance(source_dxf, Path):
+            progress("正在分析 DXF 图元范围…")
+            page_doc = ezdxf.readfile(source_dxf)
+            bounds = _dxf_vertical_bounds(page_doc)
+        else:
+            page_doc = source_dxf
+            bounds = None
         for offset, index in enumerate(missing):
             number = index + 1
             progress(f"正在准备第 {number}/{page_count} 页 DXF…")
@@ -422,7 +427,7 @@ def _export_pdf_with_shx(
             denominator = document.pages[index].scale_denominator
             page_dxf = _write_shx_page_dxf(
                 page_doc, temp_dir / f"page-{number}.dxf", bigfont is not None,
-                denominator, origins[index], bounds,
+                denominator, origins[index] if bounds is not None else 0.0, bounds,
             )
             page_pdf = temp_dir / f"page-{number}.pdf"
             manifest_path = temp_dir / f"page-{number}.json"
@@ -607,8 +612,8 @@ def _add_searchable_text_layer(page, document: DrawingDocument, page_index: int,
         y += 7.0
 
 
-def _load_render_dxf(source_dxf: Path, font_path: Path | None):
-    dxf = ezdxf.readfile(source_dxf)
+def _load_render_dxf(source_dxf: Path | ezdxf.document.Drawing, font_path: Path | None):
+    dxf = ezdxf.readfile(source_dxf) if isinstance(source_dxf, Path) else source_dxf
     _normalize_title_fonts(dxf)
     if font_path is not None:
         _fit_fallback_template_text(dxf, font_path)
@@ -686,7 +691,7 @@ def export_pdf(
         Path(font_directory).expanduser() if font_directory else None
     )
     selected_font_path = _find_pdf_font(external_font_directory, font_path)
-    source_dxf = Path(dxf_path) if dxf_path is not None else None
+    source_dxf: Path | ezdxf.document.Drawing | None = Path(dxf_path) if dxf_path is not None else None
     bigfont_argument = None if shx_bigfont is None else str(shx_bigfont)
     main_shx, bigfont_shx = _resolve_shx_fonts(
         external_font_directory,
@@ -736,7 +741,13 @@ def export_pdf(
         report(f"复用 {len(reused)} 页 PDF，待渲染 {page_count - len(reused)} 页…")
 
     with TemporaryDirectory(prefix="refracdraft-pdf-", dir=output_path.parent) as temp_dir:
-        if source_dxf is None and (not reused or missing_pages):
+        if source_dxf is None and len(missing_pages) == 1:
+            report(f"正在生成第 {missing_pages[0] + 1}/{page_count} 页图元…")
+            source_dxf = build_dxf_document(
+                document, reference, page_indices=missing_pages, reference_document=reference_document,
+                page_at_origin=main_shx is not None,
+            )
+        elif source_dxf is None and (not reused or missing_pages):
             if reused:
                 report(f"正在准备改动页的 DXF（{len(missing_pages)}/{page_count} 页）…")
             else:
