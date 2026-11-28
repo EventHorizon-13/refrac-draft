@@ -336,6 +336,7 @@ def _export_pdf_with_shx(
     built_in_font: Path | None,
     progress: Callable[[str], None],
     workers: int,
+    page_progress: Callable[[int, int], None],
 ) -> Path:
     node, script, exporter_dir = exporter
     staged_fonts = temp_dir / "fonts"
@@ -392,16 +393,18 @@ def _export_pdf_with_shx(
             raise RuntimeError(f"PDF 渲染器执行失败：{detail or '未知错误'}")
         if not page_pdf.is_file() or page_pdf.stat().st_size < 8:
             raise RuntimeError("PDF 渲染器没有生成有效文件")
+    page_progress(0, len(jobs))
     if workers > 1 and len(jobs) > 1:
         with ThreadPoolExecutor(max_workers=min(workers, len(jobs))) as pool:
             for completed, future in enumerate(as_completed([pool.submit(render, job) for job in jobs]), 1):
                 future.result()
-                progress(f"正在渲染 PDF {completed}/{len(jobs)}…")
+                page_progress(completed, len(jobs))
     else:
         for completed, job in enumerate(jobs, 1):
             render(job)
-            progress(f"正在渲染 PDF {completed}/{len(jobs)}…")
+            page_progress(completed, len(jobs))
 
+    progress("正在合并并保存 PDF…")
     temporary_pdf = temp_dir / "rendered-shx.pdf"
     with pymupdf.open() as merged:
         for _manifest_path, page_pdf, denominator in jobs:
@@ -514,35 +517,43 @@ def _load_render_dxf(source_dxf: Path, font_path: Path | None):
     return dxf
 
 
-def _render_page_batch(source_dxf, font_path, font_directory, pages, scratch):
-    dxf = _load_render_dxf(source_dxf, font_path)
-    rendered = {}
-    for page_index, denominator, page_y in pages:
-        destination = scratch / f"fallback-page-{page_index + 1}.pdf"
-        destination.write_bytes(_render_page(dxf, page_index, font_path, font_directory, denominator, page_y))
-        rendered[page_index] = destination
-    return rendered
+_FALLBACK_DXF = None
 
 
-def _render_fallback_pages(source_dxf, font_path, font_directory, pages, workers, progress, scratch):
+def _init_fallback_worker(source_dxf, font_path):
+    global _FALLBACK_DXF
+    _FALLBACK_DXF = _load_render_dxf(source_dxf, font_path)
+
+
+def _render_fallback_page(font_path, font_directory, page, scratch):
+    page_index, denominator, page_y = page
+    destination = scratch / f"fallback-page-{page_index + 1}.pdf"
+    destination.write_bytes(
+        _render_page(_FALLBACK_DXF, page_index, font_path, font_directory, denominator, page_y)
+    )
+    return destination
+
+
+def _render_fallback_pages(source_dxf, font_path, font_directory, pages, workers, page_progress, scratch):
+    page_progress(0, len(pages))
     if workers < 2 or len(pages) < 2:
         dxf = _load_render_dxf(source_dxf, font_path)
         for completed, (page_index, denominator, page_y) in enumerate(pages, 1):
-            progress(f"正在渲染 PDF {completed}/{len(pages)}…")
-            yield _render_page(dxf, page_index, font_path, font_directory, denominator, page_y)
+            page_bytes = _render_page(dxf, page_index, font_path, font_directory, denominator, page_y)
+            page_progress(completed, len(pages))
+            yield page_bytes
         return
     workers = min(workers, len(pages))
-    rendered = {}
-    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as pool:
-        batches = [pages[offset::workers] for offset in range(workers)]
-        for future in as_completed([
-            pool.submit(_render_page_batch, source_dxf, font_path, font_directory, batch, scratch)
-            for batch in batches
-        ]):
-            rendered.update(future.result())
-            progress(f"正在渲染 PDF {len(rendered)}/{len(pages)}…")
-    for page_index, _denominator, _page_y in pages:
-        yield rendered.pop(page_index).read_bytes()
+    with ProcessPoolExecutor(
+        max_workers=workers, mp_context=get_context("spawn"),
+        initializer=_init_fallback_worker, initargs=(source_dxf, font_path),
+    ) as pool:
+        futures = [pool.submit(_render_fallback_page, font_path, font_directory, page, scratch) for page in pages]
+        for completed, future in enumerate(as_completed(futures), 1):
+            future.result()
+            page_progress(completed, len(pages))
+        for future in futures:
+            yield future.result().read_bytes()
 
 
 def export_pdf(
@@ -557,6 +568,7 @@ def export_pdf(
     shx_font: str | Path | None = None,
     shx_bigfont: str | Path | None = None,
     progress: Callable[[str], None] | None = None,
+    page_progress: Callable[[int, int], None] | None = None,
     workers: int = 1,
 ) -> Path:
     """Render a PDF from the same DXF that is exported to the customer.
@@ -567,6 +579,7 @@ def export_pdf(
     """
     del reference_pdf
     report = progress or (lambda _text: None)
+    report_page = page_progress or (lambda done, total: report(f"正在渲染 PDF {done}/{total}…"))
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     external_font_directory = (
@@ -604,6 +617,7 @@ def export_pdf(
                 selected_font_path,
                 report,
                 workers,
+                report_page,
             )
 
         pages = [(index, document.pages[index].scale_denominator, page_y)
@@ -611,10 +625,11 @@ def export_pdf(
         temporary_pdf = Path(temp_dir) / "rendered.pdf"
         with pymupdf.open() as merged:
             for page_bytes in _render_fallback_pages(
-                source_dxf, selected_font_path, external_font_directory, pages, workers, report, Path(temp_dir)
+                source_dxf, selected_font_path, external_font_directory, pages, workers, report_page, Path(temp_dir)
             ):
                 with pymupdf.open(stream=page_bytes, filetype="pdf") as one_page:
                     merged.insert_pdf(one_page)
+            report("正在保存 PDF…")
             for page_index, page in enumerate(merged):
                 _add_searchable_text_layer(page, document, page_index, selected_font_path)
             merged.set_metadata({

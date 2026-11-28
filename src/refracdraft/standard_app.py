@@ -87,7 +87,13 @@ def _smoke_test_welded_output(window) -> None:
         footer = {entity.dxf.text for entity in modelspace.query("TEXT")}
         if not {"第1页 共2页", "第2页 共2页"} <= footer:
             raise ValueError("混合比例 DXF 页码缺失")
-        pdf_path = export_pdf(drawing, Path(directory) / "mixed.pdf", dxf_path=dxf_path, workers=2)
+        rendered_pages = []
+        pdf_path = export_pdf(
+            drawing, Path(directory) / "mixed.pdf", dxf_path=dxf_path, workers=2,
+            page_progress=lambda done, total: rendered_pages.append((done, total)),
+        )
+        if rendered_pages != [(0, 2), (1, 2), (2, 2)]:
+            raise ValueError("并行 PDF 渲染没有逐页报告进度")
         with pymupdf.open(pdf_path) as pdf:
             if len(pdf) != 2 or not all(page.get_drawings() for page in pdf):
                 raise ValueError("混合比例 PDF 未生成两页矢量图")
@@ -116,7 +122,7 @@ def main() -> None:
     from refracdraft.standard_sheet import EQUAL_SEGMENTS
     from refracdraft.ui.about import AboutDialog
     from refracdraft.ui.board_face_dialog import BoardFaceDialog
-    from refracdraft.ui.standard_window import COLUMN_INDEX, PROFILE_COLUMN, StandardWindow
+    from refracdraft.ui.standard_window import COLUMN_INDEX, PROFILE_COLUMN, OperationProgress, StandardWindow
 
     smoke = "--smoke-test" in sys.argv
     trace = Path("RefracDraft-Standard-smoke-trace.txt")
@@ -138,6 +144,22 @@ def main() -> None:
         try:
             if window.windowIcon().pixmap(32, 32).isNull():
                 raise ValueError("便携版缺少可加载的程序图标")
+            progress = OperationProgress(window, "准备 PDF", 1, tracks_pdf=True)
+            try:
+                progress.advance("拆分页面")
+                progress.advance("启动渲染")
+                before_render = progress.bar.value()
+                progress.update_pdf_pages(1, 2)
+                halfway = progress.bar.value()
+                progress.update_pdf_pages(2, 2)
+                if not before_render < halfway < progress.bar.value() < progress.bar.maximum():
+                    raise ValueError("PDF 进度条未随页数推进或在文件保存前已满")
+                progress.finish("保存完成")
+                if progress.bar.value() != progress.bar.maximum():
+                    raise ValueError("PDF 保存完成后进度条未到达 100%")
+            finally:
+                progress.hide()
+                progress.deleteLater()
             if (window.full_window_button.text() or window.full_window_button.icon().isNull()
                 or not window.full_window_button.isEnabled()):
                 raise ValueError("未生成图纸时，全窗口仍应显示可点击的无文字图标")
@@ -279,6 +301,8 @@ def main() -> None:
             if table.item(row, COLUMN_INDEX["anchor_enabled"]).text():
                 raise ValueError("锚固件复选框仍显示是/否文字")
             headers = [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())]
+            if headers[COLUMN_INDEX["anchor_length_mm"]] != "插针长度":
+                raise ValueError("参数表未显示简化后的插针长度表头")
             if not {"夹板", "上板图", "下板图"} <= set(headers):
                 raise ValueError("参数表未区分夹板与上下板图")
             if any("(" in label or "mm" in label.lower() for label in headers):

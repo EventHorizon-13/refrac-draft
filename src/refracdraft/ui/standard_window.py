@@ -116,6 +116,13 @@ class TableState:
 
 
 COLUMN_INDEX = {spec.key: index for index, spec in enumerate(COLUMN_SPECS)}
+COMPACT_COLUMN_WIDTHS = {
+    "density_kg_m3": 44, "production_quantity": 42, "taper_enabled": 46,
+    "board_exists": 40, "show_upper_board": 48, "show_lower_board": 48,
+    "anchor_enabled": 48, "anchor_material": 54, "anchor_position_mm": 70,
+    "anchor_count": 58, "anchor_length_mm": 64, "thread_spec": 52,
+    "pin_diameter_mm": 47, "hose_spec": 47, "bolt_exposure_mm": 88,
+}
 PROFILE_COLUMN = len(COLUMN_SPECS)
 COLUMN_BY_KEY = {spec.key: spec for spec in COLUMN_SPECS}
 AUTOMATIC_PREVIEW_ROLE = int(Qt.ItemDataRole.UserRole) + 1
@@ -156,7 +163,10 @@ def _short_rule() -> QFrame:
 
 
 class OperationProgress(QDialog):
-    def __init__(self, parent: QWidget, text: str, steps: int):
+    PDF_START = 450
+    PDF_END = 950
+
+    def __init__(self, parent: QWidget, text: str, steps: int, *, tracks_pdf: bool = False):
         super().__init__(parent)
         self.setWindowTitle("正在处理")
         self.setWindowModality(Qt.WindowModality.WindowModal)
@@ -165,7 +175,10 @@ class OperationProgress(QDialog):
         layout = QVBoxLayout(self)
         self.label = QLabel(text)
         self.bar = QProgressBar()
-        self.bar.setRange(0, steps)
+        self._steps = steps
+        self._stage = 0
+        self._stage_limit = self.PDF_START if tracks_pdf else 990
+        self.bar.setRange(0, 1000)
         self.bar.setValue(0)
         layout.addWidget(self.label)
         layout.addWidget(self.bar)
@@ -178,8 +191,14 @@ class OperationProgress(QDialog):
         if pump:
             QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
 
-    def advance(self, text: str) -> None:
-        self.update_stage(text, self.bar.value() + 1)
+    def advance(self, text: str, *, pump: bool = True) -> None:
+        self._stage += 1
+        completed = min(self._stage, self._steps) * self._stage_limit // self._steps
+        self.update_stage(text, max(self.bar.value(), completed), pump=pump)
+
+    def update_pdf_pages(self, done: int, total: int) -> None:
+        completed = self.PDF_START + (self.PDF_END - self.PDF_START) * done // max(1, total)
+        self.update_stage(f"正在渲染 PDF {done}/{total} 页…", completed, pump=False)
 
     def finish(self, text: str) -> None:
         self.update_stage(text, self.bar.maximum())
@@ -197,7 +216,13 @@ def _run_background(progress: OperationProgress, work):
     loop = QEventLoop(progress)
     timer = QTimer(loop)
     timer.setInterval(30)
-    future = _BACKGROUND_WORKER.submit(work, updates.put)
+    def report(text):
+        updates.put(text)
+
+    def report_pages(done, total):
+        updates.put((done, total))
+
+    future = _BACKGROUND_WORKER.submit(work, report, report_pages)
 
     def refresh():
         while True:
@@ -205,10 +230,11 @@ def _run_background(progress: OperationProgress, work):
                 message = updates.get_nowait()
             except Empty:
                 break
-            if progress.bar.value() >= progress.bar.maximum():
-                progress.bar.setMaximum(progress.bar.maximum() + 1)
-            progress.update_stage(message, progress.bar.value() + 1, pump=False)
-        if future.done():
+            if isinstance(message, tuple):
+                progress.update_pdf_pages(*message)
+            else:
+                progress.advance(message, pump=False)
+        if future.done() and updates.empty():
             timer.stop()
             loop.quit()
 
@@ -1001,8 +1027,10 @@ class StandardWindow(MainWindow):
         self.tables = {"modules": self.parameter_table}
         table = self.parameter_table
         table.setObjectName("moduleParameterTable")
-        table.setHorizontalHeaderLabels([spec.label for spec in COLUMN_SPECS] + ["异形"])
-        table.setColumnWidth(PROFILE_COLUMN, 111)
+        table.setHorizontalHeaderLabels([
+            "插针长度" if spec.key == "anchor_length_mm" else spec.label for spec in COLUMN_SPECS
+        ] + ["异形"])
+        table.setColumnWidth(PROFILE_COLUMN, 78)
         table.horizontalHeader().moveSection(PROFILE_COLUMN, COLUMN_INDEX["thickness_mm"] + 1)
         table.setItemDelegate(ParameterDelegate(table))
         table.setAlternatingRowColors(True)
@@ -1013,15 +1041,16 @@ class StandardWindow(MainWindow):
         table.setEditTriggers(QAbstractItemView.EditTrigger.AnyKeyPressed)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         table.horizontalHeader().setStretchLastSection(False)
-        table.horizontalHeader().setMinimumSectionSize(44)
+        table.horizontalHeader().setMinimumSectionSize(38)
         table.verticalHeader().setDefaultSectionSize(31)
         table.verticalHeader().setMinimumWidth(34)
         table.setMinimumHeight(185)
         for column, spec in enumerate(COLUMN_SPECS):
-            table.setColumnWidth(column, spec.width)
+            width = COMPACT_COLUMN_WIDTHS.get(spec.key, spec.width)
+            table.setColumnWidth(column, max(width, table.horizontalHeader().sectionSizeHint(column)))
             header_item = table.horizontalHeaderItem(column)
             if header_item is not None:
-                header_item.setToolTip(spec.label)
+                header_item.setToolTip(header_item.text())
                 header_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         table.horizontalHeader().sectionDoubleClicked.connect(self._edit_whole_column)
         table.itemChanged.connect(self._table_item_changed)
@@ -1961,14 +1990,14 @@ class StandardWindow(MainWindow):
 
     def generate(self) -> None:
         module_count = self.parameter_table.rowCount()
-        progress = OperationProgress(self, "正在整理参数…", module_count + 4)
+        progress = OperationProgress(self, "正在整理参数…", module_count + 4, tracks_pdf=True)
         try:
             project = self._collect_project()
             font_directory = self._pdf_font_directory()
             label = self._filename_label()
             reference = self.reference_dxf if self.reference_dxf.exists() else None
 
-            def work(report):
+            def work(report, report_pages):
                 report("正在读取参考图块…")
                 library = ReferenceLibrary(reference) if reference else None
                 report(f"正在生成模块视图 0/{module_count}…")
@@ -1986,7 +2015,7 @@ class StandardWindow(MainWindow):
                     with TemporaryDirectory(prefix="refracdraft-preview-") as directory:
                         path = export_pdf(
                             drawing, Path(directory) / "preview.pdf", reference_dxf=reference,
-                            font_directory=font_directory, progress=report, workers=2,
+                            font_directory=font_directory, progress=report, workers=2, page_progress=report_pages,
                         )
                         return drawing, path.read_bytes(), None
                 except Exception as exc:
@@ -2094,9 +2123,9 @@ class StandardWindow(MainWindow):
         if filename_label is not None:
             drawing = replace(drawing, filename_label=filename_label)
         reference = self.reference_dxf
-        return _run_background(progress, lambda report: export_pdf(
+        return _run_background(progress, lambda report, report_pages: export_pdf(
             drawing, path, reference_dxf=reference, font_directory=font_directory,
-            progress=report, workers=2,
+            progress=report, workers=2, page_progress=report_pages,
         ))
 
     def export_dxf_file(self) -> None:
@@ -2114,7 +2143,7 @@ class StandardWindow(MainWindow):
             label = path.stem if self.print_filename_check.isChecked() else ""
             drawing = replace(self.drawing_document, filename_label=label)
             reference = self.reference_dxf
-            _run_background(progress, lambda _report: export_dxf(drawing, path, reference))
+            _run_background(progress, lambda _report, _report_pages: export_dxf(drawing, path, reference))
             progress.finish("DXF 已导出")
             self.statusBar().showMessage(f"DXF 已导出：{path}")
         except Exception as exc:
@@ -2132,7 +2161,7 @@ class StandardWindow(MainWindow):
         path = self._output_target(".pdf")
         if path is None:
             return
-        progress = OperationProgress(self, "正在准备 PDF…", len(self.drawing_document.pages) + 2)
+        progress = OperationProgress(self, "正在准备 PDF…", 2, tracks_pdf=True)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             font_directory = self._pdf_font_directory()
@@ -2171,7 +2200,7 @@ class StandardWindow(MainWindow):
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return
-        progress = OperationProgress(self, "正在整理项目参数…", 6)
+        progress = OperationProgress(self, "正在整理项目参数…", 6, tracks_pdf=True)
         try:
             project = self._collect_project()
             progress.advance("正在读取参考图块…")
@@ -2180,12 +2209,12 @@ class StandardWindow(MainWindow):
             font_directory = self._pdf_font_directory()
             label = self._filename_label()
 
-            def work(report):
+            def work(report, report_pages):
                 library = ReferenceLibrary(reference) if reference else None
                 drawing = DrawingGenerator(library).generate(project, measure_detail=shx_detail_measure(font_directory))
                 export_complete_project(
                     project, replace(drawing, filename_label=label), path, reference_dxf=reference,
-                    font_directory=font_directory, progress=report, pdf_workers=2,
+                    font_directory=font_directory, progress=report, pdf_workers=2, pdf_page_progress=report_pages,
                 )
 
             _run_background(progress, work)

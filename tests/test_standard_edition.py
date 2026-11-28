@@ -51,6 +51,7 @@ from refracdraft.exporters.pdf import (
     PDF_FONT_CANDIDATES,
     _find_pdf_font,
     _fix_shx_page_scale,
+    _render_fallback_pages,
     _render_page,
     _single_page_dxf,
 )
@@ -1163,6 +1164,23 @@ def test_pdf_prefers_bundled_song_font_to_system_font(monkeypatch):
     system_font = Path(r"C:\Windows\Fonts\simsun.ttc")
     monkeypatch.setattr(Path, "is_file", lambda path: path in (bundled_song, system_font))
     assert _find_pdf_font() == bundled_song
+
+
+def test_pdf_reports_completed_pages_only_after_rendering(monkeypatch, tmp_path):
+    events = []
+    monkeypatch.setattr("refracdraft.exporters.pdf._load_render_dxf", lambda *_args: None)
+
+    def render(_doc, index, *_args):
+        events.append(("render", index))
+        return f"page {index + 1}".encode()
+
+    monkeypatch.setattr("refracdraft.exporters.pdf._render_page", render)
+    pages = list(_render_fallback_pages(
+        tmp_path / "test.dxf", None, None, [(0, 10, 0), (1, 20, -5000)], 1,
+        lambda done, total: events.append((done, total)), tmp_path,
+    ))
+    assert pages == [b"page 1", b"page 2"]
+    assert events == [(0, 2), ("render", 0), (1, 2), ("render", 1), (2, 2)]
 
 
 def test_shx_pdf_keeps_full_a4_frame_when_renderer_zooms_to_module():
