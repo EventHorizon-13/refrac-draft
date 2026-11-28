@@ -55,7 +55,7 @@ from refracdraft.exporters.pdf import (
     _single_page_dxf,
 )
 from refracdraft.exporters.project import export_standard_excel
-from refracdraft.release import latest_portable_release
+from refracdraft.release import RELEASES_URL, latest_portable_release, portable_release_from_latest_url
 from refracdraft.standard_sheet import (
     AUTOMATIC, AUTOMATIC_FIELDS, COLUMN_SPECS, DEFAULT_ROW, EQUAL_SEGMENTS, anchor_length_options, build_standard_row,
     resolve_automatic_values,
@@ -1029,6 +1029,18 @@ def test_update_selects_the_latest_formal_release_with_a_standard_portable_zip(m
     ])
     assert version == "0.1.2"
     assert url.endswith("/standard-v0.1.2/RefracDraft-Standard-Windows-x64-portable-v0.1.2.zip")
+
+
+def test_update_fallback_uses_only_the_official_stable_release_redirect(monkeypatch):
+    monkeypatch.setattr("refracdraft.release.app_version", lambda: "0.3.0")
+    assert portable_release_from_latest_url(f"{RELEASES_URL}/tag/standard-v0.3.0") is None
+    version, url = portable_release_from_latest_url(f"{RELEASES_URL}/tag/standard-v0.3.1")
+    assert version == "0.3.1"
+    assert url == f"{RELEASES_URL}/download/standard-v0.3.1/RefracDraft-Standard-Windows-x64-portable-v0.3.1.zip"
+    for invalid in (f"{RELEASES_URL}/latest", f"{RELEASES_URL}/tag/standard-v0.3.1b1",
+                    f"{RELEASES_URL.replace('github.com', 'example.com')}/tag/standard-v0.3.1"):
+        with pytest.raises(ValueError):
+            portable_release_from_latest_url(invalid)
 
 
 def test_dxf_uses_reference_dimension_style_and_big_font(tmp_path):

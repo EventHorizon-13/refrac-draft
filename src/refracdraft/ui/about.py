@@ -8,7 +8,8 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequ
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from refracdraft.release import (
-    PROJECT_URL, RELEASES_API, app_version, build_time_display, latest_portable_release,
+    PROJECT_URL, RELEASES_API, RELEASES_URL, app_version, build_time_display,
+    latest_portable_release, portable_release_from_latest_url,
 )
 
 
@@ -41,6 +42,7 @@ class AboutDialog(QDialog):
 
         self.status = QLabel()
         self.status.setWordWrap(True)
+        self.status.setOpenExternalLinks(True)
         layout.addWidget(self.status)
         actions = QHBoxLayout()
         self.check = QPushButton("检查更新")
@@ -60,33 +62,44 @@ class AboutDialog(QDialog):
         self.check.setEnabled(False)
         self.download.hide()
         self.status.setText("正在检查更新…")
-        request = QNetworkRequest(QUrl(RELEASES_API))
-        request.setRawHeader(b"Accept", b"application/vnd.github+json")
+        self._request_update(RELEASES_API, fallback=False)
+
+    def _request_update(self, url: str, *, fallback: bool) -> None:
+        request = QNetworkRequest(QUrl(url))
+        if not fallback:
+            request.setRawHeader(b"Accept", b"application/vnd.github+json")
         request.setRawHeader(b"User-Agent", b"RefracDraft-Standard")
         request.setTransferTimeout(12_000)
         reply = self.network.get(request)
-        reply.finished.connect(lambda: self._show_result(reply))
+        reply.finished.connect(lambda: self._show_result(reply, fallback=fallback))
 
-    def _show_result(self, reply: QNetworkReply) -> None:
+    def _show_result(self, reply: QNetworkReply, *, fallback: bool) -> None:
         try:
             if reply.error() != QNetworkReply.NetworkError.NoError:
-                self.status.setText(f"检查更新失败：{reply.errorString()}")
-                return
-            releases = json.loads(bytes(reply.readAll()))
-            if not isinstance(releases, list):
                 raise ValueError
-            update = latest_portable_release(releases)
+            if fallback:
+                update = portable_release_from_latest_url(reply.url().toString())
+            else:
+                releases = json.loads(bytes(reply.readAll()))
+                if not isinstance(releases, list):
+                    raise ValueError
+                update = latest_portable_release(releases)
+        except (AttributeError, TypeError, ValueError):
+            if not fallback:
+                self.status.setText("正在通过 GitHub 发布页检查…")
+                self._request_update(f"{RELEASES_URL}/latest", fallback=True)
+                return
+            self.status.setText(f'无法自动检查更新。<a href="{RELEASES_URL}">打开 GitHub 发布页</a>')
+        else:
             if update is None:
                 self.status.setText("没有可下载的更新。")
-                return
-            version, self.download_url = update
-            self.status.setText(f"发现新版本 v{version}。下载后解压到新目录即可使用。")
-            self.download.show()
-        except (AttributeError, TypeError, ValueError):
-            self.status.setText("无法读取 GitHub 发布信息，请稍后重试。")
+            else:
+                version, self.download_url = update
+                self.status.setText(f"发现新版本 v{version}。下载后解压到新目录即可使用。")
+                self.download.show()
         finally:
             reply.deleteLater()
-            self.check.setEnabled(True)
+        self.check.setEnabled(True)
 
     def _open_download(self) -> None:
         if not QDesktopServices.openUrl(QUrl(self.download_url)):

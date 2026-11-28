@@ -70,6 +70,7 @@ def export_complete_project(
     reference_dxf: Path | None = None,
     font_directory: str | None = None,
     progress: Callable[[str], None],
+    pdf_workers: int = 1,
 ) -> None:
     targets = project_output_paths(base_path)
     base_path.parent.mkdir(parents=True, exist_ok=True)
@@ -86,7 +87,8 @@ def export_complete_project(
         export_standard_excel(project, files["xlsx"])
         progress("正在生成 DXF…")
         export_dxf(drawing, files["dxf"], reference_dxf)
-        export_pdf(drawing, files["pdf"], dxf_path=files["dxf"], font_directory=font_directory, progress=progress)
+        export_pdf(drawing, files["pdf"], dxf_path=files["dxf"], font_directory=font_directory,
+                   progress=progress, workers=pdf_workers)
         progress("正在保存四个项目文件…")
         backup_dir = stage / "previous"
         backup_dir.mkdir()

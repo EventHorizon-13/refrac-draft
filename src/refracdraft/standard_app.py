@@ -87,7 +87,7 @@ def _smoke_test_welded_output(window) -> None:
         footer = {entity.dxf.text for entity in modelspace.query("TEXT")}
         if not {"第1页 共2页", "第2页 共2页"} <= footer:
             raise ValueError("混合比例 DXF 页码缺失")
-        pdf_path = export_pdf(drawing, Path(directory) / "mixed.pdf", dxf_path=dxf_path)
+        pdf_path = export_pdf(drawing, Path(directory) / "mixed.pdf", dxf_path=dxf_path, workers=2)
         with pymupdf.open(pdf_path) as pdf:
             if len(pdf) != 2 or not all(page.get_drawings() for page in pdf):
                 raise ValueError("混合比例 PDF 未生成两页矢量图")
@@ -97,12 +97,14 @@ def _smoke_test_welded_output(window) -> None:
 
 
 def main() -> None:
+    from multiprocessing import freeze_support
     from pathlib import Path
 
+    freeze_support()
     from PySide6.QtCore import QEvent, QPoint, QPointF, QTimer, Qt
     from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QInputMethodEvent, QKeyEvent, QMouseEvent, QWheelEvent
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QWidget
+    from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QStyleOptionViewItem, QWidget
 
     from refracdraft.app import _smoke_test
     from refracdraft.domain.models import Project
@@ -111,6 +113,7 @@ def main() -> None:
     from refracdraft.release import build_time_display
     from refracdraft.resources import resource_path
     from refracdraft.standard import ensure_standard_project
+    from refracdraft.standard_sheet import EQUAL_SEGMENTS
     from refracdraft.ui.about import AboutDialog
     from refracdraft.ui.board_face_dialog import BoardFaceDialog
     from refracdraft.ui.standard_window import COLUMN_INDEX, PROFILE_COLUMN, StandardWindow
@@ -135,6 +138,13 @@ def main() -> None:
         try:
             if window.windowIcon().pixmap(32, 32).isNull():
                 raise ValueError("便携版缺少可加载的程序图标")
+            if (window.full_window_button.text() or window.full_window_button.icon().isNull()
+                or not window.full_window_button.isEnabled()):
+                raise ValueError("未生成图纸时，全窗口仍应显示可点击的无文字图标")
+            window.full_window_button.click()
+            if not window._full_window_active:
+                raise ValueError("未生成图纸时全窗口按钮不能扩展")
+            window.full_window_button.click()
             about = AboutDialog(window)
             expected_version = os.environ.get("REFRACDRAFT_EXPECTED_VERSION")
             version_label = about.findChild(QLabel, "versionLabel")
@@ -187,6 +197,12 @@ def main() -> None:
                 or window.output_panel.isHidden() or window.main_toolbar.isHidden()
                 or window.size() != normal_size):
                 raise ValueError("Esc 未还原预览窗口布局")
+            for _attempt in range(300):
+                if 1 in window._preview_images or window._preview_workers_failed:
+                    break
+                QTest.qWait(50)
+            if 1 not in window._preview_images:
+                raise ValueError("后台进程未生成第一页 PDF 预览")
             window.grab().save("RefracDraft-Standard-ui.png")
             trace.write_text("editor populated\n", encoding="utf-8")
             if len(window.rows) != 1:
@@ -237,6 +253,15 @@ def main() -> None:
                 raise ValueError("大小头参数未按 B2 示例载入")
             if not window._cell_bool(row, "anchor_enabled"):
                 raise ValueError("锚固件参数未按 B2 示例载入")
+            position_column = COLUMN_INDEX["anchor_position_mm"]
+            position_item = table.item(row, position_column)
+            saved_position = position_item.text()
+            position_item.setText(EQUAL_SEGMENTS)
+            display = QStyleOptionViewItem()
+            table.itemDelegate().initStyleOption(display, table.model().index(row, position_column))
+            if not display.text or not float(display.text) > 0 or position_item.text() != EQUAL_SEGMENTS:
+                raise ValueError("均分应保留计算模式，但位置单元格只显示数值")
+            position_item.setText(saved_position)
             if (
                 window._cell_text(row, "material") != "1430"
                 or window._cell_text(row, "production_quantity") != "26"

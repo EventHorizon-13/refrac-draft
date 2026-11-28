@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import json
+from multiprocessing import get_context
 import os
 from pathlib import Path
 import re
@@ -333,6 +335,7 @@ def _export_pdf_with_shx(
     bigfont: ShxFontInfo | None,
     built_in_font: Path | None,
     progress: Callable[[str], None],
+    workers: int,
 ) -> Path:
     node, script, exporter_dir = exporter
     staged_fonts = temp_dir / "fonts"
@@ -341,11 +344,10 @@ def _export_pdf_with_shx(
     if bigfont is not None:
         shutil.copyfile(bigfont.path, staged_fonts / "gbcbig.shx")
 
-    merged = pymupdf.open()
-    page_count = max(1, len(document.pages))
+    progress("正在准备各页 PDF 渲染任务…")
+    jobs = []
     for page_index, page_y in enumerate(page_model_origins(document)):
         denominator = document.pages[page_index].scale_denominator
-        progress(f"正在渲染 PDF {page_index + 1}/{page_count}…")
         page_dxf = _single_page_dxf(
             source_dxf,
             page_index,
@@ -370,6 +372,10 @@ def _export_pdf_with_shx(
             },
         }
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        jobs.append((manifest_path, page_pdf, denominator))
+
+    def render(job):
+        manifest_path, page_pdf, _denominator = job
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         result = subprocess.run(
             [str(node), str(script), "--manifest", str(manifest_path)],
@@ -386,21 +392,29 @@ def _export_pdf_with_shx(
             raise RuntimeError(f"PDF 渲染器执行失败：{detail or '未知错误'}")
         if not page_pdf.is_file() or page_pdf.stat().st_size < 8:
             raise RuntimeError("PDF 渲染器没有生成有效文件")
-        with pymupdf.open(page_pdf) as one_page:
-            _fix_shx_page_scale(one_page[0], denominator)
-            merged.insert_pdf(one_page)
+    if workers > 1 and len(jobs) > 1:
+        with ThreadPoolExecutor(max_workers=min(workers, len(jobs))) as pool:
+            for completed, future in enumerate(as_completed([pool.submit(render, job) for job in jobs]), 1):
+                future.result()
+                progress(f"正在渲染 PDF {completed}/{len(jobs)}…")
+    else:
+        for completed, job in enumerate(jobs, 1):
+            render(job)
+            progress(f"正在渲染 PDF {completed}/{len(jobs)}…")
 
-    merged.set_metadata(
-        {
+    temporary_pdf = temp_dir / "rendered-shx.pdf"
+    with pymupdf.open() as merged:
+        for _manifest_path, page_pdf, denominator in jobs:
+            with pymupdf.open(page_pdf) as one_page:
+                _fix_shx_page_scale(one_page[0], denominator)
+                merged.insert_pdf(one_page)
+        merged.set_metadata({
             "title": document.project_name,
             "author": "RefracDraft",
             "creator": "RefracDraft SHX renderer",
             "producer": "MLightCAD / PDF",
-        }
-    )
-    temporary_pdf = temp_dir / "rendered-shx.pdf"
-    merged.save(str(temporary_pdf), garbage=4, deflate=True)
-    merged.close()
+        })
+        merged.save(str(temporary_pdf), garbage=4, deflate=True)
     temporary_pdf.replace(output_path)
     return output_path
 
@@ -492,6 +506,45 @@ def _add_searchable_text_layer(page, document: DrawingDocument, page_index: int,
         y += 7.0
 
 
+def _load_render_dxf(source_dxf: Path, font_path: Path | None):
+    dxf = ezdxf.readfile(source_dxf)
+    _normalize_title_fonts(dxf)
+    if font_path is not None:
+        _fit_fallback_template_text(dxf, font_path)
+    return dxf
+
+
+def _render_page_batch(source_dxf, font_path, font_directory, pages, scratch):
+    dxf = _load_render_dxf(source_dxf, font_path)
+    rendered = {}
+    for page_index, denominator, page_y in pages:
+        destination = scratch / f"fallback-page-{page_index + 1}.pdf"
+        destination.write_bytes(_render_page(dxf, page_index, font_path, font_directory, denominator, page_y))
+        rendered[page_index] = destination
+    return rendered
+
+
+def _render_fallback_pages(source_dxf, font_path, font_directory, pages, workers, progress, scratch):
+    if workers < 2 or len(pages) < 2:
+        dxf = _load_render_dxf(source_dxf, font_path)
+        for completed, (page_index, denominator, page_y) in enumerate(pages, 1):
+            progress(f"正在渲染 PDF {completed}/{len(pages)}…")
+            yield _render_page(dxf, page_index, font_path, font_directory, denominator, page_y)
+        return
+    workers = min(workers, len(pages))
+    rendered = {}
+    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as pool:
+        batches = [pages[offset::workers] for offset in range(workers)]
+        for future in as_completed([
+            pool.submit(_render_page_batch, source_dxf, font_path, font_directory, batch, scratch)
+            for batch in batches
+        ]):
+            rendered.update(future.result())
+            progress(f"正在渲染 PDF {len(rendered)}/{len(pages)}…")
+    for page_index, _denominator, _page_y in pages:
+        yield rendered.pop(page_index).read_bytes()
+
+
 def export_pdf(
     document: DrawingDocument,
     output_path: str | Path,
@@ -504,6 +557,7 @@ def export_pdf(
     shx_font: str | Path | None = None,
     shx_bigfont: str | Path | None = None,
     progress: Callable[[str], None] | None = None,
+    workers: int = 1,
 ) -> Path:
     """Render a PDF from the same DXF that is exported to the customer.
 
@@ -549,40 +603,27 @@ def export_pdf(
                 bigfont_shx,
                 selected_font_path,
                 report,
+                workers,
             )
 
-        dxf = ezdxf.readfile(source_dxf)
-        _normalize_title_fonts(dxf)
-        if selected_font_path is not None:
-            _fit_fallback_template_text(dxf, selected_font_path)
-        merged = pymupdf.open()
-        for page_index, page_y in enumerate(page_model_origins(document)):
-            report(f"正在渲染 PDF {page_index + 1}/{len(document.pages)}…")
-            page_bytes = _render_page(
-                dxf,
-                page_index,
-                selected_font_path,
-                external_font_directory,
-                document.pages[page_index].scale_denominator,
-                page_y,
-            )
-            with pymupdf.open(stream=page_bytes, filetype="pdf") as one_page:
-                merged.insert_pdf(one_page)
-
-        for page_index, page in enumerate(merged):
-            _add_searchable_text_layer(page, document, page_index, selected_font_path)
-
-        merged.set_metadata(
-            {
+        pages = [(index, document.pages[index].scale_denominator, page_y)
+                 for index, page_y in enumerate(page_model_origins(document))]
+        temporary_pdf = Path(temp_dir) / "rendered.pdf"
+        with pymupdf.open() as merged:
+            for page_bytes in _render_fallback_pages(
+                source_dxf, selected_font_path, external_font_directory, pages, workers, report, Path(temp_dir)
+            ):
+                with pymupdf.open(stream=page_bytes, filetype="pdf") as one_page:
+                    merged.insert_pdf(one_page)
+            for page_index, page in enumerate(merged):
+                _add_searchable_text_layer(page, document, page_index, selected_font_path)
+            merged.set_metadata({
                 "title": document.project_name,
                 "author": "RefracDraft",
                 "creator": "RefracDraft DXF renderer",
                 "producer": "ezdxf / PyMuPDF",
-            }
-        )
-        temporary_pdf = Path(temp_dir) / "rendered.pdf"
-        merged.save(str(temporary_pdf), garbage=4, deflate=True)
-        merged.close()
+            })
+            merged.save(str(temporary_pdf), garbage=4, deflate=True)
         temporary_pdf.replace(output_path)
 
     return output_path

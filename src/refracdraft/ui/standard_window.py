@@ -1,22 +1,26 @@
 from __future__ import annotations
 
+from collections import OrderedDict
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime
+from multiprocessing import get_context
 from pathlib import Path
+from queue import Empty, SimpleQueue
 from tempfile import TemporaryDirectory
 import re
 
-import pymupdf
 from PySide6.QtCore import (
     QByteArray, QEvent, QEventLoop, QPersistentModelIndex, QPointF, QRect, QRegularExpression, QSettings, QSignalBlocker,
-    QStandardPaths, QTimer, Qt, Signal,
+    QStandardPaths, QTimer, Qt, QUrl, Signal,
 )
 from PySide6.QtGui import (
     QAction,
     QColor,
+    QDesktopServices,
     QDoubleValidator,
     QFont,
-    QImage,
+    QIcon,
     QInputMethodEvent,
     QIntValidator,
     QKeySequence,
@@ -79,6 +83,7 @@ from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.drawing.model import TAPER_LABEL_PATTERN, TAPER_LABEL_SCALE
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import export_pdf, shx_detail_measure
+from refracdraft.exporters.pdf_preview import render_pdf_preview
 from refracdraft.exporters.project import export_complete_project, project_output_paths
 from refracdraft.release import app_version
 from refracdraft.resources import application_directory
@@ -167,10 +172,11 @@ class OperationProgress(QDialog):
         self.show()
         QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
 
-    def update_stage(self, text: str, completed: int) -> None:
+    def update_stage(self, text: str, completed: int, *, pump: bool = True) -> None:
         self.label.setText(text)
         self.bar.setValue(completed)
-        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        if pump:
+            QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
 
     def advance(self, text: str) -> None:
         self.update_stage(text, self.bar.value() + 1)
@@ -181,6 +187,54 @@ class OperationProgress(QDialog):
 
 def _preset_button_rect(cell_rect: QRect) -> QRect:
     return QRect(cell_rect.right() - 15, cell_rect.top(), 16, cell_rect.height() - 7)
+
+
+_BACKGROUND_WORKER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="refracdraft")
+
+
+def _run_background(progress: OperationProgress, work):
+    updates = SimpleQueue()
+    loop = QEventLoop(progress)
+    timer = QTimer(loop)
+    timer.setInterval(30)
+    future = _BACKGROUND_WORKER.submit(work, updates.put)
+
+    def refresh():
+        while True:
+            try:
+                message = updates.get_nowait()
+            except Empty:
+                break
+            if progress.bar.value() >= progress.bar.maximum():
+                progress.bar.setMaximum(progress.bar.maximum() + 1)
+            progress.update_stage(message, progress.bar.value() + 1, pump=False)
+        if future.done():
+            timer.stop()
+            loop.quit()
+
+    timer.timeout.connect(refresh)
+    timer.start()
+    loop.exec(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+    return future.result()
+
+
+def _full_window_icon(button: QPushButton, active: bool) -> QIcon:
+    pixmap = QPixmap(16, 16)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(button.palette().color(QPalette.ColorRole.ButtonText), 1.4))
+    for left, top in ((True, True), (False, True), (True, False), (False, False)):
+        outer_x, outer_y = (2.5 if left else 13.5), (2.5 if top else 13.5)
+        inner_x, inner_y = (6 if left else 10), (6 if top else 10)
+        if active:
+            painter.drawLine(QPointF(outer_x, inner_y), QPointF(inner_x, inner_y))
+            painter.drawLine(QPointF(inner_x, inner_y), QPointF(inner_x, outer_y))
+        else:
+            painter.drawLine(QPointF(inner_x, outer_y), QPointF(outer_x, outer_y))
+            painter.drawLine(QPointF(outer_x, outer_y), QPointF(outer_x, inner_y))
+    painter.end()
+    return QIcon(pixmap)
 
 
 class OptionalNumberValidator(QDoubleValidator):
@@ -269,9 +323,10 @@ class ParameterDelegate(QStyledItemDelegate):
         super().initStyleOption(option, index)
         suggestion = index.data(AUTOMATIC_PREVIEW_ROLE)
         if suggestion is not None:
-            raw = index.data(Qt.ItemDataRole.DisplayRole)
-            option.text = f"{suggestion} · {EQUAL_SEGMENTS}" if raw == EQUAL_SEGMENTS else str(suggestion)
+            option.text = str(suggestion)
             option.font.setItalic(True)
+        elif index.column() == COLUMN_INDEX["anchor_position_mm"] and option.text == EQUAL_SEGMENTS:
+            option.text = ""
         if index.column() == COLUMN_INDEX["taper_type"] and TAPER_LABEL_PATTERN.fullmatch(option.text):
             option.font = self._larger_taper_font(option.font)
             color = self._taper_color(option)
@@ -850,6 +905,11 @@ class ParameterTable(QTableWidget):
 class StandardWindow(MainWindow):
     def __init__(self):
         self._preview_pdf: tuple[str | None, bytes] | None = None
+        self._preview_images = OrderedDict()
+        self._preview_jobs = {}
+        self._preview_pool = None
+        self._shown_preview_page = None
+        self._preview_workers_failed = False
         self._drawing_dirty = False
         self._full_window_active = False
         self._full_window_layout_state: dict[str, object] | None = None
@@ -860,10 +920,15 @@ class StandardWindow(MainWindow):
         self._redo_stack: list[TableState] = []
         self._history_state: TableState | None = None
         super().__init__()
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setInterval(35)
+        self._preview_timer.timeout.connect(self._collect_preview_pages)
         self._exit_full_window_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
         self._exit_full_window_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
         self._exit_full_window_shortcut.activated.connect(self._exit_preview_full_window)
         self._exit_full_window_shortcut.setEnabled(False)
+        self._generate_shortcut = QShortcut(QKeySequence("F5"), self)
+        self._generate_shortcut.activated.connect(self.generate)
         self._history_ready = True
         self._reset_history()
         geometry = self._settings.value("window/geometry", QByteArray())
@@ -992,8 +1057,13 @@ class StandardWindow(MainWindow):
         self.browse_directory_button = QPushButton("选择")
         self.browse_directory_button.setFixedWidth(58)
         self.browse_directory_button.clicked.connect(self._choose_output_directory)
+        self.open_directory_button = QPushButton("打开")
+        self.open_directory_button.setFixedWidth(58)
+        self.open_directory_button.setToolTip("在文件管理器中打开工作目录")
+        self.open_directory_button.clicked.connect(self._open_output_directory)
         directory_row.addWidget(self.output_directory_edit, 1)
         directory_row.addWidget(self.browse_directory_button)
+        directory_row.addWidget(self.open_directory_button)
         output_layout.addLayout(directory_row)
 
         output_layout.addWidget(QLabel("自定义文件名"))
@@ -1014,7 +1084,6 @@ class StandardWindow(MainWindow):
 
         self.preview_button = QPushButton("预览")
         self.preview_button.setProperty("primary", True)
-        self.preview_button.setShortcut(QKeySequence("F5"))
         self.preview_button.setToolTip("生成或更新图纸预览 (F5)")
         self.preview_button.clicked.connect(self.generate)
         output_layout.addWidget(self.preview_button)
@@ -1065,13 +1134,12 @@ class StandardWindow(MainWindow):
         tools_layout.setContentsMargins(0, 0, 0, 0)
         tools_layout.setSpacing(6)
         tools_layout.addWidget(page_controls)
-        self.full_window_button = QPushButton("全窗口")
+        self.full_window_button = QPushButton()
         self.full_window_button.setObjectName("previewFullWindowButton")
-        self.full_window_button.setMinimumWidth(90)
-        self.full_window_button.setToolTip("在当前窗口内铺满图纸预览 (F11)")
+        self.full_window_button.setFixedSize(32, 30)
         self.full_window_button.setShortcut(QKeySequence("F11"))
-        self.full_window_button.setEnabled(False)
         self.full_window_button.clicked.connect(self._toggle_preview_full_window)
+        self._update_full_window_button()
         tools_layout.addWidget(self.full_window_button)
         canvas_layout.addWidget(
             preview_tools, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight
@@ -1151,37 +1219,36 @@ class StandardWindow(MainWindow):
     def _update_full_window_button(self) -> None:
         if not hasattr(self, "full_window_button"):
             return
-        ready = bool(self.drawing_document) and not self._drawing_dirty
-        self.full_window_button.setEnabled(ready or self._full_window_active)
-        self.full_window_button.setText("还原窗口" if self._full_window_active else "全窗口")
+        self.full_window_button.setIcon(_full_window_icon(self.full_window_button, self._full_window_active))
+        self.full_window_button.setAccessibleName("还原窗口" if self._full_window_active else "全窗口")
         self.full_window_button.setToolTip(
             "还原参数区和输出设置 (F11 / Esc)"
             if self._full_window_active
             else "在当前窗口内铺满图纸预览 (F11)"
         )
 
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.PaletteChange:
+            self._update_full_window_button()
+
     def _mark_preview_stale(self) -> None:
         self._drawing_dirty = True
-        self._update_full_window_button()
-        if self._full_window_active:
-            self._exit_preview_full_window()
 
     def _toggle_preview_full_window(self) -> None:
         if self._full_window_active:
             self._exit_preview_full_window()
-        elif bool(self.drawing_document) and not self._drawing_dirty:
-            self._enter_preview_full_window()
         else:
-            self.statusBar().showMessage("请先生成图纸预览，再切换到全窗口。")
+            self._enter_preview_full_window()
 
     def _enter_preview_full_window(self) -> None:
         if self._full_window_active:
             return
         self._full_window_layout_state = {
-            "toolbar": self.main_toolbar.isVisible(),
-            "status": self.statusBar().isVisible(),
-            "parameter": self.parameter_panel.isVisible(),
-            "output": self.output_panel.isVisible(),
+            "toolbar": not self.main_toolbar.isHidden(),
+            "status": not self.statusBar().isHidden(),
+            "parameter": not self.parameter_panel.isHidden(),
+            "output": not self.output_panel.isHidden(),
             "main_splitter": self.main_splitter.saveState(),
             "output_splitter": self.output_splitter.saveState(),
         }
@@ -1238,6 +1305,13 @@ class StandardWindow(MainWindow):
             self.output_directory_edit.setText(directory)
             self._save_output_settings()
 
+    def _open_output_directory(self) -> None:
+        directory = self._default_output_directory()
+        if not directory.is_dir():
+            QMessageBox.warning(self, "无法打开工作目录", f"目录不存在：\n{directory}")
+        elif not QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory.absolute()))):
+            QMessageBox.warning(self, "无法打开工作目录", str(directory))
+
     def _save_output_settings(self, *_args) -> None:
         if not hasattr(self, "output_directory_edit"):
             return
@@ -1256,6 +1330,10 @@ class StandardWindow(MainWindow):
     def closeEvent(self, event) -> None:
         if self._full_window_active:
             self._exit_preview_full_window()
+        self._reset_preview_pdf()
+        if self._preview_pool is not None:
+            self._preview_pool.shutdown(wait=False, cancel_futures=True)
+            self._preview_pool = None
         self._save_output_settings()
         self._settings.setValue("window/geometry", self.saveGeometry())
         self._settings.setValue("window/output_splitter", self.output_splitter.saveState())
@@ -1824,8 +1902,9 @@ class StandardWindow(MainWindow):
     def _populate_tables(self) -> None:
         ensure_standard_project(self.project)
         self.drawing_document = None
-        self._preview_pdf = None
+        self._reset_preview_pdf()
         self._mark_preview_stale()
+        self.preview.scene().clear()
         self.page_controls.hide()
         self._clear_rows()
         for module in self.project.modules:
@@ -1843,7 +1922,7 @@ class StandardWindow(MainWindow):
     def new_project(self) -> None:
         self.project = Project()
         self.drawing_document = None
-        self._preview_pdf = None
+        self._reset_preview_pdf()
         self._mark_preview_stale()
         self.preview.scene().clear()
         self.page_spin.setMaximum(1)
@@ -1884,39 +1963,49 @@ class StandardWindow(MainWindow):
         module_count = self.parameter_table.rowCount()
         progress = OperationProgress(self, "正在整理参数…", module_count + 4)
         try:
-            self.project = self._collect_project()
-            progress.advance("正在读取参考图块…")
-            library = ReferenceLibrary(self.reference_dxf) if self.reference_dxf.exists() else None
+            project = self._collect_project()
             font_directory = self._pdf_font_directory()
-            progress.advance(f"正在生成模块视图 0/{module_count}…")
-            self.drawing_document = DrawingGenerator(library).generate(
-                self.project,
-                measure_detail=shx_detail_measure(font_directory),
-                on_module_drawn=lambda count: progress.advance(
-                    f"正在生成模块视图 {count}/{module_count}…"
-                    if count < module_count else "正在排版…"
-                ),
-            )
-            self.drawing_document = replace(self.drawing_document, filename_label=self._filename_label())
+            label = self._filename_label()
+            reference = self.reference_dxf if self.reference_dxf.exists() else None
+
+            def work(report):
+                report("正在读取参考图块…")
+                library = ReferenceLibrary(reference) if reference else None
+                report(f"正在生成模块视图 0/{module_count}…")
+                drawing = DrawingGenerator(library).generate(
+                    project,
+                    measure_detail=shx_detail_measure(font_directory),
+                    on_module_drawn=lambda count: report(
+                        f"正在生成模块视图 {count}/{module_count}…"
+                        if count < module_count else "正在排版…"
+                    ),
+                )
+                drawing = replace(drawing, filename_label=label)
+                report("正在准备 PDF 预览…")
+                try:
+                    with TemporaryDirectory(prefix="refracdraft-preview-") as directory:
+                        path = export_pdf(
+                            drawing, Path(directory) / "preview.pdf", reference_dxf=reference,
+                            font_directory=font_directory, progress=report, workers=2,
+                        )
+                        return drawing, path.read_bytes(), None
+                except Exception as exc:
+                    return drawing, None, f"暂用绘图预览，PDF 预览生成失败：{exc}"
+
+            self.drawing_document, pdf_bytes, warning = _run_background(progress, work)
+            self.project = project
             self._drawing_dirty = False
-            self._preview_pdf = None
-            progress.bar.setMaximum(module_count + len(self.drawing_document.pages) + 5)
-            progress.advance("正在准备 PDF 预览…")
+            self._reset_preview_pdf(
+                (font_directory, pdf_bytes) if pdf_bytes is not None else None
+            )
             with QSignalBlocker(self.page_spin):
                 self.page_spin.setMaximum(max(1, len(self.drawing_document.pages)))
                 self.page_spin.setValue(1)
             self.page_controls.setVisible(len(self.drawing_document.pages) > 1)
             warnings = list(self.drawing_document.warnings)
-            try:
-                with TemporaryDirectory(prefix="refracdraft-preview-") as directory:
-                    path = self._render_pdf(Path(directory) / "preview.pdf", font_directory, progress)
-                    self._preview_pdf = (font_directory, path.read_bytes())
-                self._show_selected_page(1)
-            except Exception as exc:
-                self._preview_pdf = None
-                self._show_selected_page(1)
-                warnings.append(f"暂用绘图预览，PDF 预览生成失败：{exc}")
-            self._update_full_window_button()
+            self._show_selected_page(1)
+            if warning:
+                warnings.append(warning)
             progress.finish("图纸已生成")
             self.statusBar().showMessage("图纸已生成" + ("；" + "；".join(warnings) if warnings else ""))
         except Exception as exc:
@@ -1926,17 +2015,72 @@ class StandardWindow(MainWindow):
             progress.hide()
             progress.deleteLater()
 
+    def _reset_preview_pdf(self, pdf=None) -> None:
+        self._preview_pdf = pdf
+        for future in self._preview_jobs.values():
+            future.cancel()
+        self._preview_jobs.clear()
+        self._preview_images.clear()
+        self._shown_preview_page = None
+        if hasattr(self, "_preview_timer"):
+            self._preview_timer.stop()
+
     def _show_selected_page(self, value: int) -> None:
-        if self._preview_pdf is None:
+        if self._preview_pdf is None or not self.drawing_document or self._preview_workers_failed:
             super()._show_selected_page(value)
             return
-        with pymupdf.open(stream=self._preview_pdf[1], filetype="pdf") as pdf:
-            page = pdf[value - 1].get_pixmap(dpi=180, alpha=False)
-            samples = page.samples
-            image = QImage(
-                samples, page.width, page.height, page.stride, QImage.Format.Format_RGB888
-            )
-            self.preview.show_page_image(QPixmap.fromImage(image))
+        if value != self._shown_preview_page:
+            if value in self._preview_images:
+                self._preview_images.move_to_end(value)
+                self.preview.show_page_image(self._preview_images[value])
+            else:
+                self.preview.scene().clear()
+            self._shown_preview_page = value
+        page_count = len(self.drawing_document.pages)
+        try:
+            if self._preview_pool is None:
+                self._preview_pool = ProcessPoolExecutor(max_workers=2, mp_context=get_context("spawn"))
+            for page in (value, value + 1, value - 1):
+                if len(self._preview_jobs) >= 2:
+                    break
+                if 1 <= page <= page_count and page not in self._preview_images and page not in self._preview_jobs:
+                    self._preview_jobs[page] = self._preview_pool.submit(render_pdf_preview, self._preview_pdf[1], page - 1)
+        except (OSError, RuntimeError) as exc:
+            self._disable_preview_workers(exc)
+        if self._preview_jobs and not self._preview_timer.isActive():
+            self._preview_timer.start()
+
+    def _disable_preview_workers(self, error: Exception) -> None:
+        pdf = self._preview_pdf
+        self._reset_preview_pdf()
+        self._preview_pdf = pdf
+        self._shown_preview_page = self.page_spin.value()
+        self._preview_workers_failed = True
+        super()._show_selected_page(self.page_spin.value())
+        self.statusBar().showMessage(f"暂用绘图预览：{error}")
+
+    def _collect_preview_pages(self) -> None:
+        current = self.page_spin.value()
+        for page, future in tuple(self._preview_jobs.items()):
+            if not future.done():
+                continue
+            del self._preview_jobs[page]
+            try:
+                pixmap = QPixmap()
+                if not pixmap.loadFromData(future.result()):
+                    raise ValueError("无法读取预览页面")
+            except Exception as exc:
+                self._disable_preview_workers(exc)
+                return
+            self._preview_images[page] = pixmap
+            self._preview_images.move_to_end(page)
+            if len(self._preview_images) > 6:
+                self._preview_images.popitem(last=False)
+            if page == current:
+                self.preview.show_page_image(pixmap)
+        self._show_selected_page(current)
+        if not self._preview_jobs:
+            self._preview_timer.stop()
 
     def _pdf_font_directory(self) -> str | None:
         directory = application_directory() / "fonts"
@@ -1949,13 +2093,11 @@ class StandardWindow(MainWindow):
         drawing = self.drawing_document
         if filename_label is not None:
             drawing = replace(drawing, filename_label=filename_label)
-        return export_pdf(
-            drawing,
-            path,
-            reference_dxf=self.reference_dxf,
-            font_directory=font_directory,
-            progress=progress.advance,
-        )
+        reference = self.reference_dxf
+        return _run_background(progress, lambda report: export_pdf(
+            drawing, path, reference_dxf=reference, font_directory=font_directory,
+            progress=report, workers=2,
+        ))
 
     def export_dxf_file(self) -> None:
         if self._drawing_dirty or not self.drawing_document:
@@ -1970,7 +2112,9 @@ class StandardWindow(MainWindow):
             path.parent.mkdir(parents=True, exist_ok=True)
             progress.advance("正在写入 DXF…")
             label = path.stem if self.print_filename_check.isChecked() else ""
-            export_dxf(replace(self.drawing_document, filename_label=label), path, self.reference_dxf)
+            drawing = replace(self.drawing_document, filename_label=label)
+            reference = self.reference_dxf
+            _run_background(progress, lambda _report: export_dxf(drawing, path, reference))
             progress.finish("DXF 已导出")
             self.statusBar().showMessage(f"DXF 已导出：{path}")
         except Exception as exc:
@@ -2003,7 +2147,7 @@ class StandardWindow(MainWindow):
             else:
                 self._render_pdf(path, font_directory, progress, filename_label=label)
                 if same_label:
-                    self._preview_pdf = (font_directory, path.read_bytes())
+                    self._reset_preview_pdf((font_directory, path.read_bytes()))
                     self._show_selected_page(self.page_spin.value())
             progress.finish("PDF 已导出")
             self.statusBar().showMessage(f"PDF 已导出：{path}")
@@ -2032,14 +2176,19 @@ class StandardWindow(MainWindow):
             project = self._collect_project()
             progress.advance("正在读取参考图块…")
             reference = self.reference_dxf if self.reference_dxf.exists() else None
-            library = ReferenceLibrary(reference) if reference else None
             progress.advance("正在生成模块图纸…")
             font_directory = self._pdf_font_directory()
-            drawing = DrawingGenerator(library).generate(project, measure_detail=shx_detail_measure(font_directory))
-            drawing = replace(drawing, filename_label=self._filename_label())
-            progress.bar.setMaximum(6 + len(drawing.pages))
-            export_complete_project(project, drawing, path, reference_dxf=reference,
-                                    font_directory=font_directory, progress=progress.advance)
+            label = self._filename_label()
+
+            def work(report):
+                library = ReferenceLibrary(reference) if reference else None
+                drawing = DrawingGenerator(library).generate(project, measure_detail=shx_detail_measure(font_directory))
+                export_complete_project(
+                    project, replace(drawing, filename_label=label), path, reference_dxf=reference,
+                    font_directory=font_directory, progress=report, pdf_workers=2,
+                )
+
+            _run_background(progress, work)
             progress.finish("完整项目已导出")
             self.statusBar().showMessage(f"完整项目已导出到：{path.parent}")
         except Exception as exc:
