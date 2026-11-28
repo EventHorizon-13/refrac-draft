@@ -669,6 +669,7 @@ def export_pdf(
     page_progress: Callable[[int, int], None] | None = None,
     workers: int = 1,
     page_cache: PdfPageCache | None = None,
+    reference_document: ezdxf.document.Drawing | None = None,
 ) -> Path:
     """Render a PDF from the same DXF that is exported to the customer.
 
@@ -730,14 +731,21 @@ def export_pdf(
             saved_bytes += len(data)
 
     page_count = len(document.pages)
+    missing_pages = tuple(index for index in range(page_count) if index not in reused)
     if reused:
         report(f"复用 {len(reused)} 页 PDF，待渲染 {page_count - len(reused)} 页…")
 
     with TemporaryDirectory(prefix="refracdraft-pdf-", dir=output_path.parent) as temp_dir:
-        if source_dxf is None and (not reused or len(reused) < page_count):
-            report("正在生成与 PDF 同源的 DXF…")
+        if source_dxf is None and (not reused or missing_pages):
+            if reused:
+                report(f"正在准备改动页的 DXF（{len(missing_pages)}/{page_count} 页）…")
+            else:
+                report("正在生成与 PDF 同源的 DXF…")
             source_dxf = Path(temp_dir) / "drawing.dxf"
-            export_dxf(document, source_dxf, reference)
+            export_dxf(
+                document, source_dxf, reference,
+                page_indices=missing_pages if reused else None, reference_document=reference_document,
+            )
         elif source_dxf is not None and not source_dxf.is_file():
             raise FileNotFoundError(f"DXF 文件不存在: {source_dxf}")
 

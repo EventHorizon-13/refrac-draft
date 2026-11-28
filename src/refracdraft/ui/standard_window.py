@@ -2080,12 +2080,13 @@ class StandardWindow(MainWindow):
                 reused = generator.reused_module_count
                 drawing = replace(drawing, filename_label=label)
                 report("正在准备 PDF 预览…")
+                library = generator.reference_library
                 try:
                     with TemporaryDirectory(prefix="refracdraft-preview-") as directory:
                         path = export_pdf(
                             drawing, Path(directory) / "preview.pdf", reference_dxf=reference,
                             font_directory=font_directory, progress=report, workers=2, page_progress=report_pages,
-                            page_cache=self._pdf_page_cache,
+                            page_cache=self._pdf_page_cache, reference_document=library.doc if library else None,
                         )
                         return drawing, path.read_bytes(), None, reused, self._pdf_page_cache.reused_page_count
                 except Exception as exc:

@@ -1335,12 +1335,12 @@ def test_preview_pdf_cache_renders_only_changed_pages_when_pagination_matches(mo
     monkeypatch.setattr(exporter, "_reference_dxf_path", lambda *_args: None)
     monkeypatch.setattr(exporter, "_add_searchable_text_layer", lambda *_args: None)
     monkeypatch.setattr(exporter, "_render_fallback_pages", render)
-    monkeypatch.setattr(exporter, "export_dxf", lambda *_args: dxf_writes.append(True))
+    monkeypatch.setattr(exporter, "export_dxf", lambda *_args, **kwargs: dxf_writes.append(kwargs["page_indices"]))
 
     path = tmp_path / "preview.pdf"
     export_pdf(initial, path, page_cache=cache)
     assert rendered == [0, 1]
-    assert len(dxf_writes) == 1
+    assert dxf_writes == [None]
 
     rendered.clear()
     changed = first.model_copy(update={"source_note": "新备注"})
@@ -1354,7 +1354,7 @@ def test_preview_pdf_cache_renders_only_changed_pages_when_pagination_matches(mo
     rendered.clear()
     export_pdf(revised, path, page_cache=cache)
     assert rendered == []
-    assert len(dxf_writes) == 2
+    assert dxf_writes == [None, (0,)]
     assert cache.reused_page_count == 2
 
     font.write_bytes(b"changed")
@@ -1366,6 +1366,28 @@ def test_preview_pdf_cache_renders_only_changed_pages_when_pagination_matches(mo
     export_pdf(shuffled, path, page_cache=cache)
     assert rendered == [0, 1]
     assert cache.reused_page_count == 0
+
+
+def test_partial_dxf_writes_only_selected_page_at_original_origin_and_scale(tmp_path):
+    first = build_standard_module(None, StandardModuleValues("PAGE1", 300, 300, 230))
+    second = build_standard_module(None, StandardModuleValues("PAGE2", 4700, 300, 230))
+    drawing = DrawingGenerator().generate(Project(modules=[first, second]))
+    reference = ezdxf.new("R2018")
+    frame = reference.blocks.new("图框-A4")
+    frame.add_line((0, 0), (297, 210))
+    path = export_dxf(
+        drawing, tmp_path / "partial.dxf", page_indices=(1,), reference_document=reference,
+    )
+    modelspace = ezdxf.readfile(path).modelspace()
+    labels = {entity.dxf.text for entity in modelspace.query("TEXT")}
+    assert "第2页 共2页" in labels and "第1页 共2页" not in labels
+    assert "PAGE2" in labels and "PAGE1" not in labels
+    frame_ref, = modelspace.query('INSERT[name=="图框-A4"]')
+    assert frame_ref.dxf.insert.y == page_model_origins(drawing)[1]
+    assert frame_ref.dxf.xscale == 20
+    assert any(dim.dxf.dimstyle == "_20" and dim.get_measurement() == 4700
+               for dim in modelspace.query("DIMENSION"))
+    assert len(frame) == 1
 
 
 def test_shx_pdf_keeps_full_a4_frame_when_renderer_zooms_to_module():

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 
 from pathlib import Path
 
@@ -274,8 +274,17 @@ def _add_view(msp, view: ViewDrawing, origin: tuple[float, float], module_id: st
     ).set_placement(label_point, align=alignment)
 
 
-def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf: str | Path | None = None) -> Path:
+def export_dxf(
+    document: DrawingDocument, output_path: str | Path, reference_dxf: str | Path | None = None,
+    *, page_indices: Collection[int] | None = None,
+    reference_document: ezdxf.document.Drawing | None = None,
+) -> Path:
     output_path = Path(output_path)
+    origins = page_model_origins(document)
+    indices = range(len(document.pages)) if page_indices is None else sorted(set(page_indices))
+    if any(index < 0 or index >= len(document.pages) for index in indices):
+        raise IndexError("DXF 页索引超出图纸范围")
+    pages = [(document.pages[index], origins[index]) for index in indices]
     doc = ezdxf.new("R2018")
     doc.units = ezdxf.units.MM
     doc.header["$MEASUREMENT"] = 1
@@ -287,19 +296,20 @@ def export_dxf(document: DrawingDocument, output_path: str | Path, reference_dxf
     _ensure_text_styles(doc)
 
     # Import the original A4 frame and title block definitions without modifying the source.
-    source = None
-    if reference_dxf and Path(reference_dxf).exists():
+    source = reference_document
+    if source is None and reference_dxf and Path(reference_dxf).exists():
         source = ezdxf.readfile(reference_dxf)
+    if source is not None:
         importer = Importer(source, doc)
         for block_name in ("图框-A4", "标题栏"):
             if block_name in source.blocks:
                 importer.import_block(block_name, rename=False)
         importer.finalize()
-    for denominator in {page.scale_denominator for page in document.pages} or {MODEL_SCALE}:
+    for denominator in {page.scale_denominator for page, _origin in pages} or {MODEL_SCALE}:
         _ensure_dimension_style(doc, source, int(denominator))
 
     msp = doc.modelspace()
-    for page, page_y in zip(document.pages, page_model_origins(document)):
+    for page, page_y in pages:
         denominator = page.scale_denominator
         if "图框-A4" in doc.blocks:
             msp.add_blockref(
