@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, as_completed, wait
-from dataclasses import dataclass
+from contextlib import closing, nullcontext
+from dataclasses import dataclass, replace
 import json
 from multiprocessing import get_context
 import os
@@ -22,8 +23,10 @@ from ezdxf.fonts import fonts
 from ezdxf.fonts.shapefile import GlyphCache, ShapeFileException, readfile as read_shx
 from ezdxf.math import BoundingBox2d
 
-from refracdraft.drawing.layout import DETAIL_TEXT_SIZE_MM, PAGE_WIDTH_MM, PAGE_HEIGHT_MM, PAGE_STRIDE_MM, page_model_origins
-from refracdraft.drawing.model import DrawingDocument
+from refracdraft.drawing.layout import (
+    DETAIL_TEXT_SIZE_MM, PAGE_WIDTH_MM, PAGE_HEIGHT_MM, PAGE_STRIDE_MM, detail_lines, page_model_origins,
+)
+from refracdraft.drawing.model import DrawingDocument, SheetPage
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.resources import resource_path
 
@@ -213,6 +216,44 @@ def _pdf_exporter_paths() -> tuple[Path, Path, Path] | None:
     return None
 
 
+class PdfPageCache:
+    def __init__(self, byte_limit: int = 48 * 1024 * 1024):
+        self.byte_limit = byte_limit
+        self.context: tuple | None = None
+        self.pages: dict[int, tuple[tuple, bytes]] = {}
+        self.reused_page_indices: tuple[int, ...] = ()
+
+    @property
+    def reused_page_count(self) -> int:
+        return len(self.reused_page_indices)
+
+
+def _pdf_page_keys(document: DrawingDocument) -> tuple[tuple[SheetPage, tuple], ...]:
+    return tuple((
+        replace(page, modules=tuple(replace(placed, measure_detail=None) for placed in page.modules)),
+        tuple(tuple(detail_lines(placed)) for placed in page.modules),
+    ) for page in document.pages)
+
+
+def _render_input_stamp(path: Path | None):
+    if path is None:
+        return None
+    info = path.stat()
+    return path.resolve(), info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def _pdf_cache_context(document, reference, font, font_directory, main_shx, bigfont_shx, exporter):
+    layout = tuple(
+        (page.page_number, page.scale_denominator, tuple(placed.drawing.module_id for placed in page.modules))
+        for page in document.pages
+    )
+    external_fonts = _fonts_in_directory(font_directory) if font_directory else ()
+    files = (reference, font, main_shx.path if main_shx else None, bigfont_shx.path if bigfont_shx else None)
+    renderer = exporter[:2] if main_shx and exporter else ()
+    return (document.project_name, document.filename_label, layout, font_directory,
+            tuple(_render_input_stamp(path) for path in (*files, *external_fonts, *renderer)))
+
+
 def _apply_shx_text_style(doc, has_bigfont: bool) -> None:
     for style in doc.styles:
         style.dxf.font = "gbenor.shx"
@@ -343,7 +384,7 @@ def _fix_shx_page_scale(page: pymupdf.Page, denominator: int = MODEL_SCALE) -> N
 def _export_pdf_with_shx(
     document: DrawingDocument,
     output_path: Path,
-    source_dxf: Path,
+    source_dxf: Path | None,
     temp_dir: Path,
     exporter: tuple[Path, Path, Path],
     main_font: ShxFontInfo,
@@ -352,31 +393,36 @@ def _export_pdf_with_shx(
     progress: Callable[[str], None],
     workers: int,
     page_progress: Callable[[int, int], None],
+    cached_pages: dict[int, bytes] | None = None,
+    keep_page: Callable[[int, bytes], None] | None = None,
 ) -> Path:
     node, script, exporter_dir = exporter
-    staged_fonts = temp_dir / "fonts"
-    staged_fonts.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(main_font.path, staged_fonts / "gbenor.shx")
-    if bigfont is not None:
-        shutil.copyfile(bigfont.path, staged_fonts / "gbcbig.shx")
-
+    reused = cached_pages or {}
     origins = page_model_origins(document)
     page_count = len(origins)
+    missing = [index for index in range(page_count) if index not in reused]
 
     def prepare_pages():
-        if not origins:
+        if not missing:
             return
+        assert source_dxf is not None
+        staged_fonts = temp_dir / "fonts"
+        staged_fonts.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(main_font.path, staged_fonts / "gbenor.shx")
+        if bigfont is not None:
+            shutil.copyfile(bigfont.path, staged_fonts / "gbcbig.shx")
         progress("正在分析 DXF 图元范围…")
         page_doc = ezdxf.readfile(source_dxf)
         bounds = _dxf_vertical_bounds(page_doc)
-        for number, (page, page_y) in enumerate(zip(document.pages, origins), 1):
+        for offset, index in enumerate(missing):
+            number = index + 1
             progress(f"正在准备第 {number}/{page_count} 页 DXF…")
-            if number > 1:
+            if offset:
                 page_doc = ezdxf.readfile(source_dxf)
-            denominator = page.scale_denominator
+            denominator = document.pages[index].scale_denominator
             page_dxf = _write_shx_page_dxf(
                 page_doc, temp_dir / f"page-{number}.dxf", bigfont is not None,
-                denominator, page_y, bounds,
+                denominator, origins[index], bounds,
             )
             page_pdf = temp_dir / f"page-{number}.pdf"
             manifest_path = temp_dir / f"page-{number}.json"
@@ -394,10 +440,10 @@ def _export_pdf_with_shx(
                 },
             }
             manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
-            yield manifest_path, page_pdf, denominator
+            yield index, manifest_path, page_pdf
 
     def render(job):
-        manifest_path, page_pdf, _denominator = job
+        _index, manifest_path, page_pdf = job
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         result = subprocess.run(
             [str(node), str(script), "--manifest", str(manifest_path)],
@@ -415,14 +461,16 @@ def _export_pdf_with_shx(
         if not page_pdf.is_file() or page_pdf.stat().st_size < 8:
             raise RuntimeError("PDF 渲染器没有生成有效文件")
 
-    jobs = []
-    completed = 0
-    if workers > 1 and page_count > 1:
-        with ThreadPoolExecutor(max_workers=min(workers, page_count)) as pool:
+    jobs = {}
+    completed = len(reused)
+    if not missing:
+        page_progress(completed, page_count)
+    elif workers > 1 and len(missing) > 1:
+        with ThreadPoolExecutor(max_workers=min(workers, len(missing))) as pool:
             pending = set()
             for job in prepare_pages():
                 if not jobs:
-                    page_progress(0, page_count)
+                    page_progress(completed, page_count)
                 if pending:
                     done, pending = wait(
                         pending, timeout=None if len(pending) >= workers else 0, return_when=FIRST_COMPLETED
@@ -431,26 +479,35 @@ def _export_pdf_with_shx(
                         future.result()
                         completed += 1
                         page_progress(completed, page_count)
-                jobs.append(job)
+                jobs[job[0]] = job[2]
                 pending.add(pool.submit(render, job))
             for future in as_completed(pending):
                 future.result()
                 completed += 1
                 page_progress(completed, page_count)
     else:
-        for completed, job in enumerate(prepare_pages(), 1):
+        for job in prepare_pages():
             if not jobs:
-                page_progress(0, page_count)
-            jobs.append(job)
+                page_progress(completed, page_count)
+            jobs[job[0]] = job[2]
             render(job)
+            completed += 1
             page_progress(completed, page_count)
 
     progress("正在合并并保存 PDF…")
     temporary_pdf = temp_dir / "rendered-shx.pdf"
     with pymupdf.open() as merged:
-        for _manifest_path, page_pdf, denominator in jobs:
-            with pymupdf.open(page_pdf) as one_page:
-                _fix_shx_page_scale(one_page[0], denominator)
+        for index, page in enumerate(document.pages):
+            if index in reused:
+                one_page = pymupdf.open(stream=reused[index], filetype="pdf")
+            elif keep_page is not None:
+                data = jobs[index].read_bytes()
+                keep_page(index, data)
+                one_page = pymupdf.open(stream=data, filetype="pdf")
+            else:
+                one_page = pymupdf.open(jobs[index])
+            with one_page:
+                _fix_shx_page_scale(one_page[0], page.scale_denominator)
                 merged.insert_pdf(one_page)
         merged.set_metadata({
             "title": document.project_name,
@@ -611,6 +668,7 @@ def export_pdf(
     progress: Callable[[str], None] | None = None,
     page_progress: Callable[[int, int], None] | None = None,
     workers: int = 1,
+    page_cache: PdfPageCache | None = None,
 ) -> Path:
     """Render a PDF from the same DXF that is exported to the customer.
 
@@ -638,16 +696,53 @@ def export_pdf(
     if main_shx is not None and exporter is None:
         raise RuntimeError("PDF SHX 渲染器未随程序打包，请完整解压便携版后重试。")
 
+    reference = _reference_dxf_path(reference_dxf) if source_dxf is None else None
+    context = None
+    keys = ()
+    reused = {}
+    saved = {}
+    saved_bytes = 0
+    if page_cache is not None:
+        page_cache.reused_page_indices = ()
+    if page_cache is not None and source_dxf is None:
+        try:
+            context = _pdf_cache_context(
+                document, reference, selected_font_path, external_font_directory, main_shx, bigfont_shx, exporter
+            )
+        except OSError:
+            page_cache = None
+        else:
+            keys = _pdf_page_keys(document)
+            if context == page_cache.context:
+                for index, key in enumerate(keys):
+                    entry = page_cache.pages.get(index)
+                    if entry is not None and entry[0] == key:
+                        reused[index] = entry[1]
+                        saved[index] = entry
+                        saved_bytes += len(entry[1])
+    else:
+        page_cache = None
+
+    def retain(index: int, data: bytes) -> None:
+        nonlocal saved_bytes
+        if page_cache is not None and saved_bytes + len(data) <= page_cache.byte_limit:
+            saved[index] = keys[index], data
+            saved_bytes += len(data)
+
+    page_count = len(document.pages)
+    if reused:
+        report(f"复用 {len(reused)} 页 PDF，待渲染 {page_count - len(reused)} 页…")
+
     with TemporaryDirectory(prefix="refracdraft-pdf-", dir=output_path.parent) as temp_dir:
-        if source_dxf is None:
+        if source_dxf is None and (not reused or len(reused) < page_count):
             report("正在生成与 PDF 同源的 DXF…")
             source_dxf = Path(temp_dir) / "drawing.dxf"
-            export_dxf(document, source_dxf, _reference_dxf_path(reference_dxf))
-        elif not source_dxf.is_file():
+            export_dxf(document, source_dxf, reference)
+        elif source_dxf is not None and not source_dxf.is_file():
             raise FileNotFoundError(f"DXF 文件不存在: {source_dxf}")
 
         if main_shx is not None and exporter is not None:
-            return _export_pdf_with_shx(
+            _export_pdf_with_shx(
                 document,
                 output_path,
                 source_dxf,
@@ -659,27 +754,45 @@ def export_pdf(
                 report,
                 workers,
                 report_page,
+                reused,
+                retain if page_cache is not None else None,
             )
+        else:
+            pages = [(index, document.pages[index].scale_denominator, page_y)
+                     for index, page_y in enumerate(page_model_origins(document)) if index not in reused]
+            if pages:
+                assert source_dxf is not None
+                render_context = closing(_render_fallback_pages(
+                    source_dxf, selected_font_path, external_font_directory, pages, workers,
+                    lambda done, _total: report_page(done + len(reused), page_count), Path(temp_dir),
+                ))
+            else:
+                report_page(len(reused), page_count)
+                render_context = nullcontext(iter(()))
+            temporary_pdf = Path(temp_dir) / "rendered.pdf"
+            with render_context as rendered, pymupdf.open() as merged:
+                for index in range(page_count):
+                    if index in reused:
+                        page_bytes = reused[index]
+                    else:
+                        page_bytes = next(rendered)
+                        retain(index, page_bytes)
+                    with pymupdf.open(stream=page_bytes, filetype="pdf") as one_page:
+                        merged.insert_pdf(one_page)
+                report("正在保存 PDF…")
+                for page_index, page in enumerate(merged):
+                    _add_searchable_text_layer(page, document, page_index, selected_font_path)
+                merged.set_metadata({
+                    "title": document.project_name,
+                    "author": "RefracDraft",
+                    "creator": "RefracDraft DXF renderer",
+                    "producer": "ezdxf / PyMuPDF",
+                })
+                merged.save(str(temporary_pdf), garbage=4, deflate=True)
+            temporary_pdf.replace(output_path)
 
-        pages = [(index, document.pages[index].scale_denominator, page_y)
-                 for index, page_y in enumerate(page_model_origins(document))]
-        temporary_pdf = Path(temp_dir) / "rendered.pdf"
-        with pymupdf.open() as merged:
-            for page_bytes in _render_fallback_pages(
-                source_dxf, selected_font_path, external_font_directory, pages, workers, report_page, Path(temp_dir)
-            ):
-                with pymupdf.open(stream=page_bytes, filetype="pdf") as one_page:
-                    merged.insert_pdf(one_page)
-            report("正在保存 PDF…")
-            for page_index, page in enumerate(merged):
-                _add_searchable_text_layer(page, document, page_index, selected_font_path)
-            merged.set_metadata({
-                "title": document.project_name,
-                "author": "RefracDraft",
-                "creator": "RefracDraft DXF renderer",
-                "producer": "ezdxf / PyMuPDF",
-            })
-            merged.save(str(temporary_pdf), garbage=4, deflate=True)
-        temporary_pdf.replace(output_path)
-
+    if page_cache is not None:
+        page_cache.context = context
+        page_cache.pages = saved
+        page_cache.reused_page_indices = tuple(reused)
     return output_path

@@ -53,6 +53,7 @@ from refracdraft.reference.library import ReferenceLibrary
 from refracdraft.exporters.dxf import export_dxf
 from refracdraft.exporters.pdf import (
     PDF_FONT_CANDIDATES,
+    PdfPageCache,
     ShxFontInfo,
     _export_pdf_with_shx,
     _find_pdf_font,
@@ -60,6 +61,7 @@ from refracdraft.exporters.pdf import (
     _render_fallback_pages,
     _render_page,
     _single_page_dxf,
+    export_pdf,
 )
 from refracdraft.exporters.project import export_standard_excel
 from refracdraft.release import RELEASES_URL, latest_portable_release, portable_release_from_latest_url
@@ -613,6 +615,53 @@ def test_automatic_layout_keeps_panel_gaps_and_paginates():
             assert placed.content_x_mm <= placed.x_mm + placed.panel_width_mm - PANEL_INNER_MARGIN_MM
         for left, right in zip(page.modules, page.modules[1:]):
             assert left.x_mm + left.panel_width_mm <= right.x_mm
+
+
+def test_repeated_generation_rebuilds_only_changed_modules_and_keeps_fresh_pagination(monkeypatch):
+    first = build_standard_module(None, StandardModuleValues("A", 300, 300, 230))
+    second = build_standard_module(None, StandardModuleValues("B", 310, 300, 230))
+    project = Project(modules=[first, second])
+    generator = DrawingGenerator(reuse_modules=True)
+    original_build = generator.build_module
+    built = []
+
+    def record_build(project, module):
+        built.append(module.module_id)
+        return original_build(project, module)
+
+    monkeypatch.setattr(generator, "build_module", record_build)
+    initial_pages = generator.generate(project).pages
+    assert built == ["A", "B"]
+
+    built.clear()
+    assert generator.generate(project).pages == initial_pages
+    assert generator.reused_module_count == 2
+    assert built == []
+
+    long_module = build_standard_module(None, StandardModuleValues("B", 4700, 300, 230))
+    changed = Project(modules=[first, long_module])
+    result = generator.generate(changed)
+    assert built == ["B"]
+    assert generator.reused_module_count == 1
+    assert result == DrawingGenerator().generate(changed)
+    assert [page.scale_denominator for page in result.pages] == [10, 20]
+
+    built.clear()
+    board_changed = changed.model_copy(update={"boards": [BoardParameters(module_id="A", source_note="新夹板备注")]})
+    generator.generate(board_changed)
+    assert built == ["A"]
+
+    built.clear()
+    anchor = AnchorParameters(module_id="B", exists=False, count=0, source_note="新增锚固件备注")
+    anchor_changed = board_changed.model_copy(update={"anchors": [anchor]})
+    generator.generate(anchor_changed)
+    assert built == ["B"]
+
+    built.clear()
+    reordered = anchor_changed.model_copy(update={"modules": [long_module, first]})
+    assert generator.generate(reordered) == DrawingGenerator().generate(reordered)
+    assert generator.reused_module_count == 2
+    assert built == []
 
 
 def test_balanced_pages_do_not_leave_a_tiny_last_page():
@@ -1176,6 +1225,7 @@ def test_shx_reuses_bounds_and_starts_rendering_before_preparing_all_pages(monke
     font.write_bytes(b"test")
     first_started = Event()
     rendered = []
+    renderer_jobs = []
     plotted_pages = {}
     for number in (1, 2):
         with pymupdf.open() as pdf:
@@ -1195,6 +1245,7 @@ def test_shx_reuses_bounds_and_starts_rendering_before_preparing_all_pages(monke
         manifest = json.loads(Path(command[-1]).read_text(encoding="utf-8"))
         output = Path(manifest["output"])
         number = int(output.stem.removeprefix("page-"))
+        renderer_jobs.append(number)
         if number == 1:
             first_started.set()
         plot = ezdxf.readfile(manifest["inputs"][0])
@@ -1217,6 +1268,19 @@ def test_shx_reuses_bounds_and_starts_rendering_before_preparing_all_pages(monke
     )
     assert len(measured) == len(set(measured)) == 2
     assert rendered == [(0, 2), (1, 2), (2, 2)]
+    with pymupdf.open(output) as pdf:
+        assert [page.rect.width for page in pdf] == [101, 102]
+    assert sorted(renderer_jobs) == [1, 2]
+
+    rendered.clear()
+    renderer_jobs.clear()
+    _export_pdf_with_shx(
+        drawing, output, source, tmp_path, (source, source, tmp_path),
+        ShxFontInfo(font.name, font, False), None, None, lambda _message: None, 2,
+        lambda done, total: rendered.append((done, total)), {0: plotted_pages[1]},
+    )
+    assert renderer_jobs == [2]
+    assert rendered == [(1, 2), (2, 2)]
     with pymupdf.open(output) as pdf:
         assert [page.rect.width for page in pdf] == [101, 102]
 
@@ -1243,6 +1307,65 @@ def test_pdf_reports_completed_pages_only_after_rendering(monkeypatch, tmp_path)
     ))
     assert pages == [b"page 1", b"page 2"]
     assert events == [(0, 2), ("render", 0), (1, 2), ("render", 1), (2, 2)]
+
+
+def test_preview_pdf_cache_renders_only_changed_pages_when_pagination_matches(monkeypatch, tmp_path):
+    from refracdraft.exporters import pdf as exporter
+
+    first = build_standard_module(None, StandardModuleValues("A", 300, 300, 230))
+    second = build_standard_module(None, StandardModuleValues("B", 4700, 300, 230))
+    initial = DrawingGenerator().generate(Project(modules=[first, second]))
+    assert [page.scale_denominator for page in initial.pages] == [10, 20]
+    cache = PdfPageCache()
+    rendered = []
+    dxf_writes = []
+    font = tmp_path / "preview-font.otf"
+    font.write_bytes(b"first version")
+
+    def render(_source_dxf, _font, _font_directory, pages, _workers, report, _scratch):
+        report(0, len(pages))
+        for count, (index, _scale, _origin) in enumerate(pages, 1):
+            rendered.append(index)
+            with pymupdf.open() as pdf:
+                pdf.new_page(width=100 + index, height=100)
+                yield pdf.tobytes()
+            report(count, len(pages))
+
+    monkeypatch.setattr(exporter, "_find_pdf_font", lambda *_args: font)
+    monkeypatch.setattr(exporter, "_reference_dxf_path", lambda *_args: None)
+    monkeypatch.setattr(exporter, "_add_searchable_text_layer", lambda *_args: None)
+    monkeypatch.setattr(exporter, "_render_fallback_pages", render)
+    monkeypatch.setattr(exporter, "export_dxf", lambda *_args: dxf_writes.append(True))
+
+    path = tmp_path / "preview.pdf"
+    export_pdf(initial, path, page_cache=cache)
+    assert rendered == [0, 1]
+    assert len(dxf_writes) == 1
+
+    rendered.clear()
+    changed = first.model_copy(update={"source_note": "新备注"})
+    revised = DrawingGenerator().generate(Project(modules=[changed, second]))
+    export_pdf(revised, path, page_cache=cache)
+    assert rendered == [0]
+    assert cache.reused_page_count == 1
+    with pymupdf.open(path) as pdf:
+        assert [page.rect.width for page in pdf] == [100, 101]
+
+    rendered.clear()
+    export_pdf(revised, path, page_cache=cache)
+    assert rendered == []
+    assert len(dxf_writes) == 2
+    assert cache.reused_page_count == 2
+
+    font.write_bytes(b"changed")
+    export_pdf(revised, path, page_cache=cache)
+    assert rendered == [0, 1]
+    rendered.clear()
+
+    shuffled = DrawingGenerator().generate(Project(modules=[second, changed]))
+    export_pdf(shuffled, path, page_cache=cache)
+    assert rendered == [0, 1]
+    assert cache.reused_page_count == 0
 
 
 def test_shx_pdf_keeps_full_a4_frame_when_renderer_zooms_to_module():

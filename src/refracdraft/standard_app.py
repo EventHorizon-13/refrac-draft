@@ -10,6 +10,9 @@ def _smoke_test_welded_output(window) -> None:
 
     import ezdxf
     import pymupdf
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
 
     from refracdraft.domain.models import BoardFaceFeature, BoardFaceProfile, Project
     from refracdraft.drawing.generator import DrawingGenerator
@@ -18,6 +21,7 @@ def _smoke_test_welded_output(window) -> None:
     from refracdraft.exporters.pdf import export_pdf
     from refracdraft.reference.library import ReferenceLibrary
     from refracdraft.standard_sheet import DEFAULT_ROW, STANDARD_LINK_VERSION, build_standard_row
+    from refracdraft.ui.standard_window import COLUMN_INDEX
 
     common = {
         **DEFAULT_ROW, "anchor_enabled": True, "thread_spec": "M8",
@@ -100,6 +104,26 @@ def _smoke_test_welded_output(window) -> None:
             length_pt = 4700 / 20 * 72 / 25.4
             if not any(abs(path["rect"].width - length_pt) < 2 for path in pdf[1].get_drawings()):
                 raise ValueError("PDF 长模块的实际纸面比例不是 1:20")
+
+    window.drawing_document = drawing
+    window.page_spin.setMaximum(2)
+    window.page_spin.setValue(1)
+    window._show_selected_page(1)
+    table = window.parameter_table
+    id_column = COLUMN_INDEX["module_id"]
+    module_cell = table.item(1, id_column)
+    table.scrollToItem(module_cell)
+    QApplication.processEvents()
+    QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=table.visualItemRect(module_cell).center())
+    if window.page_spin.value() != 2 or window.preview._highlighted_module != "W2":
+        raise ValueError("点击编号未跳到 1:20 图页并高亮对应模块")
+    window.page_spin.setValue(1)
+    QApplication.processEvents()
+    preview = window.preview
+    panel = preview._panel_scene_rect(preview._module_panels["W1"])
+    QTest.mouseClick(preview.viewport(), Qt.MouseButton.LeftButton, pos=preview.mapFromScene(panel.center()))
+    if table.currentRow() != 0 or table.currentColumn() != id_column or preview._highlighted_module != "W1":
+        raise ValueError("点击预览未跳回对应参数行")
 
 
 def main() -> None:

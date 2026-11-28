@@ -11,8 +11,8 @@ from tempfile import TemporaryDirectory
 import re
 
 from PySide6.QtCore import (
-    QByteArray, QEvent, QEventLoop, QPersistentModelIndex, QPointF, QRect, QRegularExpression, QSettings, QSignalBlocker,
-    QStandardPaths, QTimer, Qt, QUrl, Signal,
+    QByteArray, QEvent, QEventLoop, QItemSelectionModel, QPersistentModelIndex, QPointF, QRect,
+    QRegularExpression, QSettings, QSignalBlocker, QStandardPaths, QTimer, Qt, QUrl, Signal,
 )
 from PySide6.QtGui import (
     QAction,
@@ -82,7 +82,7 @@ from refracdraft.domain.models import (
 from refracdraft.drawing.generator import DrawingGenerator
 from refracdraft.drawing.model import TAPER_LABEL_PATTERN, TAPER_LABEL_SCALE
 from refracdraft.exporters.dxf import export_dxf
-from refracdraft.exporters.pdf import export_pdf, shx_detail_measure
+from refracdraft.exporters.pdf import PdfPageCache, export_pdf, shx_detail_measure
 from refracdraft.exporters.pdf_preview import render_pdf_preview
 from refracdraft.exporters.project import export_complete_project, project_output_paths
 from refracdraft.release import app_version
@@ -931,6 +931,11 @@ class ParameterTable(QTableWidget):
 class StandardWindow(MainWindow):
     def __init__(self):
         self._preview_pdf: tuple[str | None, bytes] | None = None
+        self._pdf_page_cache = PdfPageCache()
+        self._preview_cache_pages = None
+        self._drawing_generator: DrawingGenerator | None = None
+        self._reference_key = None
+        self._focused_module_id: str | None = None
         self._preview_images = OrderedDict()
         self._preview_jobs = {}
         self._preview_pool = None
@@ -1055,6 +1060,8 @@ class StandardWindow(MainWindow):
         table.horizontalHeader().sectionDoubleClicked.connect(self._edit_whole_column)
         table.itemChanged.connect(self._table_item_changed)
         table.currentCellChanged.connect(self._current_cell_changed)
+        table.cellClicked.connect(self._locate_module_from_table)
+        table.horizontalHeaderItem(COLUMN_INDEX["module_id"]).setToolTip("点击编号可定位到图纸中的对应模块")
         table.changed.connect(self._table_bulk_changed)
         table.rowsRequired.connect(self._ensure_row_count)
         parameter_layout.addWidget(table)
@@ -1137,6 +1144,7 @@ class StandardWindow(MainWindow):
         self.preview = DrawingPreview()
         self.preview.page_step_requested.connect(self._preview_page_step)
         self.preview.zoom_requested.connect(self._preview_zoom)
+        self.preview.module_clicked.connect(self._locate_module_from_preview)
         self.preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         canvas_layout.addWidget(self.preview, 0, 0)
 
@@ -1928,9 +1936,48 @@ class StandardWindow(MainWindow):
         module_id = self._cell_text(current_row, "module_id") or f"第 {current_row + 1} 行"
         self.statusBar().showMessage(f"当前模块：{module_id}")
 
+    def _module_page(self, module_id: str | None) -> int | None:
+        if self.drawing_document and module_id:
+            for index, page in enumerate(self.drawing_document.pages, 1):
+                if any(placed.drawing.module_id == module_id for placed in page.modules):
+                    return index
+        return None
+
+    def _locate_module_from_table(self, row: int, column: int) -> None:
+        if column != COLUMN_INDEX["module_id"]:
+            return
+        if QApplication.keyboardModifiers() != Qt.KeyboardModifier.NoModifier:
+            return
+        module_id = self._cell_text(row, "module_id").strip()
+        page = self._module_page(module_id)
+        if page is None:
+            self.statusBar().showMessage("当前预览没有此模块，请先生成或更新预览。")
+            return
+        self._focused_module_id = module_id
+        self.preview.highlight_module(module_id)
+        self.page_spin.setValue(page)
+        self.statusBar().showMessage(f"模块 {module_id} · 第 {page} 页")
+
+    def _locate_module_from_preview(self, module_id: str) -> None:
+        table = self.parameter_table
+        column = COLUMN_INDEX["module_id"]
+        for row in range(table.rowCount()):
+            if self._cell_text(row, "module_id").strip() == module_id:
+                if self._full_window_active:
+                    self._exit_preview_full_window()
+                self._focused_module_id = module_id
+                self.preview.highlight_module(module_id)
+                table.setCurrentCell(row, column, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+                table.scrollToItem(table.item(row, column))
+                table.setFocus(Qt.FocusReason.MouseFocusReason)
+                self.statusBar().showMessage(f"模块 {module_id} · 第 {self.page_spin.value()} 页")
+                return
+        self.statusBar().showMessage(f"参数表已没有模块 {module_id}，请更新预览。")
+
     def _populate_tables(self) -> None:
         ensure_standard_project(self.project)
         self.drawing_document = None
+        self._focused_module_id = None
         self._reset_preview_pdf()
         self._mark_preview_stale()
         self.preview.scene().clear()
@@ -1951,6 +1998,7 @@ class StandardWindow(MainWindow):
     def new_project(self) -> None:
         self.project = Project()
         self.drawing_document = None
+        self._focused_module_id = None
         self._reset_preview_pdf()
         self._mark_preview_stale()
         self.preview.scene().clear()
@@ -1988,6 +2036,25 @@ class StandardWindow(MainWindow):
         ensure_standard_project(project)
         return project
 
+    def _get_drawing_generator(self, reference: Path | None) -> DrawingGenerator:
+        def stamp(path: Path):
+            try:
+                info = path.stat()
+            except FileNotFoundError:
+                return None
+            return info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+        key = None
+        if reference is not None:
+            candidate = reference.parent / "derived" / "quick_insert_opening_candidate.json"
+            key = reference, stamp(reference), stamp(candidate)
+        if self._drawing_generator is None or key != self._reference_key:
+            self._drawing_generator = DrawingGenerator(
+                ReferenceLibrary(reference) if reference else None, reuse_modules=True
+            )
+            self._reference_key = key
+        return self._drawing_generator
+
     def generate(self) -> None:
         module_count = self.parameter_table.rowCount()
         progress = OperationProgress(self, "正在整理参数…", module_count + 4, tracks_pdf=True)
@@ -1996,12 +2063,13 @@ class StandardWindow(MainWindow):
             font_directory = self._pdf_font_directory()
             label = self._filename_label()
             reference = self.reference_dxf if self.reference_dxf.exists() else None
+            previous_cache_pages = self._pdf_page_cache.pages
 
             def work(report, report_pages):
                 report("正在读取参考图块…")
-                library = ReferenceLibrary(reference) if reference else None
+                generator = self._get_drawing_generator(reference)
                 report(f"正在生成模块视图 0/{module_count}…")
-                drawing = DrawingGenerator(library).generate(
+                drawing = generator.generate(
                     project,
                     measure_detail=shx_detail_measure(font_directory),
                     on_module_drawn=lambda count: report(
@@ -2009,6 +2077,7 @@ class StandardWindow(MainWindow):
                         if count < module_count else "正在排版…"
                     ),
                 )
+                reused = generator.reused_module_count
                 drawing = replace(drawing, filename_label=label)
                 report("正在准备 PDF 预览…")
                 try:
@@ -2016,27 +2085,39 @@ class StandardWindow(MainWindow):
                         path = export_pdf(
                             drawing, Path(directory) / "preview.pdf", reference_dxf=reference,
                             font_directory=font_directory, progress=report, workers=2, page_progress=report_pages,
+                            page_cache=self._pdf_page_cache,
                         )
-                        return drawing, path.read_bytes(), None
+                        return drawing, path.read_bytes(), None, reused, self._pdf_page_cache.reused_page_count
                 except Exception as exc:
-                    return drawing, None, f"暂用绘图预览，PDF 预览生成失败：{exc}"
+                    return drawing, None, f"暂用绘图预览，PDF 预览生成失败：{exc}", reused, 0
 
-            self.drawing_document, pdf_bytes, warning = _run_background(progress, work)
+            self.drawing_document, pdf_bytes, warning, reused, reused_pages = _run_background(progress, work)
             self.project = project
             self._drawing_dirty = False
+            images = ()
+            if pdf_bytes is not None and self._preview_cache_pages is previous_cache_pages:
+                reused_numbers = {index + 1 for index in self._pdf_page_cache.reused_page_indices}
+                images = [(number, image) for number, image in self._preview_images.items() if number in reused_numbers]
             self._reset_preview_pdf(
                 (font_directory, pdf_bytes) if pdf_bytes is not None else None
             )
+            if pdf_bytes is not None and self._pdf_page_cache.pages is not previous_cache_pages:
+                self._preview_cache_pages = self._pdf_page_cache.pages
+                self._preview_images.update(images)
+            page = self._module_page(self._focused_module_id) or 1
             with QSignalBlocker(self.page_spin):
                 self.page_spin.setMaximum(max(1, len(self.drawing_document.pages)))
-                self.page_spin.setValue(1)
+                self.page_spin.setValue(page)
             self.page_controls.setVisible(len(self.drawing_document.pages) > 1)
             warnings = list(self.drawing_document.warnings)
-            self._show_selected_page(1)
+            self._show_selected_page(page)
             if warning:
                 warnings.append(warning)
             progress.finish("图纸已生成")
-            self.statusBar().showMessage("图纸已生成" + ("；" + "；".join(warnings) if warnings else ""))
+            summary = f"图纸已生成 · 复用 {reused}/{module_count} 个模块" if reused else "图纸已生成"
+            if reused_pages:
+                summary += f" · 复用 {reused_pages}/{len(self.drawing_document.pages)} 页 PDF"
+            self.statusBar().showMessage(summary + ("；" + "；".join(warnings) if warnings else ""))
         except Exception as exc:
             progress.hide()
             QMessageBox.critical(self, "生成失败", str(exc))
@@ -2046,24 +2127,29 @@ class StandardWindow(MainWindow):
 
     def _reset_preview_pdf(self, pdf=None) -> None:
         self._preview_pdf = pdf
+        self._preview_cache_pages = None
         for future in self._preview_jobs.values():
             future.cancel()
         self._preview_jobs.clear()
         self._preview_images.clear()
         self._shown_preview_page = None
+        self.preview.set_module_panels()
         if hasattr(self, "_preview_timer"):
             self._preview_timer.stop()
 
     def _show_selected_page(self, value: int) -> None:
         if self._preview_pdf is None or not self.drawing_document or self._preview_workers_failed:
             super()._show_selected_page(value)
+            self._set_preview_panels(value)
             return
         if value != self._shown_preview_page:
             if value in self._preview_images:
                 self._preview_images.move_to_end(value)
                 self.preview.show_page_image(self._preview_images[value])
+                self._set_preview_panels(value)
             else:
                 self.preview.scene().clear()
+                self.preview.set_module_panels()
             self._shown_preview_page = value
         page_count = len(self.drawing_document.pages)
         try:
@@ -2086,6 +2172,7 @@ class StandardWindow(MainWindow):
         self._shown_preview_page = self.page_spin.value()
         self._preview_workers_failed = True
         super()._show_selected_page(self.page_spin.value())
+        self._set_preview_panels(self.page_spin.value())
         self.statusBar().showMessage(f"暂用绘图预览：{error}")
 
     def _collect_preview_pages(self) -> None:
@@ -2107,9 +2194,15 @@ class StandardWindow(MainWindow):
                 self._preview_images.popitem(last=False)
             if page == current:
                 self.preview.show_page_image(pixmap)
+                self._set_preview_panels(page)
         self._show_selected_page(current)
         if not self._preview_jobs:
             self._preview_timer.stop()
+
+    def _set_preview_panels(self, value: int) -> None:
+        pages = self.drawing_document.pages if self.drawing_document else ()
+        self.preview.set_module_panels(pages[value - 1].modules if 1 <= value <= len(pages) else ())
+        self.preview.highlight_module(self._focused_module_id)
 
     def _pdf_font_directory(self) -> str | None:
         directory = application_directory() / "fonts"
@@ -2210,8 +2303,8 @@ class StandardWindow(MainWindow):
             label = self._filename_label()
 
             def work(report, report_pages):
-                library = ReferenceLibrary(reference) if reference else None
-                drawing = DrawingGenerator(library).generate(project, measure_detail=shx_detail_measure(font_directory))
+                generator = self._get_drawing_generator(reference)
+                drawing = generator.generate(project, measure_detail=shx_detail_measure(font_directory))
                 export_complete_project(
                     project, replace(drawing, filename_label=label), path, reference_dxf=reference,
                     font_directory=font_directory, progress=report, pdf_workers=2, pdf_page_progress=report_pages,

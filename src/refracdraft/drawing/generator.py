@@ -428,8 +428,10 @@ def _finish_view_linework(view: ViewDrawing, anchor_type: AnchorType) -> ViewDra
 
 
 class DrawingGenerator:
-    def __init__(self, reference_library: ReferenceLibrary | None = None):
+    def __init__(self, reference_library: ReferenceLibrary | None = None, *, reuse_modules: bool = False):
         self.reference_library = reference_library
+        self._module_cache: dict[str, tuple[tuple[str, str, str], ModuleDrawing]] | None = {} if reuse_modules else None
+        self.reused_module_count = 0
 
     def build_module(self, project: Project, module) -> ModuleDrawing:
         board = project.board_for(module.module_id)
@@ -947,8 +949,25 @@ class DrawingGenerator:
         measure_detail: Callable[[str], float] | None = None,
     ) -> DrawingDocument:
         drawings = []
+        previous = self._module_cache
+        current = {}
+        reused = 0
         for count, module in enumerate(project.modules, start=1):
-            original = self.build_module(project, module)
+            if previous is None:
+                original = self.build_module(project, module)
+            else:
+                key = (
+                    module.model_dump_json(),
+                    project.board_for(module.module_id).model_dump_json(),
+                    project.anchor_for(module.module_id).model_dump_json(),
+                )
+                entry = previous.get(module.module_id)
+                if entry is not None and entry[0] == key:
+                    original = entry[1]
+                    reused += 1
+                else:
+                    original = self.build_module(project, module)
+                current[module.module_id] = (key, original)
             drawing = _place_annotations(original, 10)
             width = module_required_width(drawing, measure_detail)
             if width > PAGE_CONTENT_WIDTH_MM + 1e-6 or not fits_sheet_height(drawing):
@@ -1040,6 +1059,9 @@ class DrawingGenerator:
                     panel_x += panel_width + gaps[start + panel_index]
             pages.append(SheetPage(page_number, tuple(placed), len(group), group[0].scale_denominator))
         warnings = tuple(w for drawing in drawings for w in drawing.warnings)
+        if previous is not None:
+            self._module_cache = current
+        self.reused_module_count = reused
         return DrawingDocument(project.metadata.project_name, tuple(pages), warnings)
 
 

@@ -4,13 +4,13 @@ import json
 from pathlib import Path
 
 from ezdxf.colors import aci2rgb
-from PySide6.QtCore import QEvent, QIODevice, QSaveFile, Qt, Signal
+from PySide6.QtCore import QEvent, QIODevice, QRectF, QSaveFile, Qt, Signal
 from PySide6.QtGui import (
     QAction, QColor, QBrush, QFont, QFontMetricsF, QPen, QPainter, QPalette, QPixmap,
     QTextBlockFormat, QTextCursor, QTextOption, QTransform,
 )
 from PySide6.QtWidgets import (
-    QFileDialog, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QMainWindow,
+    QApplication, QFileDialog, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QMainWindow,
     QMessageBox, QPushButton, QSpinBox, QSplitter, QTabWidget, QTableWidget,
     QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
 )
@@ -26,9 +26,13 @@ from refracdraft.drawing.layout import (
     FILENAME_LABEL_HEIGHT_MM,
     FILENAME_LABEL_POSITION,
     FILENAME_LABEL_WIDTH_MM,
+    FRAME_INSET_MM,
+    LEFT_FOOTER_FLOOR_MM,
     PAGE_HEIGHT_MM,
+    PAGE_WIDTH_MM,
     SEPARATOR_BOTTOM_MM,
     SEPARATOR_TOP_MM,
+    TITLE_BLOCK_TOP_MM,
     annotation_factor,
     leader_text_height,
     view_label_position,
@@ -88,13 +92,83 @@ class PageSpinBox(QSpinBox):
 class DrawingPreview(QGraphicsView):
     page_step_requested = Signal(int)
     zoom_requested = Signal(float)
+    module_clicked = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setScene(QGraphicsScene(self))
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self._module_panels = {}
+        self._highlighted_module = None
+        self._press_position = None
         self._apply_theme_background()
+
+    def set_module_panels(self, modules=()) -> None:
+        self._module_panels = {
+            placed.drawing.module_id: QRectF(
+                placed.x_mm / PAGE_WIDTH_MM, FRAME_INSET_MM / PAGE_HEIGHT_MM,
+                placed.panel_width_mm / PAGE_WIDTH_MM,
+                (PAGE_HEIGHT_MM - FRAME_INSET_MM - (
+                    LEFT_FOOTER_FLOOR_MM if placed.drawing.use_left_footer_space else TITLE_BLOCK_TOP_MM
+                )) / PAGE_HEIGHT_MM,
+            )
+            for placed in modules
+        }
+        self.viewport().update()
+
+    def highlight_module(self, module_id: str | None) -> None:
+        self._highlighted_module = module_id
+        self.viewport().update()
+
+    def _panel_scene_rect(self, panel: QRectF) -> QRectF:
+        page = self.sceneRect()
+        return QRectF(
+            page.x() + page.width() * panel.x(), page.y() + page.height() * panel.y(),
+            page.width() * panel.width(), page.height() * panel.height(),
+        )
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._module_panels:
+            self._press_position = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if (self._press_position is not None and
+                (event.position().toPoint() - self._press_position).manhattanLength() >= QApplication.startDragDistance()):
+            self._press_position = None
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        position = event.position().toPoint()
+        click = (
+            event.button() == Qt.MouseButton.LeftButton and self._press_position is not None
+            and (position - self._press_position).manhattanLength() < QApplication.startDragDistance()
+        )
+        point = self.mapToScene(position) if click else None
+        self._press_position = None
+        super().mouseReleaseEvent(event)
+        if point is not None:
+            for module_id, panel in self._module_panels.items():
+                if self._panel_scene_rect(panel).contains(point):
+                    self.module_clicked.emit(module_id)
+                    break
+
+    def drawForeground(self, painter, rect) -> None:
+        super().drawForeground(painter, rect)
+        panel = self._module_panels.get(self._highlighted_module)
+        if panel is None:
+            return
+        color = self.palette().color(QPalette.ColorRole.Highlight)
+        fill = QColor(color)
+        fill.setAlpha(27)
+        pen = QPen(color, 2)
+        pen.setCosmetic(True)
+        painter.save()
+        painter.setPen(pen)
+        painter.setBrush(QBrush(fill))
+        painter.drawRect(self._panel_scene_rect(panel))
+        painter.restore()
 
     def _apply_theme_background(self) -> None:
         self.setBackgroundBrush(self.palette().brush(QPalette.ColorRole.Window))
